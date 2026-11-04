@@ -1078,6 +1078,7 @@ name = "xtask"
 version = "0.1.1"
 dependencies = [
  "resvg",
+ "tap-shell",
 ]
 
 [[package]]

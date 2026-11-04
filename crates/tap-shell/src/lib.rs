@@ -33,6 +33,15 @@ use objc2::{MainThreadMarker, runtime::ProtocolObject};
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use tap_core::browser::{Browser, Tab};
 
+/// Search's profile on this Mac written as a Tap profile file (`cargo xtask
+/// search-profile`); answers what went in.
+///
+/// # Errors
+/// If there is no Search store here, or the file can't be written.
+pub fn write_search_profile(path: &std::path::Path) -> Result<String, String> {
+    profile::write_from_search(path)
+}
+
 /// Runs Tap until it quits.
 pub fn run() {
     let Some(mtm) = MainThreadMarker::new() else {

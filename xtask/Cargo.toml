@@ -11,6 +11,8 @@ repository.workspace = true
 
 [dependencies]
 resvg.workspace = true
+# Search's profile packed by Tap's own code, reading Search's settings as Tap reads its own.
+tap-shell.workspace = true
 
 [lints]
 workspace = true

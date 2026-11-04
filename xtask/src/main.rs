@@ -4,6 +4,10 @@
 //! `packaging/app-icon.png` (release builds), `packaging/app-icon-dev.png` (debug builds,
 //! on a graphite plate so a local build is never mistaken for the installed one) and
 //! `docs/icon.png`. `scripts/bundle.sh` turns the PNGs into `AppIcon.icns`.
+//!
+//! `search-profile <file.tapprofile>` packs Search's own profile on this Mac (its tabs and
+//! groups, history, bookmarks and allowlisted settings) as a Tap profile file, for File ›
+//! Import Profile… to bring in. Search's files and settings are only read.
 
 use std::{
     env, fs,
@@ -24,7 +28,8 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("icon") => icon(),
-        _ => Err("usage: cargo xtask icon".to_owned()),
+        Some("search-profile") => search_profile(args.get(1)),
+        _ => Err("usage: cargo xtask icon | search-profile <file.tapprofile>".to_owned()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -41,6 +46,13 @@ fn root() -> PathBuf {
     manifest
         .parent()
         .map_or(manifest.clone(), Path::to_path_buf)
+}
+
+fn search_profile(path: Option<&String>) -> Result<(), String> {
+    let path = PathBuf::from(path.ok_or("usage: cargo xtask search-profile <file.tapprofile>")?);
+    let said = tap_shell::write_search_profile(&path)?;
+    println!("{}: {said}", path.display());
+    Ok(())
 }
 
 fn icon() -> Result<(), String> {

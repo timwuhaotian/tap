@@ -77,6 +77,35 @@ pub fn write(path: &Path) -> Result<Written, String> {
     })
 }
 
+/// Search's own profile on this Mac (its store folder and its settings), written to `path`
+/// as a Tap profile file for File › Import Profile… to bring in: `cargo xtask
+/// search-profile`. Read only: Search's files and settings are left as they are.
+///
+/// # Errors
+/// If there is no Search store here, or the file can't be packed or written.
+pub fn write_from_search(path: &Path) -> Result<String, String> {
+    let home = std::env::var_os("HOME").ok_or("no home folder")?;
+    let folder = PathBuf::from(home).join("Library/Application Support/Search");
+    let prefs = prefs::for_profile_of("com.officecommun.search");
+    let settings = prefs.len();
+    let bytes = tap_import::from_search::pack(&folder, prefs, &update::current(), history::now())?;
+    let temporary = path.with_extension("partial");
+    std::fs::write(&temporary, &bytes)
+        .and_then(|()| std::fs::rename(&temporary, path))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let incoming = profile::unpack(&bytes).map_err(|p| p.said())?;
+    let tabs: usize = incoming.sessions.iter().map(|s| s.tabs.len()).sum();
+    let groups: usize = incoming
+        .sessions
+        .iter()
+        .map(|s| s.groups.as_ref().map_or(0, Vec::len))
+        .sum();
+    Ok(format!(
+        "{tabs} tabs in {groups} groups, {} bookmarks, {settings} settings",
+        incoming.bookmarks.len()
+    ))
+}
+
 /// What an import brought in, and the sentence that says so.
 pub struct Taken {
     pub tabs: usize,

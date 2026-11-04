@@ -30,6 +30,10 @@ pub const SEARCH_EXTENSION: &str = "searchprofile";
 /// The first space's identity (Search's `Space.firstID`): its session is `session.json`.
 pub const FIRST_SPACE: &str = "00000000-0000-0000-0000-000000000001";
 
+/// The space list of Personal standing alone, as Swift encodes `Space.first()`.
+const ONE_SPACE: &str =
+    r#"[{"id":"00000000-0000-0000-0000-000000000001","name":"Personal","colour":0}]"#;
+
 /// The most one file in a profile may unpack to, and the whole file together: far more
 /// than a real profile holds (a big history is a couple of megabytes).
 const MOST_PER_FILE: u64 = 64 << 20;
@@ -85,9 +89,13 @@ pub fn pack(out: &Outgoing<'_>) -> Result<Vec<u8>, String> {
     if let Some(data) = profiles {
         files.push(("profiles.json", data));
     }
-    if let Some(data) = (out.read)("spaces.json") {
-        files.push(("spaces.json", data));
-    }
+    // Search keeps no list while Personal has its one space, and #845's import restores
+    // only the sessions of spaces it is given: the list `Spaces.read` makes on the spot
+    // goes in instead.
+    files.push((
+        "spaces.json",
+        (out.read)("spaces.json").unwrap_or_else(|| ONE_SPACE.as_bytes().to_vec()),
+    ));
     counts.insert("spaces".to_owned(), 1);
     files.push(("session.json", out.session.clone()));
     counts.insert("sessions".to_owned(), 1);
@@ -419,6 +427,23 @@ mod tests {
         assert_eq!(incoming.bookmarks.len(), 1);
         assert_eq!(incoming.prefs["search.engine"], "kagi");
         assert!(is_profile(&bytes));
+    }
+
+    /// Search's #845 import brings in only the sessions of spaces the file lists.
+    #[test]
+    fn personal_alone_still_lists_its_space() {
+        let bytes = pack(&outgoing(&|_| None)).expect("packs");
+        let files = flat_files(&bytes).expect("a zip");
+        let spaces: Vec<Value> =
+            serde_json::from_slice(&files["spaces.json"]).expect("a list of spaces");
+        assert_eq!(spaces.len(), 1);
+        assert_eq!(spaces[0]["id"], FIRST_SPACE);
+        assert_eq!(spaces[0]["name"], "Personal");
+
+        let kept = br#"[{"id":"X"}]"#;
+        let read = |name: &str| (name == "spaces.json").then(|| kept.to_vec());
+        let bytes = pack(&outgoing(&read)).expect("packs");
+        assert_eq!(flat_files(&bytes).expect("a zip")["spaces.json"], kept);
     }
 
     #[test]
