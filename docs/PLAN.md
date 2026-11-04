@@ -582,9 +582,8 @@ BookmarksFile, Registrable.
   `com.apple.quarantine`. Checked through the bench (`downloads`). Not yet: the list
   (⇧⌘J) and `downloads.json`, progress in the strip, cancel and resume, asking where to
   save, the PDF bar's save button, local text files shown as text.
-- [ ] Still to come for M2: find on page, downloads, dialogs
-  (alert/confirm/prompt, uploads, sign-in), sleeping tabs, icons, the os_log line for
-  #849 (now on stderr).
+- [ ] Still to come for M2: find on page, sleeping tabs, icons, the os_log line for #849
+  (now on stderr).
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
 - Address parsing, engines, keywords, site search, history suggestions; the omnibox
   with inline completion (IME-safe, finding 3.5)
