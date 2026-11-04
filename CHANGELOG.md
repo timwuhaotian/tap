@@ -7,6 +7,12 @@ Info.plist.
 
 ## Unreleased
 
+- **A tab is grabbed anywhere in its column**: above, below or between the pills is
+  the tab now, not title bar, so dragging a tab no longer drags the window instead.
+- **Drag a tab onto a group to join it**: carried over another group's heading or
+  tabs, the group lights up in its colour, and letting go puts the tab (or every picked
+  tab) into it beside the tab under the pointer.
+
 Chrome refinement, no behaviour change.
 
 - **One card, one pill, one shadow**: every floating card and pill now shares
