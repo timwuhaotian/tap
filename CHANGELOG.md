@@ -7,6 +7,10 @@ Info.plist.
 
 ## Unreleased
 
+- **The chrome's text and pills line up**: a group's chip is as tall as a tab; the
+  address no longer jumps above the lock when you click into it, nor a tab's title
+  when it opens for editing; every line of chrome text is centred by one rule.
+
 ## 0.2.0 — 2026-11-05
 
 Agents browse with Tap; new tabs pile up behind a quiet instrument; a click on any tab lands in the field.

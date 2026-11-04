@@ -1231,6 +1231,35 @@ Search opens the field only on the live tab, and only while the address bar is a
   `-D warnings`, nightly fmt. Not checked by eye: a real click in a running app
   (`scripts/bench click` over the tab row, then `field`).
 
+### Unreleased — One line rule for the chrome's text and pills
+
+At the user's request (2026-11-05: "全app审查这类alignment和高度不一致的问题（比如tab和group
+title）地址栏url和SSL锁icon等等"), audited in a running test world (`TAP_PROBE`, screenshots
+measured by pixel row) rather than by reading offsets.
+
+Found: a group's chip was 22 points tall beside a 30-point tab pill; the field opened
+1.5–2 points above the line it replaced, in the address bar (`y − 1.5`, its text
+above the lock) and in the tab row (`+5` against the title's `+7`); and every line of
+chrome text carried its own hand-picked offset (`+7`/`17`, `+5.5`, `(ROW − 17)/2`,
+`−0.5`), right by luck in some places and half a point off in others.
+
+- [x] **One line rule** (`palette.rs`): `line_height` is the chrome font's own line as
+  `draw_text` lays it out; `text_line(rect, left, right)` centres one line in any row;
+  `field_frame(line)` puts a borderless field's text exactly on that drawn line. Tests:
+  `a_line_sits_centred_in_any_row`, `the_field_opens_on_the_drawn_line`.
+- [x] **Strip** (`strip.rs`): a heading's chip is the tab's own pill (full row, the
+  chrome radius), so chip and tab share top and foot; titles, digits, the letter
+  tile's letter, a gone slot's label and the field all go through the rule.
+- [x] **Address bar** (`address_bar.rs`, `window.rs`): the address and the open field
+  share one line, level with the badge; the field uses `palette::font`.
+- [x] **Suggestions and offers** (`window.rs`, `offers.rs`): rows centre by the rule.
+- Left as is: sign-in's two-line rows (two lines, not one centred); in icons mode the
+  field still starts where the icon was, as before.
+- Checked: `cargo test` (tap-core 114, tap-import 31, tap-shell 68), clippy
+  `-D warnings`, nightly fmt; by pixel row at 2x, the address's x-height at rest and
+  open both start on row 138, the lock's centre on the cap height, and the tab-row
+  field on the title's rows 43–65.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and

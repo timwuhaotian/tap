@@ -735,10 +735,7 @@ impl Strip {
         self.with_layout(|browser, row, layout| {
             let index = editing_slot(browser, row, self.look_now().bar)?;
             let rect = layout.tabs.get(index).copied()?;
-            Some(NSRect::new(
-                NSPoint::new(rect.origin.x + 10.0, rect.origin.y + 5.0),
-                NSSize::new(rect.size.width - 20.0, rect.size.height - 10.0),
-            ))
+            Some(palette::field_frame(palette::text_line(rect, 12.0, 12.0)))
         })
         .flatten()
     }
@@ -1470,7 +1467,7 @@ impl Strip {
                     Item::Heading(place) => {
                         let colour = browser.groups()[*place].colour.as_deref();
                         palette::group_colour(colour).resolve(dark).setFill();
-                        chip(rect).fill();
+                        palette::pill_path(rect).fill();
                     }
                     Item::Tab(_) => {
                         palette::WASH.resolve(dark).setFill();
@@ -1512,10 +1509,7 @@ impl Strip {
             Key::Plus => return,
         }
         if let Some(label) = self.ivars().faces.borrow().get(key) {
-            let text = NSRect::new(
-                NSPoint::new(rect.origin.x + 12.0, rect.origin.y + 7.0),
-                NSSize::new((rect.size.width - 24.0).max(0.0), 17.0),
-            );
+            let text = palette::text_line(rect, 12.0, 12.0);
             palette::draw_text(label, text, &palette::MUTED.resolve(dark));
         }
     }
@@ -1632,11 +1626,8 @@ fn draw_heading(name: &str, colour: Option<&str>, rect: NSRect, under: bool, dar
         fill.colorWithAlphaComponent(0.88)
     };
     fill.setFill();
-    chip(rect).fill();
-    let text = NSRect::new(
-        NSPoint::new(rect.origin.x + 10.0, rect.origin.y + 7.0),
-        NSSize::new((rect.size.width - 20.0).max(0.0), 17.0),
-    );
+    palette::pill_path(rect).fill();
+    let text = palette::text_line(rect, 10.0, 10.0);
     palette::draw_text(name, text, &palette::on_group(dark));
 }
 
@@ -1660,18 +1651,6 @@ fn live_pill(rect: NSRect, dark: bool) {
     } else {
         palette::stroke_hairline(&path, dark);
     }
-}
-
-/// A heading's chip: a little shorter than a tab's pill.
-fn chip(rect: NSRect) -> Retained<NSBezierPath> {
-    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-        NSRect::new(
-            NSPoint::new(rect.origin.x, rect.origin.y + 4.0),
-            NSSize::new(rect.size.width, (rect.size.height - 8.0).max(0.0)),
-        ),
-        7.0,
-        7.0,
-    )
 }
 
 /// One tab where it is drawn this frame. `slot` is its place in the row (`None` for
@@ -1758,16 +1737,9 @@ fn draw_tab(
     };
     if let Some(number) = number.filter(|_| !titled) {
         let digit = number.to_string();
-        let width = palette::text_width(&digit);
         palette::draw_text(
             &digit,
-            NSRect::new(
-                NSPoint::new(
-                    rect.origin.x + (rect.size.width - width) / 2.0,
-                    rect.origin.y + 7.0,
-                ),
-                NSSize::new(width + 1.0, 17.0),
-            ),
+            centred_word(&digit, *rect),
             &palette::MUTED.resolve(dark),
         );
     } else if let Some(icon) = &icon {
@@ -1809,16 +1781,9 @@ fn draw_tab(
         palette::HOVER.resolve(dark).setFill();
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
         let letter = monogram(tab);
-        let width = palette::text_width(&letter);
         palette::draw_text(
             &letter,
-            NSRect::new(
-                NSPoint::new(
-                    square.origin.x + (ICON - width) / 2.0,
-                    square.origin.y - 0.5,
-                ),
-                NSSize::new(width + 1.0, 17.0),
-            ),
+            centred_word(&letter, square),
             &palette::MUTED.resolve(dark),
         );
     }
@@ -1830,10 +1795,7 @@ fn draw_tab(
         // In icons mode a glyph (icon or letter tile) always stands
         // beside the title; in letters mode the title starts at the edge.
         let left = if look.icons { 10.0 + ICON + 6.0 } else { 12.0 };
-        let text = NSRect::new(
-            NSPoint::new(rect.origin.x + left, rect.origin.y + 7.0),
-            NSSize::new((rect.size.width - left - right).max(0.0), 17.0),
-        );
+        let text = palette::text_line(*rect, left, right);
         let ink = if live || picked {
             palette::INK
         } else {
@@ -1857,13 +1819,7 @@ fn draw_tab(
             let at = if crossed { 30.0 } else { 12.0 };
             palette::draw_text(
                 &digit,
-                NSRect::new(
-                    NSPoint::new(
-                        rect.origin.x + rect.size.width - at - 15.0,
-                        rect.origin.y + 7.0,
-                    ),
-                    NSSize::new(16.0, 17.0),
-                ),
+                palette::text_line(*rect, rect.size.width - at - 15.0, at - 1.0),
                 &palette::MUTED.resolve(dark),
             );
         }
@@ -1880,6 +1836,16 @@ fn draw_tab(
     if live && tab.loading() && !look.bar {
         progress(*rect, tab.progress(), &palette::INK.resolve(dark));
     }
+}
+
+/// A short word (a digit, a letter) centred both ways in `rect`.
+fn centred_word(word: &str, rect: NSRect) -> NSRect {
+    let width = palette::text_width(word);
+    palette::text_line(
+        rect,
+        (rect.size.width - width) / 2.0,
+        (rect.size.width - width) / 2.0 - 1.0,
+    )
 }
 
 /// A tab's rect sunk under a press: scaled about its centre (Search's `Give`,

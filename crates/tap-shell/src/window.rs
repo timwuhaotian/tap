@@ -401,8 +401,8 @@ fn field(mtm: MainThreadMarker, delegate: &FieldDelegate) -> Retained<NSTextFiel
     field.setBordered(false);
     field.setDrawsBackground(false);
     field.setFocusRingType(NSFocusRingType::None);
-    let font = NSFont::systemFontOfSize(13.0);
-    field.setFont(Some(&font));
+    // The chrome's own font, so the field's line is the one `palette` measures.
+    field.setFont(Some(&palette::font()));
     field.setPlaceholderString(Some(&NSString::from_str("Search or enter address")));
     if let Some(cell) = field.cell() {
         cell.setScrollable(true);
@@ -1395,25 +1395,17 @@ impl Suggest {
         );
         for (row, word) in words.iter().enumerate() {
             let rect = self.row_rect(row);
-            let text_top = rect.origin.y + (offers::ROW - 17.0) / 2.0;
-            let left = rect.origin.x + 12.0;
-            let width = rect.size.width - 24.0;
-            let main_width = palette::text_width(word).min(width * 0.62);
+            let line = palette::text_line(rect, 12.0, 12.0);
+            let main_width = palette::text_width(word).min(line.size.width * 0.62);
             palette::draw_text(
                 word,
-                NSRect::new(
-                    NSPoint::new(left, text_top),
-                    NSSize::new(main_width + 1.0, 17.0),
-                ),
+                NSRect::new(line.origin, NSSize::new(main_width + 1.0, line.size.height)),
                 &palette::INK.resolve(dark),
             );
-            let x = left + main_width + 10.0;
+            let lead = main_width + 10.0;
             palette::draw_text(
                 &format!("\u{2014} {detail}"),
-                NSRect::new(
-                    NSPoint::new(x, text_top),
-                    NSSize::new((left + width - x).max(0.0), 17.0),
-                ),
+                palette::text_line(line, lead, 0.0),
                 &palette::MUTED.resolve(dark),
             );
         }

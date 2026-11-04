@@ -151,27 +151,21 @@ impl Offers {
 
 /// One row: what it would go to, then what it is, quieter.
 fn draw_row(offer: &Suggestion, rect: NSRect, dark: bool) {
-    let text_top = rect.origin.y + (ROW - 17.0) / 2.0;
-    let left = rect.origin.x + 12.0;
-    let width = rect.size.width - 24.0;
+    let line = palette::text_line(rect, 12.0, 12.0);
     let (main, detail) = match offer.kind {
         Kind::Search => (offer.key.clone(), format!("Search {}", offer.title)),
         Kind::Visited | Kind::Known => (offer.key.clone(), offer.title.clone()),
     };
-    let main_width = palette::text_width(&main).min(width * 0.62);
+    let main_width = palette::text_width(&main).min(line.size.width * 0.62);
     palette::draw_text(
         &main,
-        NSRect::new(NSPoint::new(left, text_top), NSSize::new(main_width, 17.0)),
+        NSRect::new(line.origin, NSSize::new(main_width, line.size.height)),
         &palette::INK.resolve(dark),
     );
     if !detail.is_empty() {
-        let x = left + main_width + 10.0;
         palette::draw_text(
             &format!("— {detail}"),
-            NSRect::new(
-                NSPoint::new(x, text_top),
-                NSSize::new((left + width - x).max(0.0), 17.0),
-            ),
+            palette::text_line(line, main_width + 10.0, 0.0),
             &palette::MUTED.resolve(dark),
         );
     }
