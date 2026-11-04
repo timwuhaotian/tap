@@ -7,11 +7,16 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.1 — 2026-11-05
+
+A tab is grabbed anywhere in its column, and dropped on a group joins it.
+
 - **A tab is grabbed anywhere in its column**: above, below or between the pills is
   the tab now, not title bar, so dragging a tab no longer drags the window instead.
 - **Drag a tab onto a group to join it**: carried over another group's heading or
   tabs, the group lights up in its colour, and letting go puts the tab (or every picked
-  tab) into it beside the tab under the pointer.
+  tab) into it beside the tab under the pointer. Let go off the row, over the page, it
+  joins nothing; in a crowded row, the end past the + still moves the window.
 
 ## 0.2.0 — 2026-11-05
 
