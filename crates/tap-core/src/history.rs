@@ -45,7 +45,7 @@ struct Visit {
 }
 
 /// Worked out once when a visit enters memory: suggestions run on every key.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct PageText {
     /// The address as the field shows it.
     address: String,
@@ -246,7 +246,7 @@ const KNOWN: [(&str, &str); 47] = [
 ];
 
 /// The places you have been.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct History {
     visits: HashMap<String, Visit>,
     page_text: HashMap<String, PageText>,
@@ -599,6 +599,38 @@ mod tests {
 
     fn path(url: &str) -> String {
         Url::parse(url).map(|u| u.path()).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_file_orders_the_often_and_late_first_and_always_the_same_way() {
+        let mut history = History::default();
+        for _ in 0..5 {
+            history.record("https://often.com/", "Often", NOW - 10.0 * 86_400.0);
+        }
+        history.record("https://stale.com/", "Stale", NOW - 90.0 * 86_400.0);
+        history.record("https://fresh.com/", "Fresh", NOW);
+        let order = |file: &[u8]| {
+            serde_json::from_slice::<Vec<Visit>>(file)
+                .unwrap()
+                .iter()
+                .map(|visit| visit.url.clone())
+                .collect::<Vec<_>>()
+        };
+        // Five visits ten days ago outweigh one fresh one; one fresh one outweighs a
+        // single visit three months back.
+        assert_eq!(
+            order(&history.encode(NOW)),
+            [
+                "https://often.com/",
+                "https://fresh.com/",
+                "https://stale.com/"
+            ]
+        );
+        assert_eq!(
+            order(&history.encode(NOW)),
+            order(&history.encode(NOW)),
+            "encoding twice writes the same file"
+        );
     }
 
     /// Search's `testRecordAndTakeKeepCanonicalIdentityComponents` (record half).

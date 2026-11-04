@@ -119,6 +119,9 @@ pub fn apply(mtm: MainThreadMarker) {
         browser.behaviour = behaviour;
     });
     crate::web::apply_prefs(&kept);
+    // The downloads door follows a Settings move too, not only a download starting
+    // or ending.
+    crate::window::downloads_moved();
     let look = settings_index::text(&kept, "look");
     // SAFETY: AppKit's own appearance names.
     let name = unsafe {

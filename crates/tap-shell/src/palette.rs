@@ -217,35 +217,44 @@ pub fn is_dark(view: &NSView) -> bool {
     is_dark_appearance(&view.effectiveAppearance())
 }
 
-/// The one text style of the chrome: the system font at 13 points, the field's too.
+// The one text style of the chrome: the system font at 13 points, the field's too.
+// Made once: a load redraws the chrome dozens of times, and rebuilding the font and
+// the paragraph style on each draw showed.
+thread_local! {
+    static STYLE: (Retained<NSFont>, Retained<NSMutableParagraphStyle>) = {
+        let paragraph = NSMutableParagraphStyle::new();
+        paragraph.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        // SAFETY: the system font at a valid size and weight.
+        (unsafe { NSFont::systemFontOfSize_weight(13.0, NSFontWeightRegular) }, paragraph)
+    };
+}
+
 #[must_use]
 pub fn font() -> Retained<NSFont> {
-    // SAFETY: the system font at a valid size and weight.
-    unsafe { NSFont::systemFontOfSize_weight(13.0, NSFontWeightRegular) }
+    STYLE.with(|(font, _)| font.clone())
 }
 
 fn attributes(color: Option<&NSColor>) -> Retained<NSDictionary<NSAttributedStringKey, AnyObject>> {
-    let font = font();
-    let paragraph = NSMutableParagraphStyle::new();
-    paragraph.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-    // SAFETY: AppKit's own attribute names, read as the constants they are.
-    let (font_key, color_key, paragraph_key) = unsafe {
-        (
-            NSFontAttributeName,
-            NSForegroundColorAttributeName,
-            NSParagraphStyleAttributeName,
-        )
-    };
-    match color {
-        Some(color) => NSDictionary::from_slices(
-            &[font_key, color_key, paragraph_key],
-            &[font.as_ref(), color.as_ref(), paragraph.as_ref()],
-        ),
-        None => NSDictionary::from_slices(
-            &[font_key, paragraph_key],
-            &[font.as_ref(), paragraph.as_ref()],
-        ),
-    }
+    STYLE.with(|(font, paragraph)| {
+        // SAFETY: AppKit's own attribute names, read as the constants they are.
+        let (font_key, color_key, paragraph_key) = unsafe {
+            (
+                NSFontAttributeName,
+                NSForegroundColorAttributeName,
+                NSParagraphStyleAttributeName,
+            )
+        };
+        match color {
+            Some(color) => NSDictionary::from_slices(
+                &[font_key, color_key, paragraph_key],
+                &[font.as_ref(), color.as_ref(), paragraph.as_ref()],
+            ),
+            None => NSDictionary::from_slices(
+                &[font_key, paragraph_key],
+                &[font.as_ref(), paragraph.as_ref()],
+            ),
+        }
+    })
 }
 
 /// Draws one line of chrome text in `rect`, cut short with an ellipsis if it won't fit.
