@@ -19,6 +19,13 @@ Info.plist.
   takes it; ↓ and ↑ pick a row, and Return or a click goes there. Nothing is completed
   while an input method is still composing, so pinyin and kana typing are left alone.
   History is kept in Search's own `history.json` format, and never with a password.
+- **Pages can ask.** `alert()`, `confirm()` and `prompt()` show the system's sheet, titled
+  with the site that asks so a page can't pass its message off as Tap's; file inputs
+  open the file panel, naming the site the file goes to; a site behind a name and a
+  password asks for them, twice at most. A question from a tab you aren't looking at
+  waits until you go to that tab.
+- **A tab behind whose page went away** is loaded again when you come back to it, rather
+  than in the background.
 - **Tabs come back.** The session is kept in Search's own format, written as it changes
   and when Tap quits; restored tabs cost nothing until you look at them.
 - **The bench**, for scripts and tests: Search's socket protocol on a test run

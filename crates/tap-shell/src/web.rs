@@ -8,18 +8,21 @@ use block2::DynBlock;
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject},
+    runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
 };
 use objc2_app_kit::{NSEventModifierFlags, NSWorkspace};
 use objc2_foundation::{
-    NSBundle, NSDictionary, NSError, NSInteger, NSKeyValueChangeKey, NSKeyValueObservingOptions,
-    NSObjectNSKeyValueObserverRegistration, NSRect, NSString, NSURL, NSURLRequest,
+    NSArray, NSBundle, NSDictionary, NSError, NSInteger, NSKeyValueChangeKey,
+    NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSRect, NSString, NSURL,
+    NSURLAuthenticationChallenge, NSURLCredential, NSURLRequest,
+    NSURLSessionAuthChallengeDisposition,
 };
 #[allow(deprecated)]
 use objc2_web_kit::WKProcessPool;
 use objc2_web_kit::{
-    WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
-    WKNavigationType, WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWindowFeatures,
+    WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
+    WKNavigationType, WKOpenPanelParameters, WKUIDelegate, WKWebView, WKWebViewConfiguration,
+    WKWindowFeatures,
 };
 use tap_core::{
     browser::{Effect, TabId},
@@ -27,7 +30,7 @@ use tap_core::{
     fnd::Url,
 };
 
-use crate::{rt, store, window};
+use crate::{dialogs, rt, store, window};
 
 /// What the observer watches on every web view; each change re-reads the lot.
 const OBSERVED: [&str; 6] = [
@@ -164,6 +167,7 @@ fn tab_of(web: &WKWebView) -> Option<TabId> {
 }
 
 fn discard(mtm: MainThreadMarker, tab: TabId) {
+    dialogs::drop_held(tab);
     let Some(web) = WEBS.with_borrow_mut(|webs| webs.remove(&tab)) else {
         return;
     };
@@ -258,17 +262,15 @@ fn sync(web: &WKWebView) {
 
 fn process_ended(web: &WKWebView, end: PageEnd) {
     let Some(tab) = tab_of(web) else { return };
+    // What the page asked is answered as dismissed: there is no page left to answer.
+    dialogs::drop_held(tab);
     rt::dispatch(move |browser| {
-        let again = browser.process_ended(tab, end, Instant::now());
+        let done = browser.process_ended(tab, end, Instant::now());
         // The reason and what was done are public; the site is not (Search #849).
         eprintln!(
             "A page's process ended ({}) on <private>: {}",
             end.name(),
-            if again {
-                "loaded again"
-            } else {
-                "kept dying, left for Try again"
-            }
+            done.said()
         );
     });
 }
@@ -291,6 +293,16 @@ define_class!(
             handler: &DynBlock<dyn Fn(WKNavigationActionPolicy)>,
         ) {
             handler.call((decide(web, action),));
+        }
+
+        #[unsafe(method(webView:didReceiveAuthenticationChallenge:completionHandler:))]
+        fn challenged(
+            &self,
+            web: &WKWebView,
+            challenge: &NSURLAuthenticationChallenge,
+            handler: &DynBlock<dyn Fn(NSURLSessionAuthChallengeDisposition, *mut NSURLCredential)>,
+        ) {
+            dialogs::challenge(web, tab_of(web), challenge, handler);
         }
 
         #[unsafe(method(webView:didFinishNavigation:))]
@@ -317,6 +329,39 @@ define_class!(
     }
 
     unsafe impl WKUIDelegate for WebDelegate {
+        #[unsafe(method(webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:))]
+        fn alert(&self, web: &WKWebView, message: &NSString, frame: &WKFrameInfo, handler: &DynBlock<dyn Fn()>) {
+            dialogs::alert_panel(web, tab_of(web), message, frame, handler);
+        }
+
+        #[unsafe(method(webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:))]
+        fn confirm(&self, web: &WKWebView, message: &NSString, frame: &WKFrameInfo, handler: &DynBlock<dyn Fn(Bool)>) {
+            dialogs::confirm_panel(web, tab_of(web), message, frame, handler);
+        }
+
+        #[unsafe(method(webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:))]
+        fn prompt(
+            &self,
+            web: &WKWebView,
+            message: &NSString,
+            default_text: Option<&NSString>,
+            frame: &WKFrameInfo,
+            handler: &DynBlock<dyn Fn(*mut NSString)>,
+        ) {
+            dialogs::prompt_panel(web, tab_of(web), message, default_text, frame, handler);
+        }
+
+        #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]
+        fn choose_file(
+            &self,
+            web: &WKWebView,
+            parameters: &WKOpenPanelParameters,
+            frame: &WKFrameInfo,
+            handler: &DynBlock<dyn Fn(*mut NSArray<NSURL>)>,
+        ) {
+            dialogs::open_panel(web, tab_of(web), parameters, frame, handler);
+        }
+
         #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         fn create(
             &self,

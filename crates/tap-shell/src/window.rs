@@ -24,6 +24,7 @@ use objc2_web_kit::WKWebView;
 use tap_core::browser::{Browser, BrowserFields, Editing, TabFields, TabId};
 
 use crate::{
+    dialogs,
     menu::{Command, Commands},
     offers::{self, Offers},
     palette, rt,
@@ -318,6 +319,12 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
             || *views.shown.borrow() != view.active
         {
             show_page(views, view);
+        }
+        // What the tab asked while it was behind another is put to you now.
+        if dirty.contains(BrowserFields::ACTIVE)
+            && let Some(active) = view.active
+        {
+            dialogs::present_held(active);
         }
         if dirty.intersects(BrowserFields::EDITING | BrowserFields::TABS | BrowserFields::ACTIVE) {
             place_field(views, view, dirty.contains(BrowserFields::EDITING));

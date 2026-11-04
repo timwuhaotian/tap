@@ -78,6 +78,28 @@ pub enum Effect {
     SaveHistory(Vec<u8>),
 }
 
+/// What was done about a page whose process ended, as the log says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recovery {
+    LoadedAgain,
+    KeptDying,
+    WhenShown,
+    /// A new tab: nothing to make again.
+    Nothing,
+}
+
+impl Recovery {
+    #[must_use]
+    pub fn said(self) -> &'static str {
+        match self {
+            Recovery::LoadedAgain => "loaded again",
+            Recovery::KeptDying => "kept dying, left for Try again",
+            Recovery::WhenShown => "loaded again when shown",
+            Recovery::Nothing => "nothing to load",
+        }
+    }
+}
+
 /// One page.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // the page's own states, as Search's Tab keeps them
@@ -97,6 +119,8 @@ pub struct Tab {
     crashes: CrashCount,
     /// A restored tab costs nothing until it is first shown: it has no web view yet.
     awake: bool,
+    /// Its process went away while it was behind another tab: made again when shown.
+    stale: bool,
     entry: session::Entry,
     dirty: TabFields,
 }
@@ -115,6 +139,7 @@ impl Tab {
             dead: false,
             crashes: CrashCount::default(),
             awake: false,
+            stale: false,
             entry: session::Entry::default(),
             dirty: TabFields::all(),
         }
@@ -423,6 +448,11 @@ impl Browser {
 
     fn wake(&mut self, id: TabId) {
         let Some(tab) = self.tab_mut(id) else { return };
+        if tab.stale {
+            tab.stale = false;
+            self.effects.push(Effect::Reload(id));
+            return;
+        }
         if tab.awake || tab.url.is_empty() {
             return;
         }
@@ -884,25 +914,30 @@ impl Browser {
         );
     }
 
-    /// The tab's WebContent process ended. Made again twice a minute at most; past
-    /// that the page says so and waits for Try again (Search #849). Answers whether the
-    /// page was asked for again.
-    pub fn process_ended(&mut self, id: TabId, end: PageEnd, now: Instant) -> bool {
+    /// The tab's WebContent process ended. In front, it is made again straight away,
+    /// twice a minute at most; past that the page says so and waits for Try again
+    /// (Search #849). Behind another tab, it is made again when you come back to it.
+    pub fn process_ended(&mut self, id: TabId, end: PageEnd, now: Instant) -> Recovery {
+        let in_front = self.active == Some(id);
         let Some(tab) = self.tab_mut(id) else {
-            return false;
+            return Recovery::Nothing;
         };
         if tab.url.is_empty() {
-            return false;
+            return Recovery::Nothing;
+        }
+        if !in_front {
+            tab.stale = true;
+            return Recovery::WhenShown;
         }
         if !tab.crashes.another(now) {
             tab.failure = Some(end.message().to_owned());
             tab.dead = true;
             tab.loading = false;
             tab.dirty.insert(TabFields::FAILURE | TabFields::LOADING);
-            return false;
+            return Recovery::KeptDying;
         }
         self.effects.push(Effect::Reload(id));
-        true
+        Recovery::LoadedAgain
     }
 }
 
@@ -1029,8 +1064,14 @@ mod tests {
         let mut browser = with_pages(&["https://heavy.example"]);
         let id = browser.active().expect("a tab");
         let start = Instant::now();
-        assert!(browser.process_ended(id, PageEnd::Crash, start));
-        assert!(browser.process_ended(id, PageEnd::Crash, start + Duration::from_secs(5)));
+        assert_eq!(
+            browser.process_ended(id, PageEnd::Crash, start),
+            Recovery::LoadedAgain
+        );
+        assert_eq!(
+            browser.process_ended(id, PageEnd::Crash, start + Duration::from_secs(5)),
+            Recovery::LoadedAgain
+        );
         assert_eq!(
             browser
                 .take_effects()
@@ -1040,7 +1081,10 @@ mod tests {
             2
         );
 
-        assert!(!browser.process_ended(id, PageEnd::Memory, start + Duration::from_secs(9)));
+        assert_eq!(
+            browser.process_ended(id, PageEnd::Memory, start + Duration::from_secs(9)),
+            Recovery::KeptDying
+        );
         assert_eq!(
             browser.active_tab().and_then(Tab::failure),
             Some("This page kept running out of memory.")
@@ -1193,5 +1237,29 @@ mod tests {
         );
         assert!(browser.take_dirty().0.contains(BrowserFields::RETYPED));
         assert!(!browser.accept_ending(), "nothing left to take");
+    }
+
+    #[test]
+    fn a_tab_behind_whose_process_ended_is_made_again_when_shown() {
+        let mut browser = with_pages(&["https://front.example", "https://behind.example"]);
+        let (front, behind) = (browser.tabs()[0].id, browser.tabs()[1].id);
+        browser.select(front);
+        browser.take_effects();
+        assert_eq!(
+            browser.process_ended(behind, PageEnd::Memory, Instant::now()),
+            Recovery::WhenShown
+        );
+        assert!(
+            !browser.take_effects().contains(&Effect::Reload(behind)),
+            "nothing reloads behind your back"
+        );
+        browser.select(behind);
+        assert!(browser.take_effects().contains(&Effect::Reload(behind)));
+        browser.select(front);
+        browser.select(behind);
+        assert!(
+            !browser.take_effects().contains(&Effect::Reload(behind)),
+            "once"
+        );
     }
 }

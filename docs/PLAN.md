@@ -565,6 +565,15 @@ BookmarksFile, Registrable.
   `unmark`). Not yet: bookmark and open-tab rows, address commands, engine suggestions,
   site search, the History page (⌘Y), per-profile files, and moving pre-1.0.4 Search
   front-door credits (`rehomeCredits`).
+- [x] Page questions (2026-11-04), from `Dialogs.swift`: `alert`, `confirm`, `prompt`,
+  file inputs and HTTP Basic/Digest/NTLM sign-in, each the system's sheet on the window
+  and titled with the asking frame's own site; a question from a tab behind waits for
+  that tab; every one answered exactly once (dismissed if its tab closes or its process
+  goes); test runs note them for the bench (`probe` → `asked`) and answer as cancelled.
+  A tab behind whose process went away is made again when shown, not straight away
+  (Search's `pageProcessEnded`). Checked through the bench and, once, by eye outside a
+  test run. Not yet: the bad-certificate sheet ("Continue Anyway") and trusting this
+  Mac's own servers; a question over one page of a pair (no Split View yet).
 - [ ] Still to come for M2: find on page, downloads, dialogs
   (alert/confirm/prompt, uploads, sign-in), sleeping tabs, icons, the os_log line for
   #849 (now on stderr).
@@ -825,6 +834,7 @@ Each spike's result is written next to its risk.
 | 6 | Swipe navigation | Search's own disc swipe (`Swipe.swift`), `trackSwipeEvent`, `_setRubberBandingEnabled:`. **M1 spike** in `TapPageView::scrollWheel` |
 | 7 | Accessibility | Prefer real controls; `TapView` exposes role, label, press and children (33 labels to carry over); `ax-dump` diff at M3 and M9 |
 | 8 | PiP and Float (moving a live WKWebView between windows) | float_video and float_settle in M5 |
+| 9a | WebKit objects that forward their messages (`WKNSURLAuthenticationChallenge`): objc2's debug checks look for methods on the wrapper's class and stop | Read through the wrapper's `forwardingTargetForSelector:` target (`dialogs::unwrapped`); every new WebKit object type is exercised through the bench in a debug build before it ships |
 | 9 | Private SPI changing between macOS releases | `spi.rs` catalogue, `respondsToSelector` guards, objc2 debug verification, the bench `spi` verb, runs on the macOS 14 VM and the current beta |
 | 10 | Weak linking on macOS 14 (extern statics from newer SDKs, such as `WKWebExtensionPermission*`) | `objc2::available!`, `-Wl,-weak_framework,WebKit`; **M1 VM spike** |
 | 11 | Panics or exceptions across FFI | `panic = "abort"`, crash.log hook, `exception::catch` at known throw sites |

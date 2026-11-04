@@ -7,6 +7,7 @@
 
 mod bench;
 mod crash;
+mod dialogs;
 mod menu;
 mod offers;
 mod palette;
