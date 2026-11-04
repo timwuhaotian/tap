@@ -82,9 +82,12 @@ pub fn read_history() -> (History, bool) {
     })
 }
 
-/// Writes `history.json` on the writer thread.
-pub fn save_history(data: Vec<u8>) {
-    write(file("history.json"), data, false);
+/// Writes `history.json` on the writer thread, encoded there.
+pub fn save_history(history: History, now: f64) {
+    let _ = writer().send(Job {
+        body: Body::History(history, now),
+        done: None,
+    });
 }
 
 /// Writes any of Tap's files on the writer thread, newest winning.
@@ -92,9 +95,13 @@ pub fn save(path: PathBuf, data: Vec<u8>) {
     write(path, data, false);
 }
 
-/// Writes the session on the writer thread.
-pub fn save_session(shape: &session::Shape) {
-    write(session_file(), shape.encode(), false);
+/// Writes the session on the writer thread, encoded there: a load's ticks change the
+/// page many times, and the main thread only hands over the shape.
+pub fn save_session(shape: session::Shape) {
+    let _ = writer().send(Job {
+        body: Body::Session(shape),
+        done: None,
+    });
 }
 
 /// Writes the session before returning: quitting doesn't wait for a background thread.
@@ -102,9 +109,35 @@ pub fn save_session_now(shape: &session::Shape) {
     write(session_file(), shape.encode(), true);
 }
 
+/// What a job writes, and where: the fixed files know their own place, and the rest
+/// (an icon, a profile) say theirs.
+enum Body {
+    Bytes(PathBuf, Vec<u8>),
+    Session(session::Shape),
+    History(History, f64),
+}
+
+impl Body {
+    fn path(&self) -> PathBuf {
+        match self {
+            Body::Bytes(path, _) => path.clone(),
+            Body::Session(_) => session_file(),
+            Body::History(_, _) => file("history.json"),
+        }
+    }
+
+    /// The file's contents. Encoding runs here, on the writer thread.
+    fn encode(self) -> Vec<u8> {
+        match self {
+            Body::Bytes(_, data) => data,
+            Body::Session(shape) => shape.encode(),
+            Body::History(history, now) => history.encode(now),
+        }
+    }
+}
+
 struct Job {
-    path: PathBuf,
-    data: Vec<u8>,
+    body: Body,
     done: Option<Sender<()>>,
 }
 
@@ -126,13 +159,14 @@ fn drain(receive: &Receiver<Job>) {
         let mut latest: HashMap<PathBuf, Job> = HashMap::new();
         let mut waiting = vec![];
         for job in std::iter::once(first).chain(receive.try_iter()) {
-            if let Some(done) = latest.get_mut(&job.path).and_then(|old| old.done.take()) {
+            if let Some(done) = latest.get_mut(&job.body.path()).and_then(|old| old.done.take()) {
                 waiting.push(done);
             }
-            latest.insert(job.path.clone(), job);
+            latest.insert(job.body.path(), job);
         }
         for job in latest.into_values() {
-            replace(&job.path, &job.data);
+            let path = job.body.path();
+            replace(&path, &job.body.encode());
             if let Some(done) = job.done {
                 let _ = done.send(());
             }
@@ -144,12 +178,12 @@ fn drain(receive: &Receiver<Job>) {
 }
 
 fn write(path: PathBuf, data: Vec<u8>, now: bool) {
+    let body = Body::Bytes(path, data);
     if now {
         let (done, wait) = mpsc::channel();
         if writer()
             .send(Job {
-                path,
-                data,
+                body,
                 done: Some(done),
             })
             .is_ok()
@@ -158,8 +192,7 @@ fn write(path: PathBuf, data: Vec<u8>, now: bool) {
         }
     } else {
         let _ = writer().send(Job {
-            path,
-            data,
+            body,
             done: None,
         });
     }

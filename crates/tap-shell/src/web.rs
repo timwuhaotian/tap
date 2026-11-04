@@ -999,8 +999,8 @@ pub fn perform(effect: Effect) {
         Effect::Sleep(tab) => sleep::try_sleep(tab, |_| {}),
         Effect::Retire { tab, since } => sleep::try_retire(tab, since),
         Effect::FocusPage(tab) => window::focus_page(existing(tab).as_deref()),
-        Effect::Save(shape) => store::save_session(&shape),
-        Effect::SaveHistory(data) => store::save_history(data),
+        Effect::Save(shape) => store::save_session(shape),
+        Effect::SaveHistory(history, now) => store::save_history(history, now),
         Effect::Find(ask) => page_find::ask(&ask),
         Effect::ClearFind { tab, generation } => page_find::clear(tab, generation),
     }

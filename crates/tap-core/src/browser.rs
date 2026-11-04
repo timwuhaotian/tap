@@ -87,8 +87,9 @@ pub enum Effect {
     FocusPage(TabId),
     /// Write the session (debounced by the shell's disk writer).
     Save(session::Shape),
-    /// Write `history.json`, already encoded.
-    SaveHistory(Vec<u8>),
+    /// Write `history.json` (`now` fixes its ordering); the shell's writer thread
+    /// encodes it, off the main thread.
+    SaveHistory(History, f64),
     /// Ask the tab's page about the word looked for.
     Find(find::Ask),
     /// Take what the find painted off the tab's page.
@@ -605,7 +606,7 @@ impl Browser {
             effects.push(Effect::Save(self.shape()));
         }
         if std::mem::take(&mut self.history_changed) {
-            effects.push(Effect::SaveHistory(self.history.encode(history::now())));
+            effects.push(Effect::SaveHistory(self.history.clone(), history::now()));
         }
         effects
     }
@@ -3026,7 +3027,10 @@ mod tests {
         browser.page_finished(id);
         assert_eq!(browser.history().len(), 1);
         let effects = browser.take_effects();
-        assert!(effects.iter().any(|e| matches!(e, Effect::SaveHistory(data) if String::from_utf8_lossy(data).contains("Example Domain"))));
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::SaveHistory(history, _)
+                if String::from_utf8_lossy(&history.encode(history::now())).contains("Example Domain")))
+        );
     }
 
     #[test]

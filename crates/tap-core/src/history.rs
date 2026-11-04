@@ -45,7 +45,7 @@ struct Visit {
 }
 
 /// Worked out once when a visit enters memory: suggestions run on every key.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct PageText {
     /// The address as the field shows it.
     address: String,
@@ -246,7 +246,7 @@ const KNOWN: [(&str, &str); 47] = [
 ];
 
 /// The places you have been.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct History {
     visits: HashMap<String, Visit>,
     page_text: HashMap<String, PageText>,
