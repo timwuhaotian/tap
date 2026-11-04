@@ -7,6 +7,9 @@ Info.plist.
 
 ## Unreleased
 
+- **→ completes the address**: with the caret at the end of what you typed, the right
+  arrow takes the grey completion, as Tab does; elsewhere it moves the caret.
+
 ## 0.2.1 — 2026-11-05
 
 A tab is grabbed anywhere in its column, and dropped on a group joins it.

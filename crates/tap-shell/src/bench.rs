@@ -714,17 +714,19 @@ fn handle(request: &Value, reply: Reply) {
         }
         "field" => field(request, reply),
         "fieldkey" => {
-            // A key the field's editor turns into a command (↓ ↑ Tab Return Esc), sent
+            // A key the field's editor turns into a command (↓ ↑ ← → Tab Return Esc), sent
             // through the same path, so the field's delegate answers it.
             let command =
                 match text("key").as_deref() {
                     Some("down") => sel!(moveDown:),
                     Some("up") => sel!(moveUp:),
+                    Some("left") => sel!(moveLeft:),
+                    Some("right") => sel!(moveRight:),
                     Some("tab") => sel!(insertTab:),
                     Some("return") => sel!(insertNewline:),
                     Some("escape") => sel!(cancelOperation:),
                     _ => return reply.say(
-                        json!({ "error": "fieldkey needs key: down, up, tab, return or escape" }),
+                        json!({ "error": "fieldkey needs key: down, up, left, right, tab, return or escape" }),
                     ),
                 };
             // Whichever field has the keyboard: the address field, or the find bar's.

@@ -568,8 +568,8 @@ BookmarksFile, Registrable.
   `History.swift` (identity, front-door credits, frecency, ranking, the known sites,
   completion, `history.json` in Search's format, capped at 2,000, passwords never
   kept), with Search's `HistoryRegression` cases as tests. The field offers three
-  places and a search, with the grey ending after the caret; ↓/↑ pick a row, Tab takes
-  the ending, Return goes to the picked row, the ending or the words, a click on a row
+  places and a search, with the grey ending after the caret; ↓/↑ pick a row, Tab (or → from
+  the end of the text) takes the ending, Return goes to the picked row, the ending or the words, a click on a row
   goes there. Nothing is completed while an input method composes (fixes Search's own
   gap, §3.5). Checked through the bench, including marked text (`field marked=true`,
   `unmark`). Not yet: bookmark and open-tab rows, address commands, engine suggestions,
@@ -1230,6 +1230,19 @@ Search opens the field only on the live tab, and only while the address bar is a
 - Checked: `cargo test` (tap-core 107, tap-import 31, tap-shell 57), clippy
   `-D warnings`, nightly fmt. Not checked by eye: a real click in a running app
   (`scripts/bench click` over the tab row, then `field`).
+
+### Unreleased — → takes the grey ending too
+
+At the user's request (2026-11-05: "right arrow key 应该也可以实现自动完成补全不仅仅是tab按钮，比如地址栏的url自动完成").
+
+- [x] **→ takes the ending** (`browser.rs` `accept_ending_on_right`,
+  `right_takes_ending`; `window.rs` `moveRight:`): as Tab does, but only from the end
+  of the typed text with nothing selected, as Chrome and Safari do; anywhere else →
+  moves the caret as ever. Test: `right_arrow_takes_the_ending_only_from_the_end`.
+- [x] **Bench**: `fieldkey` takes `left` and `right`.
+- Checked: `cargo test` (tap-core 117, tap-import 31, tap-shell 68), clippy
+  `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
+  example.com, and ← then → moved the caret without taking it.
 
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
