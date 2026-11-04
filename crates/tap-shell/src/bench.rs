@@ -38,7 +38,11 @@ use tap_core::{
     identity,
 };
 
-use crate::{dialogs, downloads, rt, store, web, window};
+use crate::{
+    dialogs, downloads,
+    menu::{self, Command},
+    page_find, rt, store, web, window,
+};
 
 /// The longest request line read: a line that never ends is not a request.
 const LONGEST: usize = 4_000_000;
@@ -213,6 +217,11 @@ fn handle(request: &Value, reply: Reply) {
             out["fieldText"] = json!(window::field_text());
             out["firstResponder"] = json!(window::first_responder());
             out["asked"] = json!(dialogs::asked());
+            out["find"] = rt::read(|b| {
+                let find = b.find();
+                json!({ "open": find.open(), "needle": find.needle(), "status": find.status(), "missed": find.missed() })
+            })
+            .unwrap_or_default();
             reply.say(out);
         }
         "tabs" | "state" => {
@@ -272,6 +281,19 @@ fn handle(request: &Value, reply: Reply) {
             let (Some(id), Some(js)) = (tab_id(request), text("js")) else {
                 return reply.say(json!({ "error": "eval needs a tab id and js" }));
             };
+            // "world": "tap" (or Search's "search"): in Tap's own content world.
+            if matches!(text("world").as_deref(), Some("tap" | "search")) {
+                let Some(web) = web::existing(id) else {
+                    return reply.say(json!({ "error": "the tab has no page" }));
+                };
+                let reply = std::cell::RefCell::new(Some(reply));
+                page_find::evaluate_in_world(&web, &js, move |value| {
+                    if let Some(reply) = reply.borrow_mut().take() {
+                        reply.say(json!({ "value": value }));
+                    }
+                });
+                return;
+            }
             evaluate(id, &js, reply);
         }
         "text" => {
@@ -295,13 +317,40 @@ fn handle(request: &Value, reply: Reply) {
                         json!({ "error": "fieldkey needs key: down, up, tab, return or escape" }),
                     ),
                 };
-            let Some(editor) = window::field_editor().and_then(|e| e.downcast::<NSTextView>().ok())
-            else {
-                return reply.say(json!({ "error": "the field doesn't have the keyboard" }));
+            // Whichever field has the keyboard: the address field, or the find bar's.
+            let Some(editor) = window::key_editor() else {
+                return reply.say(json!({ "error": "no field has the keyboard" }));
             };
             // SAFETY: a standard text command sent to the field editor.
             unsafe { editor.doCommandBySelector(command) };
             reply.say(json!({ "field": window::field_text() }));
+        }
+        "command" => {
+            // A command as its menu item or the find bar's buttons send it.
+            let tag = match text("name").as_deref() {
+                Some("find") => Command::Find,
+                Some("findNext") => Command::FindNext,
+                Some("findPrevious") => Command::FindPrevious,
+                Some("closeFind") => Command::CloseFind,
+                Some("matchCase") => Command::MatchCase,
+                Some("wholeWords") => Command::WholeWords,
+                _ => return reply.say(json!({ "error": "command needs a name" })),
+            };
+            menu::run(tag as isize);
+            reply.say(json!({ "ran": text("name") }));
+        }
+        "type" => {
+            // Text into whichever field has the keyboard, as typing puts it there.
+            let Some(text) = text("text") else {
+                return reply.say(json!({ "error": "type needs text" }));
+            };
+            let Some(editor) = window::key_editor() else {
+                return reply.say(json!({ "error": "no field has the keyboard" }));
+            };
+            let selection = NSRange::new(usize::try_from(NSNotFound).unwrap_or(usize::MAX), 0);
+            // SAFETY: the field editor takes a string to insert in place of the selection.
+            unsafe { editor.insertText_replacementRange(&NSString::from_str(&text), selection) };
+            reply.say(json!({ "typed": text }));
         }
         "unmark" => {
             // An input method committing what it was composing.

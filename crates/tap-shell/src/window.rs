@@ -24,7 +24,7 @@ use objc2_web_kit::WKWebView;
 use tap_core::browser::{Browser, BrowserFields, Editing, TabFields, TabId};
 
 use crate::{
-    dialogs,
+    dialogs, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
     palette, rt,
@@ -41,6 +41,7 @@ pub struct View {
     can_forward: bool,
     loading: bool,
     title: String,
+    find: findbar::State,
 }
 
 impl View {
@@ -54,6 +55,7 @@ impl View {
             can_forward: tab.is_some_and(tap_core::browser::Tab::can_forward),
             loading: tab.is_some_and(tap_core::browser::Tab::loading),
             title: tab.map_or_else(|| "Tap".to_owned(), tap_core::browser::Tab::label),
+            find: findbar::State::of(browser),
         }
     }
 }
@@ -159,6 +161,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     ending.setHidden(true);
 
     let (trouble, trouble_text) = trouble(mtm, commands);
+    findbar::install(mtm, &stage, commands);
     stage.addSubview(&trouble);
 
     window.setContentView(Some(&root));
@@ -328,6 +331,9 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         }
         if dirty.intersects(BrowserFields::EDITING | BrowserFields::TABS | BrowserFields::ACTIVE) {
             place_field(views, view, dirty.contains(BrowserFields::EDITING));
+        }
+        if dirty.intersects(BrowserFields::FIND | BrowserFields::FIND_FOCUS) {
+            findbar::update(&view.find, dirty.contains(BrowserFields::FIND_FOCUS));
         }
         if dirty.contains(BrowserFields::RETYPED)
             && let Some(editing) = &view.editing
@@ -559,6 +565,17 @@ pub fn field_text() -> Option<String> {
 /// The field's editor, while the field has the keyboard.
 pub fn field_editor() -> Option<Retained<objc2_app_kit::NSText>> {
     with_views(|views| views.field.currentEditor()).flatten()
+}
+
+/// The text editor that has the keyboard in the window, whichever field it serves.
+pub fn key_editor() -> Option<Retained<NSTextView>> {
+    with_views(|views| {
+        views
+            .window
+            .firstResponder()
+            .and_then(|r| r.downcast::<NSTextView>().ok())
+    })
+    .flatten()
 }
 
 /// Who has the keyboard: the field, the page, or the class of whatever else.

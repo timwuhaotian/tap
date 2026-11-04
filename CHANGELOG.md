@@ -26,6 +26,11 @@ Info.plist.
   waits until you go to that tab.
 - **A tab behind whose page went away** is loaded again when you come back to it, rather
   than in the background.
+- **Find on page.** ⌘F puts a small bar in the page's corner: what you type is found as
+  you type it, every match painted and the current one in orange, with "3 of 17" as
+  the page counts it. Return and ⌘G go to the next match, ⇧Return and ⇧⌘G to the one
+  before; Match Case and Whole Words are under the bar's menu; Esc puts it away and the
+  page's own selection back. Search's own page script, run where the page can't see it.
 - **Downloads.** A download link, a file the server sends as an attachment, or anything
   WebKit can't show goes into Downloads under its own name, numbered if the name is
   taken; the Downloads stack in the Dock bounces when it arrives. A tab opened only for

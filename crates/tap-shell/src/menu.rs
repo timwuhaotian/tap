@@ -13,7 +13,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSInteger, NSNotification, NSString};
 use tap_core::browser::Browser;
 
-use crate::{rt, store};
+use crate::{findbar, rt, store};
 
 /// What a menu item or a door asks for, carried as its tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,11 +30,24 @@ pub enum Command {
     Forward,
     NextTab,
     PreviousTab,
+    Find,
+    FindNext,
+    FindPrevious,
+    CloseFind,
+    FindOptions,
+    MatchCase,
+    WholeWords,
     /// ⌘1 to ⌘9 are 101 to 109.
     Tab = 100,
 }
 
-fn run(tag: NSInteger) {
+/// Runs a command as its menu item or button would.
+pub fn run(tag: NSInteger) {
+    // The options menu is the bar's own business: nothing in the model changes.
+    if tag == Command::FindOptions as NSInteger {
+        findbar::show_options();
+        return;
+    }
     rt::dispatch(move |browser: &mut Browser| match tag {
         1 => browser.begin_editing(true),
         2 => browser.reopen(),
@@ -60,6 +73,18 @@ fn run(tag: NSInteger) {
         9 => browser.forward(),
         10 => browser.select_beside(true),
         11 => browser.select_beside(false),
+        12 => browser.open_find(),
+        13 => browser.find_next(true),
+        14 => browser.find_next(false),
+        15 => browser.close_find(),
+        17 => {
+            let on = !browser.find().match_case();
+            browser.set_find_match_case(on);
+        }
+        18 => {
+            let on = !browser.find().whole_words();
+            browser.set_find_whole_words(on);
+        }
         101..=109 => browser.select_number(usize::try_from(tag - 100).unwrap_or(1)),
         _ => {}
     });
@@ -254,6 +279,11 @@ pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu>
                 system("Copy", "c", sel!(copy:)),
                 system("Paste", "v", sel!(paste:)),
                 system("Select All", "a", sel!(selectAll:)),
+                separator(),
+                item("Find…", "f", Command::Find),
+                item("Find Next", "g", Command::FindNext),
+                // Upper case is how AppKit spells Shift (see Reopen Closed Tab).
+                item("Find Previous", "G", Command::FindPrevious),
             ],
             commands,
         ),

@@ -31,7 +31,7 @@ use tap_core::{
     fnd::Url,
 };
 
-use crate::{dialogs, downloads, rt, store, window};
+use crate::{dialogs, downloads, page_find, rt, store, window};
 
 /// What the observer watches on every web view; each change re-reads the lot.
 const OBSERVED: [&str; 6] = [
@@ -215,6 +215,8 @@ pub fn perform(effect: Effect) {
         Effect::FocusPage(tab) => window::focus_page(existing(tab).as_deref()),
         Effect::Save(shape) => store::save_session(&shape),
         Effect::SaveHistory(data) => store::save_history(data),
+        Effect::Find(ask) => page_find::ask(&ask),
+        Effect::ClearFind { tab, generation } => page_find::clear(tab, generation),
     }
 }
 

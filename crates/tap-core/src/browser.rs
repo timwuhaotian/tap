@@ -13,6 +13,7 @@ use crate::{
     address,
     crash::{CrashCount, PageEnd},
     engine::{self, Engine},
+    find::{self, Find},
     fnd::Url,
     history::{self, History, Suggestion},
     keyword::{self, Keyword},
@@ -53,6 +54,10 @@ bitflags! {
         /// The model rewrote the field's text itself (Tab took the ending), so the
         /// field has to be told; what the keyboard typed the field already shows.
         const RETYPED = 1 << 6;
+        /// The find bar opened, closed, or its count changed.
+        const FIND = 1 << 7;
+        /// ⌘F again: the find field takes the keys, its word selected.
+        const FIND_FOCUS = 1 << 8;
     }
 }
 
@@ -76,6 +81,13 @@ pub enum Effect {
     Save(session::Shape),
     /// Write `history.json`, already encoded.
     SaveHistory(Vec<u8>),
+    /// Ask the tab's page about the word looked for.
+    Find(find::Ask),
+    /// Take what the find painted off the tab's page.
+    ClearFind {
+        tab: TabId,
+        generation: u64,
+    },
 }
 
 /// What was done about a page whose process ended, as the log says it.
@@ -264,6 +276,8 @@ pub struct Browser {
     /// Where you have been (Search's per-window `history`, the profile's).
     history: History,
     history_changed: bool,
+    /// The find bar (⌘F), for whichever tab is in front.
+    find: Find,
     next: u64,
 }
 
@@ -292,6 +306,7 @@ impl Browser {
             session_changed: false,
             history: History::default(),
             history_changed: false,
+            find: Find::default(),
             next: 1,
         };
         let id = browser.make_tab();
@@ -445,6 +460,15 @@ impl Browser {
             self.active = Some(id);
             self.dirty.insert(BrowserFields::ACTIVE);
             self.session_changed = true;
+            // The find goes with you: asked again of the page now in front, once it has
+            // loaded (`page_finished`) if it is still loading.
+            if self.find.open() {
+                let retry = self
+                    .tab(id)
+                    .is_some_and(|t| !t.loading && t.awake && !t.stale);
+                let outs = self.find.moved(Some(id), retry);
+                self.finding(outs);
+            }
         }
         if self.editing.take().is_some() {
             self.dirty.insert(BrowserFields::EDITING);
@@ -797,6 +821,74 @@ impl Browser {
         self.effects.push(Effect::FocusPage(id));
     }
 
+    // MARK: find on page
+
+    #[must_use]
+    pub fn find(&self) -> &Find {
+        &self.find
+    }
+
+    fn finding(&mut self, outs: Vec<find::Out>) {
+        for out in outs {
+            self.effects.push(match out {
+                find::Out::Ask(ask) => Effect::Find(ask),
+                find::Out::Clear { tab, generation } => Effect::ClearFind { tab, generation },
+            });
+        }
+        self.dirty.insert(BrowserFields::FIND);
+    }
+
+    /// ⌘F: the bar, with the keys in its field and its word selected. Only over a page.
+    pub fn open_find(&mut self) {
+        if self.active_tab().is_none_or(Tab::is_blank) {
+            return;
+        }
+        self.find.show();
+        self.dirty
+            .insert(BrowserFields::FIND | BrowserFields::FIND_FOCUS);
+    }
+
+    /// Esc or Done: the bar goes, and the page has the keyboard again.
+    pub fn close_find(&mut self) {
+        if !self.find.open() {
+            return;
+        }
+        let outs = self.find.close();
+        self.finding(outs);
+        if let Some(id) = self.active {
+            self.effects.push(Effect::FocusPage(id));
+        }
+    }
+
+    pub fn set_find_needle(&mut self, needle: &str) {
+        let outs = self.find.set_needle(needle, self.active);
+        self.finding(outs);
+    }
+
+    pub fn set_find_match_case(&mut self, on: bool) {
+        let outs = self.find.set_match_case(on, self.active);
+        self.finding(outs);
+    }
+
+    pub fn set_find_whole_words(&mut self, on: bool) {
+        let outs = self.find.set_whole_words(on, self.active);
+        self.finding(outs);
+    }
+
+    /// Return, ⌘G, the arrows: the next match, or the one before.
+    pub fn find_next(&mut self, forward: bool) {
+        let outs = self.find.look(self.active, forward);
+        self.finding(outs);
+    }
+
+    /// The page answered.
+    pub fn find_answered(&mut self, ask: &find::Ask, answer: find::Answer) {
+        let outs = self
+            .find
+            .answered(ask.asking, ask.generation, ask.tab, answer, self.active);
+        self.finding(outs);
+    }
+
     // MARK: the page
 
     /// Gives the live page the keyboard: once the window exists, for a restored tab.
@@ -877,6 +969,12 @@ impl Browser {
         if let Some(tab) = self.tab_mut(id) {
             tab.committed = true;
         }
+        // A new page under an open find bar: the old page's answers are retired; the new
+        // one is asked once it has finished loading.
+        if self.find.open() && self.active == Some(id) {
+            let outs = self.find.moved(Some(id), false);
+            self.finding(outs);
+        }
     }
 
     /// The tab's navigation became a download. A tab opened for it alone, with nothing
@@ -902,6 +1000,14 @@ impl Browser {
 
     /// A page finished loading in the tab: a visit, kept in history.
     pub fn page_finished(&mut self, id: TabId) {
+        if self.find.open()
+            && self.active == Some(id)
+            && !self.find.asked_for()
+            && !self.find.needle().trim().is_empty()
+        {
+            let outs = self.find.look(Some(id), true);
+            self.finding(outs);
+        }
         let Some(tab) = self.tab(id) else { return };
         let (url, title) = (tab.url.clone(), tab.title.clone());
         if self.history.record(&url, &title, history::now()) {
@@ -1314,5 +1420,65 @@ mod tests {
 
         browser.drop_empty(opener);
         assert_eq!(browser.tabs().len(), 1, "a tab that has shown a page stays");
+    }
+
+    #[test]
+    fn find_asks_the_page_in_front_and_follows_you_to_another_tab() {
+        let mut browser = with_pages(&["https://a.example", "https://b.example"]);
+        let (a, b) = (browser.tabs()[0].id, browser.tabs()[1].id);
+        browser.select(a);
+        browser.page_committed(a);
+        browser.page_loading(a, false, 1.0);
+        browser.take_effects();
+        browser.open_find();
+        browser.set_find_needle("tap");
+        let effects = browser.take_effects();
+        let Some(Effect::Find(ask)) = effects.iter().find(|e| matches!(e, Effect::Find(_))) else {
+            panic!("asked the page: {effects:?}")
+        };
+        assert_eq!((ask.tab, ask.query.as_str()), (a, "tap"));
+        let ask = ask.clone();
+        browser.find_answered(
+            &ask,
+            find::Answer {
+                count: Some(2),
+                index: Some(1),
+                found: true,
+                available: true,
+                ..find::Answer::default()
+            },
+        );
+        assert_eq!(browser.find().status().as_deref(), Some("1 of 2"));
+
+        browser.page_loading(b, false, 1.0);
+        browser.select(b);
+        let effects = browser.take_effects();
+        assert!(
+            effects.contains(&Effect::ClearFind {
+                tab: a,
+                generation: effects
+                    .iter()
+                    .find_map(|e| if let Effect::ClearFind { generation, .. } = e {
+                        Some(*generation)
+                    } else {
+                        None
+                    })
+                    .unwrap_or(0)
+            })
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Find(ask) if ask.tab == b && ask.query == "tap"))
+        );
+
+        browser.close_find();
+        assert!(!browser.find().open());
+        assert!(
+            browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::ClearFind { tab, .. } if *tab == b))
+        );
     }
 }

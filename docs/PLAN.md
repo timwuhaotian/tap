@@ -582,8 +582,17 @@ BookmarksFile, Registrable.
   `com.apple.quarantine`. Checked through the bench (`downloads`). Not yet: the list
   (⇧⌘J) and `downloads.json`, progress in the strip, cancel and resume, asking where to
   save, the PDF bar's save button, local text files shown as text.
-- [ ] Still to come for M2: find on page, sleeping tabs, icons, the os_log line for #849
-  (now on stderr).
+- [x] Find on page (2026-11-04): Search's page script, verbatim but for its names, in
+  `assets/js/page-find.js` (copied from `PageFind.swift` at d1639aa by hand; the
+  `extract-js` drift check comes with M1's tooling), run in Tap's own content world
+  with the word as an argument; WebKit's own find for a PDF. `tap_core::find` ports the
+  window's side (one question to the page at a time, generations, "3 of 17",
+  "1000+", "No matches" in red, asked again on another tab or a new page). The bar:
+  the field, the count, previous and next, Match Case and Whole Words, Done; ⌘F, ⌘G,
+  ⇧⌘G, Return, ⇧Return, Esc. Checked through the bench on a page with known counts
+  (7, 2 with Match Case, 6 with Whole Words), stepping both ways, and by eye.
+- [ ] Still to come for M2: sleeping tabs, icons, the os_log line for #849 (now on
+  stderr).
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
 - Address parsing, engines, keywords, site search, history suggestions; the omnibox
   with inline completion (IME-safe, finding 3.5)
@@ -841,6 +850,8 @@ Each spike's result is written next to its risk.
 | 6 | Swipe navigation | Search's own disc swipe (`Swipe.swift`), `trackSwipeEvent`, `_setRubberBandingEnabled:`. **M1 spike** in `TapPageView::scrollWheel` |
 | 7 | Accessibility | Prefer real controls; `TapView` exposes role, label, press and children (33 labels to carry over); `ax-dump` diff at M3 and M9 |
 | 8 | PiP and Float (moving a live WKWebView between windows) | float_video and float_settle in M5 |
+| 9b | A named `WKContentWorld` let go between calls: WebKit tears the world down, and the next call gets a fresh one with none of its state | One world object kept for the app's life (`page_find::world`), as Search keeps `Web.world` |
+| 9c | Each content world sees its own JavaScript wrapper of a shared DOM object (a `Highlight` read from the page world kept its old size after the find cleared it) | Check what the page shows by eye or from Tap's own world, not from the page world |
 | 9a | WebKit objects that forward their messages (`WKNSURLAuthenticationChallenge`): objc2's debug checks look for methods on the wrapper's class and stop | Read through the wrapper's `forwardingTargetForSelector:` target (`dialogs::unwrapped`); every new WebKit object type is exercised through the bench in a debug build before it ships |
 | 9 | Private SPI changing between macOS releases | `spi.rs` catalogue, `respondsToSelector` guards, objc2 debug verification, the bench `spi` verb, runs on the macOS 14 VM and the current beta |
 | 10 | Weak linking on macOS 14 (extern statics from newer SDKs, such as `WKWebExtensionPermission*`) | `objc2::available!`, `-Wl,-weak_framework,WebKit`; **M1 VM spike** |
@@ -1077,7 +1088,7 @@ added below this one as M1 starts.
 | ExtensionsUI.swift | 342 | s/ui/extensions_ui | M7 | todo |
 | ExtensionWorkerRecovery.swift | 187 | w/ext/worker_recovery | M7 | todo |
 | Fetching.swift | 673 | c/fetching, s/ui/downloads_page | M2 | partial |
-| Find.swift | 135 | s/ui/find_bar | M2 | todo |
+| Find.swift | 135 | s/ui/find_bar | M2 | ported |
 | Float.swift | 1367 | w/float, a/float | M5 | todo |
 | Fold.swift | 554 | s/ui/fold | M3 | todo |
 | Forms.swift | 544 | a/forms, w/relays/form | M5 | todo |
@@ -1109,7 +1120,7 @@ added below this one as M1 starts.
 | NativePiP.swift | 99 | w/native_pip, a | M5 | todo |
 | Notifications.swift | 480 | w/notifications | M5 | todo |
 | Omnibox.swift | 617 | s/ui/{omnibox,address_field} | M2 | partial |
-| PageFind.swift | 829 | a/page-find, c/page_find, w/page_find | M2 | todo |
+| PageFind.swift | 829 | a/page-find, c/page_find, w/page_find | M2 | ported |
 | PageQuestions.swift | 176 | s/ui/page_questions | M5 | todo |
 | PaneStage.swift | 1040 | s/ui/pane_stage | M4 | todo |
 | Passkeys.swift | 1189 | c/passkeys, w/passkeys, a | M5 | todo |
