@@ -393,6 +393,23 @@ fn column(rect: NSRect, height: f64) -> NSRect {
     )
 }
 
+/// The slot a press at `point` takes, by its column. Only what the row shows: once it
+/// overflows, the tabs laid out past `end` aren't drawn, and the end past the plus
+/// stays title bar rather than a tab nobody can see.
+fn slot_at(layout: &Layout, point: NSPoint, height: f64) -> Option<usize> {
+    layout.tabs.iter().position(|rect| {
+        let shown = rect.size.width.min(layout.end - rect.origin.x);
+        shown > 0.0
+            && contains(
+                column(
+                    NSRect::new(rect.origin, NSSize::new(shown, rect.size.height)),
+                    height,
+                ),
+                point,
+            )
+    })
+}
+
 fn contains(rect: NSRect, point: NSPoint) -> bool {
     point.x >= rect.origin.x
         && point.x < rect.origin.x + rect.size.width
@@ -862,21 +879,22 @@ impl Strip {
             if contains(column(layout.plus, height), point) {
                 return Spot::Plus;
             }
-            for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
-                if contains(column(*rect, height), point) {
-                    let index = match item {
-                        Item::Heading(place) => return Spot::Heading(*place),
-                        Item::Tab(index) => *index,
-                    };
-                    let can_close = editing != Some(slot) && rect.size.width >= palette::TAB_TITLED;
-                    return if can_close && contains(close_rect(*rect), point) {
-                        Spot::Close(index)
-                    } else {
-                        Spot::Tab(index)
-                    };
-                }
+            let Some(slot) = slot_at(layout, point, height) else {
+                return Spot::Nothing;
+            };
+            let (Some(item), Some(rect)) = (row.get(slot), layout.tabs.get(slot)) else {
+                return Spot::Nothing;
+            };
+            let index = match item {
+                Item::Heading(place) => return Spot::Heading(*place),
+                Item::Tab(index) => *index,
+            };
+            let can_close = editing != Some(slot) && rect.size.width >= palette::TAB_TITLED;
+            if can_close && contains(close_rect(*rect), point) {
+                Spot::Close(index)
+            } else {
+                Spot::Tab(index)
             }
-            Spot::Nothing
         })
         .unwrap_or_default()
     }
@@ -2350,6 +2368,50 @@ mod tests {
         let trailing = palette::HELM + palette::DOOR + 4.0;
         let fetching = layout(900.0, &tabs(30), None, trailing);
         assert!(fetching.plus.origin.x + palette::PLUS <= 900.0 - trailing - 4.0 + f64::EPSILON);
+    }
+
+    #[test]
+    fn a_press_takes_a_shown_slot_by_its_column_and_never_one_past_the_end() {
+        let few = layout(1600.0, &tabs(3), None, palette::HELM);
+        let middle = |r: NSRect| r.origin.x + r.size.width / 2.0;
+        // Above and below the pill, and in the gap after it: still the tab.
+        for y in [1.0, palette::STRIP - 1.0] {
+            assert_eq!(
+                slot_at(&few, NSPoint::new(middle(few.tabs[1]), y), palette::STRIP),
+                Some(1)
+            );
+        }
+        let gap = few.tabs[0].origin.x + few.tabs[0].size.width + 1.0;
+        assert_eq!(
+            slot_at(&few, NSPoint::new(gap, 1.0), palette::STRIP),
+            Some(0)
+        );
+
+        // Overflowed: the tabs laid out past the pinned plus aren't drawn, so the
+        // end beyond it is title bar at any height, not a tab nobody can see.
+        let crowded = layout(1200.0, &tabs(60), None, palette::HELM);
+        let past_plus = crowded.plus.origin.x + crowded.plus.size.width + 2.0;
+        assert!(crowded.tabs.last().is_some_and(|r| r.origin.x > past_plus));
+        for y in [3.0, palette::STRIP / 2.0, palette::STRIP - 3.0] {
+            assert_eq!(
+                slot_at(&crowded, NSPoint::new(past_plus, y), palette::STRIP),
+                None
+            );
+        }
+        // The last shown tab, cut by the end, is still taken where it shows.
+        let cut = crowded
+            .tabs
+            .iter()
+            .rposition(|r| r.origin.x < crowded.end)
+            .expect("a shown tab");
+        assert_eq!(
+            slot_at(
+                &crowded,
+                NSPoint::new(crowded.end - 1.0, 3.0),
+                palette::STRIP
+            ),
+            Some(cut)
+        );
     }
 
     #[test]
