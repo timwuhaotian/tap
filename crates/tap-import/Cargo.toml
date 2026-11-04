@@ -1,6 +1,6 @@
 [package]
 name = "tap-import"
-description = "What Tap brings in and sends out: profile files (Search #845). No AppKit, no WebKit."
+description = "What Tap brings in and sends out: profile files (Search #845) and other browsers on this Mac. No AppKit, no WebKit."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,9 @@ repository.workspace = true
 # Deflate only, through the pure-Rust backend: a profile is a plain zip, and the other
 # methods (and their C libraries) would only make the binary bigger.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Other browsers' history, read from copies of their databases, against the system's
+# libsqlite3 rather than a bundled one (docs/PLAN.md §5.3).
+rusqlite = { version = "0.41", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 tap-core.workspace = true

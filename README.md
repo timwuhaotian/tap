@@ -42,6 +42,12 @@ with its own name and icon, and with fixes of its own.
   updates. Blocking ads and trackers, reading mode (⇧⌘R), the floating video,
   120 Hz pages, middle-button scrolling and the tab bar's icons, reading progress
   and ⌘ numbers are all in there too.
+- **Bring things over** from the other browsers on this Mac, found on their own:
+  Settings › General lists Search and the Chromium browsers (Chrome, Arc, Brave, Edge,
+  Dia, Vivaldi, Opera and more), and one pick brings in its open tabs and their groups
+  ([#841](https://github.com/driceroland/Search/pull/841)), history and bookmarks.
+  Search's settings come too, with no export first. Nothing in the other browser
+  changes, and tabs already open aren't opened twice.
 - **Your profile on your other Mac.** File › Export Tap Profile… writes one offline
   file of your tabs and their groups, history, bookmarks and settings, and offers it to
   AirDrop; open it on the other Mac and it all comes in, groups folded or open as they
@@ -80,9 +86,9 @@ Everything else Search does, including:
 - **Saving and filling passwords, and passkeys**, in the macOS keychain (Settings ›
   Passwords opens the Passwords app meanwhile), and **Chrome extensions** on
   WebKit's own extension engine.
-- **Import** from Chrome, Arc, Brave, Edge, Dia, Safari and Firefox, including their
-  open tabs and tab groups ([#841](https://github.com/driceroland/Search/pull/841)).
-  Search's own data comes over too, without exporting it first.
+- **More to bring over**: Safari and Firefox, choosing which profile of a browser
+  comes (it's the one used last for now), its passwords and extensions, and Arc's
+  spaces and pins.
 
 ## Building
 

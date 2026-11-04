@@ -450,7 +450,8 @@ across NSUserDefaults (done in 0.1.1, §8).
   identical layout and `format: 1`.
 
 **"Bring things over from Search"** (`tap_import::from_search`, new; its file half is
-in: `from_search::pack` and `cargo xtask search-profile`, §8 "0.1.2"). If
+in: `from_search::pack` and `cargo xtask search-profile`, §8 "0.1.2"; in the app,
+without a file, since 0.1.4: `from_search::read`, §8 "0.1.4"). If
 `~/Library/Application Support/Search` exists, Search is offered as an import source.
 - It builds the same `IncomingProfile` that #845's import reads, from the live folder
   plus `CFPreferencesCopyMultiple("com.officecommun.search")`, so both paths share all
@@ -860,6 +861,66 @@ privacy rows included).
   Not checked by hand: popup window sizes, 120 Hz feel, Esc-twice, the
   notification sheet, Reader and float on real video sites, shield on YouTube.
 
+### 0.1.4 — Bring things over from the browsers on this Mac
+
+At the user's request (2026-11-04: "tap bring things over 理论上应该是能自动侦测到本地的
+chrome/search 等类似的profil数据的，但目前没有"): Settings › General › Bring things
+over finds the browsers on this Mac by itself and brings one over, as Search's
+`ImportPanel` does, cut to what Tap holds.
+
+- [x] **Found on their own** (`tap_import::found`): Search (its store folder, when it
+  has a `session.json`) first, then Search's Chromium list in Search's order (Dia,
+  Chrome, ego lite, Arc, Brave, Edge, Vivaldi, Chromium, Chrome's other channels,
+  Opera, Opera GX, Helium, Comet). A Chromium browser counts when a profile folder,
+  or its own folder (Opera), holds `Bookmarks`, `History`, `Sessions` or
+  `Current Session`; Guest and System profiles never count; a folder a browser's
+  helpers left (`NativeMessagingHosts` alone, as Arc's, Brave's and Edge's are on the
+  user's Mac) doesn't either. A test run reads `<world>/Import` instead, never a real
+  browser's (Search's `Chromium.base`).
+- [x] **The row** (`settings.rs`): its words name what was found ("from Search and
+  Chrome on this Mac"); Bring Over is a pull-down of them, then From a Profile File…
+  (the old Import Profile…). Picking one reads it off the main thread
+  (`bring::offer`), says what there is (tabs and groups, places, bookmarks, settings,
+  and the profile when the browser has several), and brings it in on Bring In.
+- [x] **Chromium** (`tap_import::chromium`, from `Import.swift`): the profile used
+  last (`Local State`'s `last_used`, then `last_active_profiles`, then the folder
+  touched last, as Search's `usual`); its open tabs and groups through the #841 SNSS
+  reader (`tap_import::snss`, `ImportSession.swift` ported line for line, its
+  `SessionImportTests` with it); the 3,000 newest places from a copy of `History`
+  with its `-wal`/`-shm`, read with `rusqlite` against the system's libsqlite3
+  (§5.3); bookmarks from `Bookmarks`, the bar first, then Other and Mobile. A link
+  can't lead a read out of the browser's folder; files are capped at 64 MB.
+- [x] **Search** without a file (§7): `from_search::read` is `pack` then `unpack`, so
+  it merges exactly as the file does; Search's allowlisted settings come too (not on
+  a test run).
+- [x] **One merge for all** (`profile::bring_in`): what a browser has comes out as an
+  `Incoming`, as a profile file does. Tabs already open here stay out, with the groups
+  that leaves empty (`Incoming::leave_out`, as Search's `takeSession` skips them), so
+  bringing a browser over again adds only what is new. History keeps the larger
+  count, as before.
+- Deviations: pinned tabs come as tabs (no pins yet); a Chromium browser's bookmarks
+  always go in a folder of its name whose identity is the browser's, so a second time
+  adds no second folder (Search files them at the top when it has none; Tap shows no
+  bookmarks yet either way); a group a returning tab was in comes as a new group of
+  the same name, as Search's `takeSession` does.
+- Not yet, with their triggers: choosing a profile (Search's picker), Firefox and the
+  other Mozilla browsers, Safari (its data is kept from other apps), passwords
+  (no vault — M5), extensions (M7), Arc's spaces and pins (`arc.import`, M4), icons
+  from the browser's `Favicons`, the File menu's own Bring Things Over…, and the
+  Welcome's short version.
+- Checked: `cargo test` (tap-core 86, tap-import 18, tap-shell 37), clippy
+  `-D warnings`, nightly fmt. Through the bench in a test world holding a made-up
+  Chrome (two profiles, `Local State` naming them, a session with two groups and a
+  `chrome://newtab`, 41 places, three bookmarks) and a copy of this Mac's Search
+  store: `bring` found `["Search", "Chrome"]` and the row said so; Chrome brought 4
+  tabs in 2 groups (Rust 学习 folded, Reading open), 40 places and 3 bookmarks in a
+  Chrome folder; again, no tabs and no bookmarks; Search brought 27 tabs in 3 groups
+  (软件开发 and 娱乐 folded, AI Providers open), 2,000 places and 368 bookmarks; two
+  closed Chrome tabs came back through the pull-down's own path (`bring menu=true`).
+  Not checked by eye: the pull-down and the confirming sheet (the shell here can't
+  reach the window), and a real Chrome profile (none on this Mac: only Chrome for
+  Testing's crash folder), which M6 still asks for.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -905,11 +966,12 @@ window Python tests, and the ProfilesTests port pass.
 
 ### M6 — Importers and migration
 - Chrome, Safari, Firefox and Arc; ImportFile (html, csv, Safari zip)
-- **#841:** open tabs and groups offered in Bring Things Over
+- **#841:** open tabs and groups offered in Bring Things Over (in since 0.1.4, from the
+  profile used last)
 - **#845:** File › Export Tap Profile, and import of `.searchprofile` and `.tapprofile`
   (in since 0.1.1 for one space and one profile; spaces and profiles of their own come
   with M4)
-- "From Search"
+- "From Search" (in since 0.1.4: Personal's first space, as the file carries it)
 
 This needs M3 (SettingsIndex) and M4 (spaces and profiles) first.
 
@@ -1280,6 +1342,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | At the user's request ("为什么settings里面的大部分选项都没办法真实的使用，修复优化"), Settings shows only the rows Tap acts on, replacing 0.1.1's dimmed rows, and twelve more rows are made live (§8 "0.1.2"). The rest come back as their features land; their values are kept and travel meanwhile. |
 | 2026-11-04 | At the user's request ("全部完成后，发布0.1.0版本"), 0.1.0 is released once M2 is done, rather than waiting for full parity at 1.0: browsing, the field, history, page questions, downloads, find, sleeping tabs, session, site icons, links from other apps and #849. `releases/` is committed from 0.1.0; the README says what isn't in yet. Full parity stays the bar for 1.0. Not in 0.1.0 and needed before people rely on it: the updater (M8 in the plan, ported from Kil). |
 | 2026-11-04 | At the user's request ("Settings 大部分不能用的功能帮我全部实现", then a patch release), 0.1.3 makes 26 more Settings rows live (53 of 81, §8 "0.1.3"). The rows behind whole milestones (sidebar column, Spaces/profiles/pins, the passwords vault, extensions) stay hidden until those land; reduced forms are marked where they are (dusk, passwords.open, downloads.button, search.suggest). |
+| 2026-11-04 | At the user's request ("tap bring things over 理论上应该是能自动侦测到本地的chrome/search 等类似的profil数据的，但目前没有"), 0.1.4 brings forward the core of M6: Bring things over finds Search and the Chromium browsers on this Mac and brings one's open tabs and groups (#841), history and bookmarks through the profile merge (§8 "0.1.4"). `rusqlite` against the system's libsqlite3 joins `tap-import`, as §5.3 planned. |
 
 ## Appendix A — Parity tracker
 
@@ -1357,12 +1420,12 @@ added below this one as M1 starts.
 | History.swift | 639 | c/history | M2 | partial |
 | Icons.swift | 859 | c/icons_index, w/icons, a | M2 | partial |
 | ImageMenu.swift | 290 | w/image_menu, a | M5 | todo |
-| Import.swift | 1576 | i/{discovery,chromium,safari,firefox} | M6 | todo |
+| Import.swift | 1576 | i/{found,chromium,safari,firefox} | M6 | partial (0.1.4: found, Chromium history and bookmarks; passwords, icons, Mozilla to come) |
 | ImportArc.swift | 289 | i/arc | M6 | todo |
 | ImportFile.swift | 398 | i/file; #845 part: i/profile | M6 | partial |
-| ImportPanel.swift | 572 | s/ui/import_panel | M6 | todo |
+| ImportPanel.swift | 572 | s/bring, s/settings (Bring Over) | M6 | partial (0.1.4: found, picked, said, brought; no profile picker or choices) |
 | ImportRecord.swift | 60 | i/records | M6 | todo |
-| ImportSession.swift | 367 | i/session_snss (#841) | M1/M6 | todo |
+| ImportSession.swift | 367 | i/snss (#841) | M1/M6 | tested (0.1.4, with `SessionImportTests`) |
 | Inspector.swift | 59 | w/inspector | M2 | todo |
 | InternalPages.swift | 168 | c/internal, s/window (stage) | M3 | partial |
 | KeptScroll.swift | 36 | a/kept-scroll, w/kept_scroll | M5 | todo |

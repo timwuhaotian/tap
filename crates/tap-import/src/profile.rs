@@ -186,6 +186,63 @@ pub struct Incoming {
     pub extensions: Vec<String>,
 }
 
+impl Incoming {
+    /// How many tabs its sessions hold.
+    #[must_use]
+    pub fn tabs(&self) -> usize {
+        self.sessions.iter().map(|s| s.tabs.len()).sum()
+    }
+
+    /// How many tab groups its sessions hold.
+    #[must_use]
+    pub fn groups(&self) -> usize {
+        self.sessions
+            .iter()
+            .map(|s| s.groups.as_ref().map_or(0, Vec::len))
+            .sum()
+    }
+
+    /// How many places its histories hold.
+    #[must_use]
+    pub fn places(&self) -> usize {
+        self.histories
+            .iter()
+            .filter_map(|data| serde_json::from_slice::<Vec<Value>>(data).ok())
+            .map(|rows| rows.len())
+            .sum()
+    }
+
+    /// How many bookmarks, folders aside.
+    #[must_use]
+    pub fn bookmark_count(&self) -> usize {
+        let mut urls = Vec::new();
+        for node in &self.bookmarks {
+            walk(node, &mut urls, &mut Vec::new());
+        }
+        urls.len()
+    }
+
+    /// Leaves out the tabs whose address is already open in `open`, and the groups that
+    /// leaves empty: a browser brought over again adds only what is new.
+    pub fn leave_out(&mut self, open: &std::collections::HashSet<String>) {
+        for shape in &mut self.sessions {
+            shape.tabs.retain(|t| !open.contains(&t.url));
+            if let Some(groups) = shape.groups.as_mut() {
+                let used: Vec<&String> = shape
+                    .tabs
+                    .iter()
+                    .filter_map(|t| t.group_id.as_ref())
+                    .collect();
+                groups.retain(|g| used.contains(&&g.id));
+            }
+            if shape.groups.as_ref().is_some_and(Vec::is_empty) {
+                shape.groups = None;
+            }
+        }
+        self.sessions.retain(|s| !s.tabs.is_empty());
+    }
+}
+
 /// Reads one file's bytes. Section by section: one unreadable section never hides the
 /// rest. Only the manifest has to be there, and say it is a profile in a format this
 /// version reads.
@@ -377,6 +434,51 @@ fn walk(node: &Value, urls: &mut Vec<String>, ids: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tabs_open_here_already_stay_out_with_the_groups_they_leave_empty() {
+        let tab = |url: &str, group: &str| tap_core::session::Entry {
+            url: url.to_owned(),
+            title: url.to_owned(),
+            group_id: Some(group.to_owned()),
+            ..Default::default()
+        };
+        let group = |id: &str| tap_core::session::TabGroup {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            collapsed: false,
+        };
+        let mut incoming = Incoming {
+            sessions: vec![
+                Shape {
+                    tabs: vec![
+                        tab("https://a/", "G"),
+                        tab("https://b/", "G"),
+                        tab("https://c/", "H"),
+                    ],
+                    active: -1,
+                    groups: Some(vec![group("G"), group("H")]),
+                    ..Shape::default()
+                },
+                Shape {
+                    tabs: vec![tab("https://a/", "G")],
+                    active: -1,
+                    ..Shape::default()
+                },
+            ],
+            ..Incoming::default()
+        };
+        let open = ["https://a/", "https://c/"].map(str::to_owned).into();
+        incoming.leave_out(&open);
+        assert_eq!(incoming.sessions.len(), 1);
+        assert_eq!(incoming.tabs(), 1);
+        assert_eq!(incoming.sessions[0].tabs[0].url, "https://b/");
+        let groups = incoming.sessions[0].groups.as_ref().expect("G stays");
+        assert_eq!(
+            groups.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(),
+            ["G"]
+        );
+    }
 
     fn session(urls: &[&str]) -> Vec<u8> {
         Shape {

@@ -23,9 +23,9 @@ use objc2::{
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
     NSControl, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSFontWeightMedium,
-    NSFontWeightSemibold, NSImage, NSImageView, NSModalResponseOK, NSOpenPanel, NSPopUpButton,
-    NSResponder, NSScrollView, NSSearchField, NSSegmentSwitchTracking, NSSegmentedControl,
-    NSSwitch, NSTextField, NSView, NSWorkspace,
+    NSFontWeightSemibold, NSImage, NSImageView, NSMenuItem, NSModalResponseOK, NSOpenPanel,
+    NSPopUpButton, NSResponder, NSScrollView, NSSearchField, NSSegmentSwitchTracking,
+    NSSegmentedControl, NSSwitch, NSTextField, NSView, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSDate, NSPoint, NSProcessInfo, NSRect, NSSet, NSSize, NSString, NSURL,
@@ -39,7 +39,7 @@ use tap_core::{
     settings_index::{self as index, Control, Item, Kind, Merged, Page, Prefs},
 };
 
-use crate::{bench, palette, prefs, profile, rt, update};
+use crate::{bench, bring, palette, prefs, profile, rt, update};
 
 const RAIL: f64 = 212.0;
 const COLUMN: f64 = 600.0;
@@ -61,6 +61,8 @@ enum Binding {
     Zoom,
     Merged(Merged),
     Button(&'static str),
+    /// Bring Over's pull-down: the browsers found, by name, in its order.
+    Bring(Vec<&'static str>),
     Engine,
     Custom,
     Page(Page),
@@ -296,6 +298,7 @@ pub fn describe() -> Value {
                 "page": item.page().raw(),
                 "group": item.group,
                 "title": item.title,
+                "detail": detail_of(item, &kept),
                 "keys": item.keys,
                 "live": index::live(item.id),
                 "shown": shown(item),
@@ -821,6 +824,12 @@ fn detail_of(item: &Item, kept: &prefs::Kept) -> String {
                 _ => item.detail.to_owned(),
             }
         }
+        "general.import" => match bring::listed(&bring::found()) {
+            Some(found) => format!(
+                "Open tabs and their groups, history and bookmarks from {found} on this Mac, or from a profile file"
+            ),
+            None => "No other browser with something to bring is on this Mac; a Tap or Search profile file comes in here".to_owned(),
+        },
         "general.default" if is_default_browser() => {
             "Tap opens the links other apps send".to_owned()
         }
@@ -1007,16 +1016,21 @@ fn make_control(
             let holder = NSView::new(mtm);
             let mut x = 0.0;
             for (action, title) in actions {
-                // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
-                let button = unsafe {
-                    NSButton::buttonWithTitle_target_action(
-                        &NSString::from_str(title),
-                        Some(&state.target),
-                        Some(sel!(changed:)),
-                        mtm,
-                    )
+                let button: Retained<NSControl> = if *action == "import" {
+                    bring_over(mtm, state, title)
+                } else {
+                    // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
+                    let button = unsafe {
+                        NSButton::buttonWithTitle_target_action(
+                            &NSString::from_str(title),
+                            Some(&state.target),
+                            Some(sel!(changed:)),
+                            mtm,
+                        )
+                    };
+                    button.setTag(bind(state, Binding::Button(action)));
+                    Retained::into_super(button)
                 };
-                button.setTag(bind(state, Binding::Button(action)));
                 button.sizeToFit();
                 let size = button.frame().size;
                 button.setFrameOrigin(NSPoint::new(x, 0.0));
@@ -1047,6 +1061,33 @@ fn make_control(
         }
         Control::Keywords | Control::Nothing => return None,
     })
+}
+
+/// Bring Over: a pull-down of the browsers found on this Mac, each brought over when
+/// picked, then a profile file.
+fn bring_over(mtm: MainThreadMarker, state: &State, title: &str) -> Retained<NSControl> {
+    let popup =
+        NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, true);
+    // A pull-down's first item is its face.
+    popup.addItemWithTitle(&NSString::from_str(title));
+    let found: Vec<&'static str> = bring::found()
+        .into_iter()
+        .map(tap_import::Source::name)
+        .collect();
+    for name in &found {
+        popup.addItemWithTitle(&NSString::from_str(&format!("From {name}")));
+    }
+    if let Some(menu) = popup.menu().filter(|_| !found.is_empty()) {
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+    }
+    popup.addItemWithTitle(&NSString::from_str("From a Profile File…"));
+    // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
+    unsafe {
+        popup.setTarget(Some(&state.target));
+        popup.setAction(Some(sel!(changed:)));
+    }
+    popup.setTag(bind(state, Binding::Bring(found)));
+    Retained::into_super(Retained::into_super(popup))
 }
 
 /// A control moved: its setting written as Search writes it, then whatever acts on it
@@ -1149,6 +1190,16 @@ fn act(control: &NSControl) {
         }
         Binding::Button(action) => {
             press(mtm, action);
+            return;
+        }
+        Binding::Bring(found) => {
+            // Past the face: a browser, or (past the separator, when there are some) a file.
+            match selected(control).checked_sub(1) {
+                Some(at) if at < found.len() => bring::offer(found[at]),
+                Some(_) => profile::choose_and_import(),
+                None => {}
+            }
+            later(rebuild);
             return;
         }
     }

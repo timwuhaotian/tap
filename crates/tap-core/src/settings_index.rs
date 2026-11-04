@@ -444,10 +444,10 @@ pub fn items() -> &'static [Item] {
                 .words(&["default browser"])
                 .control(Control::Buttons(&[("default", "Make default")])),
             Item::new("general.import", "browser", "square.and.arrow.down.on.square", "Bring things over",
-                "Your tabs and their groups, history and settings, from a Tap or Search profile")
-                .more("Export writes an offline file you can AirDrop to your other Mac; open it there to bring it all in. Passwords and cookies are never carried. Other browsers come later.")
-                .words(&["import", "export", "profile", "chrome", "safari", "arc", "migrate", "airdrop"])
-                .control(Control::Buttons(&[("import", "Import Profile…"), ("export", "Export Tap Profile…")])),
+                "Open tabs and their groups, history and bookmarks from another browser on this Mac, or from a profile file")
+                .more("Search, Chrome, Arc, Brave, Edge, Dia and the other Chromium browsers are found on their own, and nothing in them changes. Export writes an offline file you can AirDrop to your other Mac; open it there to bring it all in. Passwords and cookies are never carried.")
+                .words(&["import", "export", "profile", "chrome", "safari", "arc", "brave", "edge", "search", "migrate", "airdrop"])
+                .control(Control::Buttons(&[("import", "Bring Over"), ("export", "Export Tap Profile…")])),
             Item::new("quit.confirm", "browser", "power", "Confirm before quitting",
                 "Ask before ⌘Q or Quit Tap closes the browser")
                 .keys(&["quit.confirm"]).words(&["quit", "cmd q"])

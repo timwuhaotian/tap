@@ -6,6 +6,7 @@
 //! make incremental builds worth it (plan §4); the modules already follow those lines.
 
 mod bench;
+mod bring;
 mod crash;
 mod dialogs;
 mod downloads;

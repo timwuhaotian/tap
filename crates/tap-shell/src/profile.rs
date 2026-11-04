@@ -23,7 +23,10 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSDate, NSDateFormatter, NSLocale, NSRectEdge, NSString, NSURL};
 use tap_core::history;
-use tap_import::profile::{self, Incoming, Outgoing};
+use tap_import::{
+    from_search,
+    profile::{self, Incoming, Outgoing},
+};
 
 use crate::{oslog, prefs, rt, settings, store, update, window};
 
@@ -85,23 +88,21 @@ pub fn write(path: &Path) -> Result<Written, String> {
 /// If there is no Search store here, or the file can't be packed or written.
 pub fn write_from_search(path: &Path) -> Result<String, String> {
     let home = std::env::var_os("HOME").ok_or("no home folder")?;
-    let folder = PathBuf::from(home).join("Library/Application Support/Search");
-    let prefs = prefs::for_profile_of("com.officecommun.search");
+    let folder = PathBuf::from(home)
+        .join("Library/Application Support")
+        .join(from_search::FOLDER);
+    let prefs = prefs::for_profile_of(from_search::DOMAIN);
     let settings = prefs.len();
-    let bytes = tap_import::from_search::pack(&folder, prefs, &update::current(), history::now())?;
+    let bytes = from_search::pack(&folder, prefs, &update::current(), history::now())?;
     let temporary = path.with_extension("partial");
     std::fs::write(&temporary, &bytes)
         .and_then(|()| std::fs::rename(&temporary, path))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let incoming = profile::unpack(&bytes).map_err(|p| p.said())?;
-    let tabs: usize = incoming.sessions.iter().map(|s| s.tabs.len()).sum();
-    let groups: usize = incoming
-        .sessions
-        .iter()
-        .map(|s| s.groups.as_ref().map_or(0, Vec::len))
-        .sum();
     Ok(format!(
-        "{tabs} tabs in {groups} groups, {} bookmarks, {settings} settings",
+        "{} tabs in {} groups, {} bookmarks, {settings} settings",
+        incoming.tabs(),
+        incoming.groups(),
         incoming.bookmarks.len()
     ))
 }
@@ -135,7 +136,9 @@ pub fn take(path: &Path) -> Result<Taken, String> {
     Ok(bring_in(incoming, from))
 }
 
-fn bring_in(incoming: Incoming, from: &str) -> Taken {
+/// What came in, from a file or from another browser here (`bring`), merged into this
+/// window and said.
+pub(crate) fn bring_in(incoming: Incoming, from: &str) -> Taken {
     let Incoming {
         sessions,
         histories,
@@ -188,7 +191,7 @@ fn bring_in(incoming: Incoming, from: &str) -> Taken {
         parts.push(count(set, "setting", "settings"));
     }
     let mut said = if parts.is_empty() {
-        "Nothing to bring in from that file".to_owned()
+        format!("Nothing to bring in from {from}")
     } else {
         format!("{} from {from}", parts.join(", "))
     };
@@ -214,7 +217,7 @@ fn bring_in(incoming: Incoming, from: &str) -> Taken {
     }
 }
 
-fn count(n: usize, one: &str, many: &str) -> String {
+pub(crate) fn count(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
         format!("1 {one}")
     } else {
@@ -385,7 +388,7 @@ fn take_and_tell(path: &Path) {
 }
 
 /// Says how it went, on the window.
-fn tell(title: &str, said: &str) {
+pub(crate) fn tell(title: &str, said: &str) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };

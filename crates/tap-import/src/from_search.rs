@@ -11,7 +11,27 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::profile::{self, Outgoing};
+use crate::profile::{self, Incoming, Outgoing};
+
+/// Search's store folder, under `~/Library/Application Support`, and its settings' domain.
+pub const FOLDER: &str = "Search";
+pub const DOMAIN: &str = "com.officecommun.search";
+
+/// Whether `folder` is a Search store with a session in it.
+#[must_use]
+pub fn present(folder: &Path) -> bool {
+    folder.join("session.json").is_file()
+}
+
+/// Search's profile as it would come in from the file [`pack`] writes, without the file:
+/// the same bytes, read back by the same reader, so it merges exactly as the file does.
+///
+/// # Errors
+/// As [`pack`].
+pub fn read(folder: &Path, prefs: Map<String, Value>, now: f64) -> Result<Incoming, String> {
+    let bytes = pack(folder, prefs, "", now)?;
+    profile::unpack(&bytes).map_err(|p| p.said())
+}
 
 /// Search's profile in `folder` (`~/Library/Application Support/Search`), with its
 /// allowlisted settings already in a profile file's JSON shape.

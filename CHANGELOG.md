@@ -7,6 +7,24 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.4 — 2026-11-04
+
+Bring things over finds the other browsers on this Mac by itself.
+
+- **Settings › General › Bring things over** names what it found (Search, and
+  Chrome, Arc, Brave, Edge, Dia, Vivaldi, Opera and the other Chromium
+  browsers), and its Bring Over menu lists them. Pick one: Tap says what it has,
+  then brings it in when you say so. Nothing in the other browser changes.
+- **From a Chromium browser**, from the profile you used last: its open tabs and
+  their groups, named and folded as they were
+  ([#841](https://github.com/driceroland/Search/pull/841)), its history, and its
+  bookmarks, kept in a folder of the browser's name for when Tap shows them.
+- **From Search**, straight from its folder, no export needed: its tabs and
+  groups, history, bookmarks and settings, as its profile file would bring them.
+- Tabs already open in Tap aren't opened again, so bringing the same browser over
+  twice adds only what's new. Passwords, cookies and extensions stay behind.
+  A profile file still comes in through the same menu (From a Profile File…).
+
 ## 0.1.3 — 2026-11-04
 
 Twenty-six more Settings rows work, so Settings now shows 53 of its 81 rows and

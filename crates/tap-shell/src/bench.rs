@@ -47,7 +47,7 @@ use tap_core::{
 };
 
 use crate::{
-    dialogs, downloads, links,
+    bring, dialogs, downloads, links,
     menu::{self, Command},
     profile, rt, settings, sleep, store, update, web, window,
 };
@@ -388,6 +388,30 @@ fn handle(request: &Value, reply: Reply) {
                 return reply.say(json!({ "error": "import-profile needs a path" }));
             };
             match profile::take(std::path::Path::new(&path)) {
+                Ok(taken) => reply.say(json!({
+                    "said": taken.said, "tabs": taken.tabs, "groups": taken.groups, "places": taken.places,
+                    "bookmarks": taken.bookmarks, "settings": taken.settings,
+                })),
+                Err(why) => reply.say(json!({ "error": why })),
+            }
+        }
+        "bring" => {
+            // Bring things over: with `from`, that browser brought in at once, unasked, or
+            // with `menu`, as Bring Over's pull-down does it (read off the main thread,
+            // said, then brought in); without, the browsers found, as the pull-down lists
+            // them.
+            let Some(from) = text("from") else {
+                let found: Vec<&str> = bring::found()
+                    .into_iter()
+                    .map(tap_import::Source::name)
+                    .collect();
+                return reply.say(json!({ "found": found }));
+            };
+            if request.get("menu").and_then(Value::as_bool) == Some(true) {
+                bring::offer(&from);
+                return reply.say(json!({ "offered": from }));
+            }
+            match bring::take(&from) {
                 Ok(taken) => reply.say(json!({
                     "said": taken.said, "tabs": taken.tabs, "groups": taken.groups, "places": taken.places,
                     "bookmarks": taken.bookmarks, "settings": taken.settings,
