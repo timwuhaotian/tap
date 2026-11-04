@@ -601,6 +601,38 @@ mod tests {
         Url::parse(url).map(|u| u.path()).unwrap_or_default()
     }
 
+    #[test]
+    fn the_file_orders_the_often_and_late_first_and_always_the_same_way() {
+        let mut history = History::default();
+        for _ in 0..5 {
+            history.record("https://often.com/", "Often", NOW - 10.0 * 86_400.0);
+        }
+        history.record("https://stale.com/", "Stale", NOW - 90.0 * 86_400.0);
+        history.record("https://fresh.com/", "Fresh", NOW);
+        let order = |file: &[u8]| {
+            serde_json::from_slice::<Vec<Visit>>(file)
+                .unwrap()
+                .iter()
+                .map(|visit| visit.url.clone())
+                .collect::<Vec<_>>()
+        };
+        // Five visits ten days ago outweigh one fresh one; one fresh one outweighs a
+        // single visit three months back.
+        assert_eq!(
+            order(&history.encode(NOW)),
+            [
+                "https://often.com/",
+                "https://fresh.com/",
+                "https://stale.com/"
+            ]
+        );
+        assert_eq!(
+            order(&history.encode(NOW)),
+            order(&history.encode(NOW)),
+            "encoding twice writes the same file"
+        );
+    }
+
     /// Search's `testRecordAndTakeKeepCanonicalIdentityComponents` (record half).
     #[test]
     fn identity_keeps_scheme_port_and_case_but_not_the_fragment() {
