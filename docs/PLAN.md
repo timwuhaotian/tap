@@ -1166,6 +1166,54 @@ changes, no new features; the two noted deviations from Search's menu are delibe
   `-D warnings`, nightly fmt. Not checked by eye: light/dark feel of each wash and
   the VoiceOver pass over the badge menu.
 
+### Agents use Tap (unreleased)
+
+At the user's request (2026-11-05: "我们的tap 要专门支持agent协作…mcp还是配套自动安装的
+cli？我希望我们所有的agent都能知道使用Tap来做必要的browser tool使用"). Coding agents on
+this Mac (Claude Code, Codex, Gemini, opencode) drive Tap through a `tap` command, and
+learn to through a skill Tap installs. Tap is WebKit, so CDP tools (Chrome DevTools,
+Playwright, agent-browser) can't drive it; the bench is already the way in, so this is a
+client and a few verbs on it, not a server. Delivered as a PR at the user's request.
+
+- [x] **`tap`, the CLI** (`tap-app/src/cli.rs`): the app's own binary, a client when it
+  has arguments and the app when it has none, so there is no second binary to bundle
+  and sign. Text out for agents, `--json` for the bench's answer. Starts Tap in the
+  background (`open -g -b`) when nothing listens and waits for the socket. Every verb
+  but `open` names its tab: an agent never acts on the tab in front by accident.
+  Verbs: `tabs`, `open`, `go`, `close`, `select`, `wait`, `text`, `snapshot`, `click`,
+  `fill`, `press`, `eval`. Pure std and `serde_json`; the world (`TAP_PROBE`) as the app.
+- [x] **`snapshot` and `act`** (`bench.rs`, `assets/js/agent.js`): the page's visible
+  controls as numbered refs (`[e3] button "Sign in"`), and click, fill or press on one.
+  Run in Tap's content world through `call_in_world`, so the page sees neither the
+  refs nor the ref text, and the DOM isn't marked. Clicks and keys are dispatched
+  events, not the window's: an agent's tab stays behind yours.
+- [x] **On by default** (`settings_index.rs`): the `bench` row reads "Let agents use
+  Tap" and defaults on (`fixed-deviation`: Search's is off and behind a keychain
+  mark). The guard stays the same-uid check on a 0600 socket.
+- [x] **Installed by Tap** (`tap-shell/src/agents.rs`): at launch and when the switch
+  moves, in real runs from inside the app: `~/.local/bin/tap` → the app's binary,
+  `~/.agents/skills/tap/SKILL.md` (`assets/agent/SKILL.md`, rewritten when it
+  changes), `~/.claude/skills/tap` → that folder. Never replaces what isn't Tap's; off
+  takes away only Tap's.
+- [x] **A page read wakes a sleeping tab where it stands** (`Browser::wake`, now public;
+  bench `with_page`): a session's tabs come back asleep, and an agent reading one of
+  yours shouldn't have to bring it to the front first. `snapshot`, `act`, `text` and
+  `eval` wait up to 15 s for it to load.
+- Checked: `cargo test` (tap-app 5, tap-core 106, tap-import 31, tap-shell 61), clippy
+  `-D warnings`, nightly fmt; the installer's ownership rules against a home of its own
+  (a foreign command, skill and Claude link left alone on and off; a moved app
+  repointed; a changed skill rewritten), and seen failing with the skill's mark check
+  broken. In a test world, driven by the built `tap` itself against a local page: open
+  (behind the tab in front), snapshot (the hidden button left out, the password shown
+  as dots), fill with 世界, a checkbox clicked, a list's option picked, Enter in the
+  field submitting its form (`Sent hello 世界 / true / b`), a link followed to the next
+  page, a stale ref refused with exit 1, and a restored, sleeping tab read without
+  leaving the tab in front. Not checked here, the user's Tap being open on the same
+  data: the real run's launch (on by default, the install from `/Applications`) and
+  `tap` starting Tap; both on the release's install.
+- Not in: screenshots (a background tab's WKWebView has nothing drawn to snapshot), a
+  mark on agents' tabs, handing a tab back for a sign-in, MCP (a `tap mcp` verb on
+  the same client, if an agent without a shell needs one).
 ### Unreleased — A click on any tab puts the cursor in the field
 
 At the user's request (2026-11-05: "每当点击任何一个tab，甚至是new tab，自动focus/选中地址栏的url" —
@@ -1674,6 +1722,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | At the user's request, the empty tab row opens a new tab on a double click (Search's `DragStrip.onDoubleClick`, replacing double-click-to-zoom there; a single press still drags the window), and the strip's layout reserves the downloads door beside the helm and pins the plus before those doors when tabs overflow, so the plus never runs under them (`fixed-deviation` from the overflow running to the helm's edge). Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 | 2026-11-05 | At the user's request (New Tab should open many, and its cross should close it), new tabs pile up: +/⌘T and the "new tab" field command always open a fresh blank tab instead of reusing the blank one in front, and closing the only tab when it is already new closes the window as Search's `close` does (`fixed-deviation` from Search's `newTab` reusing a blank tab). Core asks with a new `Effect::CloseWindow`, carried out by the shell. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 | 2026-11-05 | The page-load path is audited end to end at the user's request and tightened in seven places (§10 "The page-load path"), all behaviour-preserving, as a PR like the one before it. |
+| 2026-11-05 | At the user's request, agents drive Tap through a `tap` CLI and a skill Tap installs, not MCP (§8 "Agents use Tap"): every agent here has a shell, a skill loads only when a task needs it, and one install in `~/.agents/skills` reaches them all. The bench switch is on by default (`fixed-deviation`). Delivered as a PR at the user's request. |
 
 ## Appendix A — Parity tracker
 

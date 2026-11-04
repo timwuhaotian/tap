@@ -42,6 +42,17 @@ end, behaviour-preserving (docs/PLAN.md §10 "The page-load path").
 - History's recency score is worked out once per visit when the file is written, not
   inside the sort's comparator.
 
+Coding agents browse with Tap.
+
+- **A `tap` command** for agents and scripts: open a page behind yours, list its
+  controls with refs, click, fill and press on them, read its text. Tap starts in the
+  background if it isn't running, and a sleeping tab wakes where it stands to be read.
+- **Every agent knows**: Tap keeps the command in `~/.local/bin` and a skill in
+  `~/.agents/skills` (and Claude Code's), telling an agent to use Tap when a task needs
+  a browser.
+- **Settings › Let agents use Tap** is on by default; off takes the command and skill
+  away. Only scripts running as you can reach Tap's socket.
+
 ## 0.1.8 — 2026-11-05
 
 Picked tabs close together and move together.
