@@ -6,7 +6,9 @@
 //! log, a constant format string inside the image, and the arguments packed in `os_log`'s
 //! own buffer format. That is done here directly.
 //!
-//!     log show --last 1h --predicate 'subsystem == "com.timwuhaotian.tap"'
+//! ```text
+//! /usr/bin/log show --last 1h --predicate 'subsystem == "com.timwuhaotian.tap"'
+//! ```
 
 use std::{
     ffi::{CString, c_char, c_void},
