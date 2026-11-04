@@ -1135,6 +1135,39 @@ At the user's request (2026-11-04: "多选的tab支持一起关闭和拖动"), a
   (b d a c e), lifted together on the way and still picked after; ⌘W closed the three
   (b d left, d in front); one ⇧⌘T brought them back in place, a in front.
 
+### Agents use Tap (unreleased)
+
+At the user's request (2026-11-05: "我们的tap 要专门支持agent协作…mcp还是配套自动安装的
+cli？我希望我们所有的agent都能知道使用Tap来做必要的browser tool使用"). Coding agents on
+this Mac (Claude Code, Codex, Gemini, opencode) drive Tap through a `tap` command, and
+learn to through a skill Tap installs. Tap is WebKit, so CDP tools (Chrome DevTools,
+Playwright, agent-browser) can't drive it; the bench is already the way in, so this is a
+client and a few verbs on it, not a server. Delivered as a PR at the user's request.
+
+- [ ] **`tap`, the CLI** (`tap-app/src/cli.rs`): the app's own binary, a client when it
+  has arguments and the app when it has none, so there is no second binary to bundle
+  and sign. Text out for agents, `--json` for the bench's answer. Starts Tap in the
+  background (`open -g -b`) when nothing listens and waits for the socket. Every verb
+  but `open` names its tab: an agent never acts on the tab in front by accident.
+  Verbs: `tabs`, `open`, `go`, `close`, `select`, `wait`, `text`, `snapshot`, `click`,
+  `fill`, `press`, `eval`. Pure std and `serde_json`; the world (`TAP_PROBE`) as the app.
+- [ ] **`snapshot` and `act`** (`bench.rs`, `assets/js/agent.js`): the page's visible
+  controls as numbered refs (`[e3] button "Sign in"`), and click, fill or press on one.
+  Run in Tap's content world through `call_in_world`, so the page sees neither the
+  refs nor the ref text, and the DOM isn't marked. Clicks and keys are dispatched
+  events, not the window's: an agent's tab stays behind yours.
+- [ ] **On by default** (`settings_index.rs`): the `bench` row reads "Let agents use
+  Tap" and defaults on (`fixed-deviation`: Search's is off and behind a keychain
+  mark). The guard stays the same-uid check on a 0600 socket.
+- [ ] **Installed by Tap** (`tap-shell/src/agents.rs`): at launch and when the switch
+  moves, in real runs from inside the app: `~/.local/bin/tap` → the app's binary,
+  `~/.agents/skills/tap/SKILL.md` (`assets/agent/SKILL.md`, rewritten when it
+  changes), `~/.claude/skills/tap` → that folder. Never replaces what isn't Tap's; off
+  takes away only Tap's.
+- Not in: screenshots (a background tab's WKWebView has nothing drawn to snapshot), a
+  mark on agents' tabs, handing a tab back for a sign-in, MCP (a `tap mcp` verb on
+  the same client, if an agent without a shell needs one).
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -1581,6 +1614,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | At the user's request ("所有的登陆名/密码等…bring things over应该也包括这些吧（自动填充）", then "照抄 ../search 的"), 0.1.5 brings forward passwords: Search's ImportPanel sheet with Chromium passwords (one macOS question per browser), the vault with a security domain of its own, Search's form script, the account list and the save bar (§8 "0.1.5"). Search's own passwords come on first use, not all at once: macOS asks per item for another app's items, and Search keeps 569 here (§7). `aes`, `cbc`, `pbkdf2`, `sha1` join `tap-import`, as §5.3 planned; the keychain is reached directly rather than through `security-framework`. |
 | 2026-11-04 | At the user's request ("tap bring things over 理论上应该是能自动侦测到本地的chrome/search 等类似的profil数据的，但目前没有"), 0.1.4 brings forward the core of M6: Bring things over finds Search and the Chromium browsers on this Mac and brings one's open tabs and groups (#841), history and bookmarks through the profile merge (§8 "0.1.4"). `rusqlite` against the system's libsqlite3 joins `tap-import`, as §5.3 planned. |
 | 2026-11-04 | At the user's request, the empty tab row opens a new tab on a double click (Search's `DragStrip.onDoubleClick`, replacing double-click-to-zoom there; a single press still drags the window), and the strip's layout reserves the downloads door beside the helm and pins the plus before those doors when tabs overflow, so the plus never runs under them (`fixed-deviation` from the overflow running to the helm's edge). Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
+| 2026-11-05 | At the user's request, agents drive Tap through a `tap` CLI and a skill Tap installs, not MCP (§8 "Agents use Tap"): every agent here has a shell, a skill loads only when a task needs it, and one install in `~/.agents/skills` reaches them all. The bench switch is on by default (`fixed-deviation`). Delivered as a PR at the user's request. |
 
 ## Appendix A — Parity tracker
 
