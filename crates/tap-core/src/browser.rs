@@ -1029,7 +1029,9 @@ impl Browser {
         self.effects.push(Effect::FocusPage(id));
     }
 
-    fn wake(&mut self, id: TabId) {
+    /// Wakes a sleeping tab where it stands, the tab in front staying in front: as
+    /// selecting one does, and as an agent reading one needs (bench `snapshot`).
+    pub fn wake(&mut self, id: TabId) {
         let Some(tab) = self.tab_mut(id) else { return };
         if tab.stale {
             tab.stale = false;
@@ -2442,6 +2444,31 @@ mod tests {
         assert!(
             !effects.iter().any(|e| matches!(e, Effect::Save(_))),
             "restoring changes nothing to save"
+        );
+    }
+
+    #[test]
+    fn an_agent_wakes_a_sleeping_tab_where_it_stands() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com"]);
+        let second = browser.tabs()[1].id;
+        browser.select(second);
+        let mut again = Browser::restored(browser.shape());
+        let (first, front) = (again.tabs()[0].id, again.tabs()[1].id);
+        again.take_effects();
+
+        again.wake(first);
+        assert!(again.tabs()[0].awake());
+        assert_eq!(
+            again.active(),
+            Some(front),
+            "the tab in front stays in front"
+        );
+        assert_eq!(
+            again.take_effects(),
+            [Effect::Load {
+                tab: first,
+                url: "https://a.com".into()
+            }]
         );
     }
 

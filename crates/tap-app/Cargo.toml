@@ -18,6 +18,8 @@ name = "tap"
 path = "src/main.rs"
 
 [dependencies]
+serde_json.workspace = true
+tap-core.workspace = true
 tap-shell.workspace = true
 
 [lints]

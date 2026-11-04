@@ -852,9 +852,9 @@ pub fn default(key: &str) -> Value {
         "layout.cards" | "tabs.reading" | "tabs.sleep" | "tabs.address" | "float.leave"
         | "passwords.save" | "passwords.fill" | "shield" | "privacy.clickIDs" | "privacy.gpc"
         | "notifications.ask" | "links.peek" | "swipe.history" | "update.install"
-        | "links.show" | "float.flicks" | "autocorrect" | "toolbar.address" => on,
-        // Search's is off; Tap's agents count on it (docs/PLAN.md §8 "Agents use Tap").
-        "bench" => on,
+        | "links.show" | "float.flicks" | "autocorrect" | "toolbar.address"
+        // `bench`: Search's is off; Tap's agents count on it (docs/PLAN.md §8 "Agents use Tap").
+        | "bench" => on,
         "look" => "system".into(),
         "sidebar.position" => "left".into(),
         "glyph" => "letters".into(),

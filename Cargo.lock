@@ -1020,6 +1020,8 @@ dependencies = [
 name = "tap-app"
 version = "0.1.8"
 dependencies = [
+ "serde_json",
+ "tap-core",
  "tap-shell",
 ]
 
