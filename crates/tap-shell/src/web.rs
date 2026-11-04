@@ -1024,7 +1024,8 @@ fn load(web: &WKWebView, address: &str) {
     }
 }
 
-/// Reads what the observer watches and hands it to the model.
+/// Reads what the observer watches and hands it to the model. For callers without a
+/// key to go by; the observer itself takes the cheaper road below.
 fn sync(web: &WKWebView) {
     let Some(tab) = tab_of(web) else { return };
     // SAFETY: plain property reads on a live web view.
@@ -1049,6 +1050,43 @@ fn sync(web: &WKWebView) {
         browser.page_loading(tab, loading, progress);
         browser.page_history(tab, back, forward);
     });
+}
+
+/// Reads one watched property and hands it to the model. A load fires the observer
+/// many times over, and re-reading all seven properties — five model calls each time
+/// — for every one of them cost the main thread dearly. Loading and progress are read
+/// together: the model takes them as one.
+fn sync_one(web: &WKWebView, key: &str) {
+    let Some(tab) = tab_of(web) else { return };
+    match key {
+        "title" => {
+            let title = unsafe { web.title().map(|t| t.to_string()).unwrap_or_default() };
+            rt::dispatch(move |browser| browser.page_title(tab, &title));
+        }
+        "URL" => {
+            let url = unsafe {
+                web.URL()
+                    .and_then(|u| u.absoluteString())
+                    .map(|u| u.to_string())
+                    .unwrap_or_default()
+            };
+            rt::dispatch(move |browser| browser.page_url(tab, &url));
+        }
+        "loading" | "estimatedProgress" => {
+            let (loading, progress) =
+                unsafe { (web.isLoading(), web.estimatedProgress()) };
+            rt::dispatch(move |browser| browser.page_loading(tab, loading, progress));
+        }
+        "canGoBack" | "canGoForward" => {
+            let (back, forward) = unsafe { (web.canGoBack(), web.canGoForward()) };
+            rt::dispatch(move |browser| browser.page_history(tab, back, forward));
+        }
+        "hasOnlySecureContent" => {
+            let secure = unsafe { web.hasOnlySecureContent() };
+            rt::dispatch(move |browser| browser.page_security(tab, secure));
+        }
+        _ => sync(web),
+    }
 }
 
 fn process_ended(web: &WKWebView, end: PageEnd) {
@@ -1973,13 +2011,17 @@ define_class!(
         #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
         fn observe(
             &self,
-            _key: Option<&NSString>,
+            key: Option<&NSString>,
             object: Option<&AnyObject>,
             _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
             _context: *mut c_void,
         ) {
-            if let Some(web) = object.and_then(|o| o.downcast_ref::<WKWebView>()) {
-                sync(web);
+            let Some(web) = object.and_then(|o| o.downcast_ref::<WKWebView>()) else {
+                return;
+            };
+            match key {
+                Some(key) => sync_one(web, &key.to_string()),
+                None => sync(web),
             }
         }
     }
