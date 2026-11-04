@@ -187,15 +187,15 @@ fn submenu(
 /// The menu bar, with Search's keys.
 #[allow(clippy::too_many_lines)] // one declarative table, read top to bottom as the menus are
 pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu> {
-    let shift = NSEventModifierFlags::Command | NSEventModifierFlags::Shift;
     let option = NSEventModifierFlags::Command | NSEventModifierFlags::Option;
     let control = NSEventModifierFlags::Control;
     let control_shift = NSEventModifierFlags::Control | NSEventModifierFlags::Shift;
     let bar = NSMenu::new(mtm);
     let mut tabs = vec![
         with(item("Show Next Tab", "\t", Command::NextTab), control),
+        // ⌃⇧Tab arrives as the back-tab character, not as a tab with Shift.
         with(
-            item("Show Previous Tab", "\t", Command::PreviousTab),
+            item("Show Previous Tab", "\u{19}", Command::PreviousTab),
             control_shift,
         ),
         separator(),
@@ -234,7 +234,9 @@ pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu>
             "File",
             vec![
                 item("New Tab", "t", Command::NewTab),
-                with(item("Reopen Closed Tab", "t", Command::ReopenTab), shift),
+                // An upper-case key equivalent is how AppKit spells Shift: a real
+                // ⇧⌘T arrives as "T", which "t" with a Shift mask never matches.
+                item("Reopen Closed Tab", "T", Command::ReopenTab),
                 item("Open Location…", "l", Command::OpenLocation),
                 separator(),
                 item("Close Tab", "w", Command::CloseTab),
@@ -246,7 +248,7 @@ pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu>
             "Edit",
             vec![
                 system("Undo", "z", sel!(undo:)),
-                with(system("Redo", "z", sel!(redo:)), shift),
+                system("Redo", "Z", sel!(redo:)),
                 separator(),
                 system("Cut", "x", sel!(cut:)),
                 system("Copy", "c", sel!(copy:)),

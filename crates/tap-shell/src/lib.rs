@@ -5,6 +5,7 @@
 //! Split into `tap-ui`, `tap-web` and `tap-shell` crates once each part has the weight to
 //! make incremental builds worth it (plan §4); the modules already follow those lines.
 
+mod bench;
 mod crash;
 mod menu;
 mod palette;
@@ -34,11 +35,13 @@ pub fn run() {
 
     rt::install(Browser::restored(store::read_session()));
     window::open(mtm, &commands);
+    bench::start();
     // A window that opens on a new tab opens with the keys in its field.
     rt::dispatch(|browser| {
         if browser.active_tab().is_some_and(Tab::is_blank) && browser.editing().is_none() {
             browser.begin_editing(false);
         }
+        browser.focus_page();
     });
 
     app.activate();

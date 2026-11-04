@@ -15,6 +15,9 @@ Info.plist.
   opens a link behind the page; a page's new window becomes a tab beside it.
 - **Tabs come back.** The session is kept in Search's own format, written as it changes
   and when Tap quits; restored tabs cost nothing until you look at them.
+- **The bench**, for scripts and tests: Search's socket protocol on a test run
+  (`TAP_PROBE`), driven with `scripts/bench`, so Tap's own window can be checked without
+  touching anything else on the Mac.
 - **A page that keeps crashing stops reloading itself** (Search #849): it is made again
   twice a minute at most, then says "This page kept crashing." with Try Again.
 - **The project.** Plan ([`docs/PLAN.md`](docs/PLAN.md)), license, contribution guide,

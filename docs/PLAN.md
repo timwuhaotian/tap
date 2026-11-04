@@ -542,6 +542,18 @@ BookmarksFile, Registrable.
   UI delegates (⌘-click behind, other apps' links, new windows as tabs, #849's private
   termination reason), the menus with Search's keys, the session written on change and
   on quit, `crash.log`.
+- [x] The bench, early (M1's, brought forward to check M2 by): Search's protocol (JSON per
+  line, one request per connection, always one answer, 4 MB limit, 0600 socket with a
+  uid check), on test runs only. Verbs so far: `probe` (field, launching, typed,
+  lights, first responder), `tabs`/`state`, `open`, `go`, `select`, `close`, `wait`,
+  `eval`, `text`, `field` (through the field editor's own `NSTextInputClient` path, and
+  Return through the delegate), `keyeq` (a real key equivalent through the menu bar),
+  `quit`. Client: `scripts/bench`.
+- [x] Checked through the bench: ⌘L opens the field on the live tab with the editable
+  address (`rust-lang.org`), typing and Return load the page; ⌘T floats the field and
+  opens a tab only on Return; ⌘W lands on the right-hand neighbour; ⇧⌘T brings the tab
+  back in its place; ⌃Tab and ⌃⇧Tab walk round the row; ⌘1, ⌘2 and ⌘9 (last); the
+  page has the keyboard at launch; the lights' centres are 26 pt from the top.
 - [ ] Still to come for M2: history and suggestions, find on page, downloads, dialogs
   (alert/confirm/prompt, uploads, sign-in), sleeping tabs, icons, the os_log line for
   #849 (now on stderr).
@@ -967,6 +979,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 |---|---|
 | 2026-11-04 | Full Rust rewrite that copies Search; pure Rust (translation dropped); full parity before release; Developer ID from the start; Bolt T icon; WebKit over Servo and egui; one plan doc (this file). |
 | 2026-11-04 | Credentials and the release flow are copied from Kil: Developer ID HAOTIAN WU (43VLF3KTFZ); notarization through the `asc` stored key; local release builds; one `releases/Tap-arm64.dmg` in git on `main`; the `latest.toml` updater; arm64 only; `scripts/bundle.sh` and `release.sh` instead of xtask release commands; no Homebrew cask, GitHub Pages or signed appcast. |
+| 2026-11-04 | The bench came forward from M1 to check the browsing build by, and found three bugs no unit test could: `selectText:` ending the field's own editing session, focus handed out before the page was in the window, and shifted key equivalents that a real keyboard never matches (⇧⌘T must be "T"; ⌃⇧Tab is the back-tab character). |
 | 2026-11-04 | Browsing came before M1's foundations, at the user's request: the core model, runtime, window, tabs, field and web views are in (M2 progress). The bench moves up next: driving the UI with synthetic keystrokes is unreliable and can reach other apps. |
 | 2026-11-04 | The GitHub repo `timwuhaotian/tap` is public from day one, not only from 1.0. Nothing is downloadable until `releases/` is first committed at 1.0. |
 
@@ -1006,7 +1019,7 @@ added below this one as M1 starts.
 | AtRest.swift | 333 | c/at_rest | M2 | todo |
 | AtRestLine.swift | 92 | s/ui/at_rest_line | M3 | todo |
 | AutoScroll.swift | 107 | a/auto-scroll, w/auto_scroll | M5 | todo |
-| Bench.swift | 4631 | c/bench/proto, s/bench/* | M1→M8 | todo |
+| Bench.swift | 4631 | c/bench/proto, s/bench/* | M1→M8 | partial |
 | BlockedPopups.swift | 247 | c/blocked_popups, s/ui/blocked_popups | M5 | todo |
 | Bookmarks.swift | 1735 | c/bookmarks, s/ui/bookmarks/* | M3 | todo |
 | BookmarksBar.swift | 160 | s/ui/bookmarks_bar | M3 | todo |

@@ -622,6 +622,15 @@ impl Browser {
 
     // MARK: the page
 
+    /// Gives the live page the keyboard: once the window exists, for a restored tab.
+    pub fn focus_page(&mut self) {
+        if self.editing.is_none()
+            && let Some(id) = self.active
+        {
+            self.effects.push(Effect::FocusPage(id));
+        }
+    }
+
     pub fn back(&mut self) {
         if let Some(tab) = self.active_tab().filter(|t| t.can_back) {
             self.effects.push(Effect::Back(tab.id));

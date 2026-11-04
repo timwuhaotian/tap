@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Drives a running Tap through its bench socket (crates/tap-shell/src/bench.rs).
+
+    scripts/bench probe
+    scripts/bench tabs
+    scripts/bench field text=example.com go=true
+    scripts/bench keyeq key=t                      # ⌘T
+    scripts/bench keyeq key=tab modifiers='["control"]'
+    scripts/bench eval id=3 js='document.title'
+
+Values are read as JSON when they parse (true, 3, ["a"]) and as text otherwise. The
+world is TAP_PROBE's, as for the app: `TAP_PROBE=dev scripts/bench probe` talks to the
+Tap started with TAP_PROBE=dev. One JSON object per line out, as the bench answers.
+"""
+
+import json
+import os
+import re
+import socket
+import sys
+
+
+def world():
+    probe = os.environ.get("TAP_PROBE")
+    if probe is None:
+        return None
+    name = re.sub(r"[^a-z0-9-]", "", probe.lower())
+    return "test" if name in ("", "1") else name
+
+
+def socket_path():
+    folder = "Tap" if world() is None else f"Tap ({world()})"
+    return os.path.expanduser(f"~/Library/Application Support/{folder}/bench.sock")
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    request = {"do": argv[0]}
+    for pair in argv[1:]:
+        key, _, value = pair.partition("=")
+        try:
+            request[key] = json.loads(value)
+        except json.JSONDecodeError:
+            request[key] = value
+    path = socket_path()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.connect(path)
+            conn.sendall((json.dumps(request) + "\n").encode())
+            answer = b""
+            while not answer.endswith(b"\n"):
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                answer += chunk
+    except OSError as error:
+        print(f"Tap isn't listening at {path} ({error}). Is it running with TAP_PROBE set?", file=sys.stderr)
+        return 1
+    print(answer.decode().strip())
+    return 0 if b'"error"' not in answer else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

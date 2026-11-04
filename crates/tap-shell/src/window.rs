@@ -398,13 +398,79 @@ fn place_field(views: &Views, view: &View, opened: bool) {
             }
             if opened {
                 field.setStringValue(&NSString::from_str(&editing.typed));
-                if views.window.makeFirstResponder(Some(field)) {
-                    // SAFETY: selects the field's own text; no sender is needed.
-                    unsafe { field.selectText(None) };
-                }
+                // A text field taking the keyboard selects all it holds. `selectText:`
+                // would end that editing session to start another, and the end would
+                // read as the field being put away.
+                views.window.makeFirstResponder(Some(field));
             }
         }
     }
+}
+
+/// The traffic lights for the bench: each one's left edge and its centre's height from
+/// the top, in the window's points (Search's `Bench.lights`).
+pub fn lights() -> Vec<[i64; 2]> {
+    with_views(|views| {
+        let height = views.window.frame().size.height;
+        [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ]
+        .into_iter()
+        .filter_map(|kind| views.window.standardWindowButton(kind))
+        .map(|button| {
+            let frame = button.convertRect_toView(button.bounds(), None);
+            #[allow(clippy::cast_possible_truncation)] // points on a screen
+            [
+                frame.origin.x.round() as i64,
+                (height - (frame.origin.y + frame.size.height / 2.0)).round() as i64,
+            ]
+        })
+        .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// What the field shows, while it is up.
+pub fn field_text() -> Option<String> {
+    with_views(|views| {
+        // SAFETY: a plain read of a live view's superview.
+        unsafe { views.field.superview() }.map(|_| views.field.stringValue().to_string())
+    })
+    .flatten()
+}
+
+/// The field's editor, while the field has the keyboard.
+pub fn field_editor() -> Option<Retained<objc2_app_kit::NSText>> {
+    with_views(|views| views.field.currentEditor()).flatten()
+}
+
+/// Who has the keyboard: the field, the page, or the class of whatever else.
+pub fn first_responder() -> String {
+    with_views(|views| {
+        if views.field.currentEditor().is_some() {
+            return "field".to_owned();
+        }
+        let Some(responder) = views.window.firstResponder() else {
+            return "none".to_owned();
+        };
+        let mut view = responder.downcast::<NSView>().ok();
+        while let Some(current) = view {
+            if current.downcast_ref::<WKWebView>().is_some() {
+                return "page".to_owned();
+            }
+            // SAFETY: a plain read of a live view's superview.
+            view = unsafe { current.superview() };
+        }
+        "other".to_owned()
+    })
+    .unwrap_or_default()
+}
+
+/// The window's number, for events made for it.
+pub fn number() -> Option<isize> {
+    with_views(|views| views.window.windowNumber())
 }
 
 /// Gives the page the keyboard, unless the field has it on purpose.
@@ -700,7 +766,16 @@ define_class!(
 
         #[unsafe(method(controlTextDidEndEditing:))]
         fn ended(&self, _note: &NSNotification) {
-            rt::dispatch(Browser::cancel_editing);
+            // A click away puts the field away. AppKit also ends an editing session
+            // in passing (moving the field, starting another), so it is put away only
+            // if, once AppKit is done, the field really has lost the keyboard.
+            dispatch2::DispatchQueue::main().exec_async(|| {
+                let editing =
+                    with_views(|views| views.field.currentEditor().is_some()).unwrap_or(false);
+                if !editing {
+                    rt::dispatch(Browser::cancel_editing);
+                }
+            });
         }
     }
 

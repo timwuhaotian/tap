@@ -11,7 +11,7 @@ use std::{
     collections::VecDeque,
 };
 
-use tap_core::browser::Browser;
+use tap_core::browser::{Browser, Effect};
 
 use crate::{web, window};
 
@@ -90,8 +90,16 @@ fn flush() {
     }) else {
         return;
     };
-    for effect in effects {
+    // Focus last: a page can only take the keyboard once it is in the window, and the
+    // views are brought up to date (a newly shown page added) in between.
+    let (focus, rest): (Vec<Effect>, Vec<Effect>) = effects
+        .into_iter()
+        .partition(|e| matches!(e, Effect::FocusPage(_)));
+    for effect in rest {
         web::perform(effect);
     }
     window::update(window_dirty, &tab_dirty, &view);
+    for effect in focus {
+        web::perform(effect);
+    }
 }
