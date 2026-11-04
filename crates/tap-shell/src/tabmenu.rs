@@ -55,6 +55,9 @@ pub struct TabState {
     pub can_sleep: bool,
     /// How many tabs are picked, when it is one of them.
     pub picked: usize,
+    /// Each picked tab's group's place, in the row's order, when it is one of
+    /// several picked: what Move to Group acts on. Empty otherwise.
+    pub picked_groups: Vec<Option<usize>>,
 }
 
 /// One line of the menu: a command, a submenu, or a separator when it has neither.
@@ -92,25 +95,40 @@ fn separator() -> Entry {
     }
 }
 
-/// Move to Group's submenu (Search's): New Group, each group (the tab's own off),
-/// and Remove from Group for a tab in one.
+/// Move to Group's submenu (Search's for one tab): New Group, each group (the
+/// tab's own off), and Remove from Group for a tab in one. Right-clicked among
+/// several picked, the same submenu moves them all: a group is off only when
+/// every picked tab is already in it, and Remove from Group shows when any
+/// picked tab is in one.
 fn move_to_group(state: &TabState) -> Entry {
+    let multi = state.picked > 1 && !state.picked_groups.is_empty();
     let mut sub = vec![entry("New Group", Command::TabNewGroup, true)];
     if !state.groups.is_empty() {
         sub.push(separator());
     }
     for (place, name) in state.groups.iter().enumerate() {
-        let place = NSInteger::try_from(place).unwrap_or(0);
+        let tag = NSInteger::try_from(place).unwrap_or(0);
+        let here = usize::try_from(tag).ok();
+        let enabled = if multi {
+            !state.picked_groups.iter().all(|g| *g == here)
+        } else {
+            state.group != here
+        };
         sub.push(Entry {
             title: name.clone(),
-            tag: Some(Command::TabIntoGroup as NSInteger + place),
-            enabled: state.group != usize::try_from(place).ok(),
+            tag: Some(Command::TabIntoGroup as NSInteger + tag),
+            enabled,
             sub: Vec::new(),
             checked: false,
             swatch: None,
         });
     }
-    if state.group.is_some() {
+    let in_group = if multi {
+        state.picked_groups.iter().any(Option::is_some)
+    } else {
+        state.group.is_some()
+    };
+    if in_group {
         sub.push(separator());
         sub.push(entry("Remove from Group", Command::TabOutOfGroup, true));
     }
@@ -361,7 +379,13 @@ pub fn run(tag: NSInteger) -> bool {
     if (Command::TabIntoGroup as NSInteger..Command::GroupColour as NSInteger).contains(&tag) {
         let place = usize::try_from(tag - Command::TabIntoGroup as NSInteger).ok();
         if let Some(id) = target {
-            rt::dispatch(move |browser| browser.move_to_group(id, place));
+            rt::dispatch(move |browser| {
+                if browser.is_selected(id) && browser.selection_count() > 1 {
+                    browser.move_selected_to_group(place);
+                } else {
+                    browser.move_to_group(id, place);
+                }
+            });
         }
         return true;
     }
@@ -375,7 +399,14 @@ pub fn run(tag: NSInteger) -> bool {
         t if t == Command::TabCopyMarkdown as NSInteger => copy(true),
         t if t == Command::TabNewGroup as NSInteger => {
             let Some(id) = target else { return true };
-            let made = rt::update(|browser| browser.add_group(id)).flatten();
+            let made = rt::update(|browser| {
+                if browser.is_selected(id) && browser.selection_count() > 1 {
+                    browser.add_group_selected()
+                } else {
+                    browser.add_group(id)
+                }
+            })
+            .flatten();
             rt::settle();
             // Named as you make it, as Search opens its name for editing.
             if let Some(place) = made {
@@ -384,7 +415,13 @@ pub fn run(tag: NSInteger) -> bool {
         }
         t if t == Command::TabOutOfGroup as NSInteger => {
             let Some(id) = target else { return true };
-            rt::dispatch(move |browser| browser.move_to_group(id, None));
+            rt::dispatch(move |browser| {
+                if browser.is_selected(id) && browser.selection_count() > 1 {
+                    browser.move_selected_to_group(None);
+                } else {
+                    browser.move_to_group(id, None);
+                }
+            });
         }
         t if t == Command::TabRename as NSInteger => {
             let Some(id) = target else { return true };
@@ -531,6 +568,7 @@ mod tests {
             groups: vec!["Work".to_owned(), "Reading".to_owned()],
             can_sleep: true,
             picked: 0,
+            picked_groups: Vec::new(),
         }
     }
 
@@ -605,6 +643,36 @@ mod tests {
     }
 
     #[test]
+    fn among_picked_tabs_move_to_group_moves_them_all() {
+        fn multi(group: Option<usize>, groups: Vec<Option<usize>>) -> TabState {
+            TabState {
+                group,
+                picked: groups.len(),
+                picked_groups: groups,
+                ..state()
+            }
+        }
+        let sub = &tab_entries(&multi(Some(1), vec![Some(1), Some(0), None]))[0].sub;
+        assert_eq!(
+            titles(sub),
+            ["New Group", "", "Work", "Reading", "", "Remove from Group"],
+            "any picked tab in a group keeps the way out"
+        );
+        assert!(
+            sub[2].enabled && sub[3].enabled,
+            "only all of them in one turns it off"
+        );
+        let sub = &tab_entries(&multi(Some(1), vec![Some(1), Some(1)]))[0].sub;
+        assert!(!sub[3].enabled, "every picked tab in Reading: off");
+        assert!(sub[2].enabled);
+        assert_eq!(
+            titles(&tab_entries(&multi(None, vec![None, None]))[0].sub),
+            ["New Group", "", "Work", "Reading"],
+            "none picked in a group: no way out"
+        );
+    }
+
+    #[test]
     fn a_page_less_tab_and_a_lone_tab_disable_what_they_cannot_do() {
         let entries = tab_entries(&TabState {
             has_page: false,
@@ -616,6 +684,7 @@ mod tests {
             groups: Vec::new(),
             can_sleep: false,
             picked: 0,
+            picked_groups: Vec::new(),
         });
         let on: Vec<&str> = entries
             .iter()
