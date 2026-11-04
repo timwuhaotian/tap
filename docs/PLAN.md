@@ -478,7 +478,7 @@ Set up, copying Kil's layout:
   wiki and projects off, private vulnerability reporting on.
 - [x] A first window: `tap-app` opens one `NSWindow` with one `WKWebView` showing a
   "being built" page (2026-11-04)
-- [ ] a panic hook that writes `crash.log`
+- [x] a panic hook that writes `crash.log` (`tap-shell/src/crash.rs`)
 
 Then build `TapApplication`: one `TapWindow` with one `TapPageView` (shared process
 pool, `Tab.swift:68-82`) and an NSTextField address field that loads what you type.
@@ -491,7 +491,10 @@ pool, `Tab.swift:68-82`) and an NSTextField address field that loads what you ty
 - [x] `spctl -a -vv` on the app in the DMG says **Notarized Developer ID**, origin
   `Developer ID Application: HAOTIAN WU (43VLF3KTFZ)`. The DMG is not committed (§12).
 - [x] `vtool -show-build` shows minos 14.0 and sdk 26.5.
-- [ ] Typing `example.com` loads `https://example.com` (address field still to come).
+- [x] Typing `example.com` loads `https://example.com`: in the model
+  (`browser::tests::return_goes_to_an_address_or_searches`). In the app, the field and
+  Return are in, and restored pages load; checking it by hand through the UI waits for
+  the bench (M1): synthetic keystrokes can't reach Tap reliably.
 - [x] The binary-size baseline is recorded in §10.
 
 ### M1 — Foundations and risk spikes
@@ -524,6 +527,24 @@ BookmarksFile, Registrable.
 - Each of the six spikes has a written result in §11.
 
 ### M2 — Browsing in one window
+
+**In (2026-11-04), ahead of M1 at the user's request ("go straight build"):**
+- [x] `tap-core`: `fnd::Url` (Foundation URL semantics), `address`, `engine`, `keyword`,
+  `crash` (`CrashCount`, `PageEnd`), `session` (Search's format, lenient), `browser`
+  (tabs, select, close/reopen with Search's rules, link runs, the field with ⌘T
+  launching, `destination`/`submit`, the #849 crash flow, asleep restore). 25 tests,
+  including Search's address regressions case for case.
+- [x] `tap-shell`: the runtime (`rt`: one owner, effects, flush, queued re-entry), the
+  window with the lights placed by hand (deferred past AppKit's own layout pass), the
+  strip (pill, cross, plus, progress line), back/forward/reload, the field on the live
+  tab and floating for ⌘T, the stage with the failure view and Try Again, web views
+  (shared configuration, Safari user agent, one process pool, KVO), the navigation and
+  UI delegates (⌘-click behind, other apps' links, new windows as tabs, #849's private
+  termination reason), the menus with Search's keys, the session written on change and
+  on quit, `crash.log`.
+- [ ] Still to come for M2: history and suggestions, find on page, downloads, dialogs
+  (alert/confirm/prompt, uploads, sign-in), sleeping tabs, icons, the os_log line for
+  #849 (now on stderr).
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
 - Address parsing, engines, keywords, site search, history suggestions; the omnibox
   with inline completion (IME-safe, finding 3.5)
@@ -946,6 +967,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 |---|---|
 | 2026-11-04 | Full Rust rewrite that copies Search; pure Rust (translation dropped); full parity before release; Developer ID from the start; Bolt T icon; WebKit over Servo and egui; one plan doc (this file). |
 | 2026-11-04 | Credentials and the release flow are copied from Kil: Developer ID HAOTIAN WU (43VLF3KTFZ); notarization through the `asc` stored key; local release builds; one `releases/Tap-arm64.dmg` in git on `main`; the `latest.toml` updater; arm64 only; `scripts/bundle.sh` and `release.sh` instead of xtask release commands; no Homebrew cask, GitHub Pages or signed appcast. |
+| 2026-11-04 | Browsing came before M1's foundations, at the user's request: the core model, runtime, window, tabs, field and web views are in (M2 progress). The bench moves up next: driving the UI with synthetic keystrokes is unreliable and can reach other apps. |
 | 2026-11-04 | The GitHub repo `timwuhaotian/tap` is public from day one, not only from 1.0. Nothing is downloadable until `releases/` is first committed at 1.0. |
 
 ## Appendix A — Parity tracker
@@ -953,8 +975,11 @@ Resolved 2026-11-04, by copying Kil's setup:
 Every Swift file in Search at parity-pin appears exactly once. `xtask check` verifies
 this and re-reads the line counts. The milestone is when the file's behaviour lands.
 
-Status moves `todo` → `ported` → `tested` → `parity` (Python suite green and reviewed
-side by side). The other statuses are `dropped` and `fixed-deviation`.
+Status moves `todo` → `partial` (some of the file is in) → `ported` → `tested` →
+`parity` (Python suite green and reviewed side by side). The other statuses are
+`dropped` and `fixed-deviation`. Until `tap-ui` and `tap-web` are split out, their
+modules live in `tap-shell` (`strip`, `window`, `palette`, `web`, `rt`, `menu`,
+`store`, `crash`).
 
 Crates: c = tap-core, i = tap-import, a = assets, sys = tap-sys, ui = tap-ui,
 w = tap-web, s = tap-shell.
@@ -965,7 +990,7 @@ added below this one as M1 starts.
 | Swift file | LOC | Rust module(s) | Milestone | Status |
 |---|---:|---|---|---|
 | Accounts.swift | 172 | s/ui/accounts | M5 | todo |
-| Address.swift | 137 | c/address | M2 | todo |
+| Address.swift | 137 | c/address | M2 | tested |
 | AddressCommands.swift | 70 | c/address_commands | M2 | todo |
 | AI.swift | 187 | c/ai, s/ai_keys | M8 | todo |
 | AIAssist.swift | 616 | c/ai/assist, s/ui/ai_assist | M8 | todo |
@@ -973,7 +998,7 @@ added below this one as M1 starts.
 | AIEngine.swift | 580 | c/ai/engine_feed, s/ai_engine (C++ helper not built) | M8 | todo |
 | AIPage.swift | 372 | a/ai-page, c/ai/page | M8 | todo |
 | AISignIn.swift | 99 | c/ai/sign_in | M8 | todo |
-| App.swift | 1804 | s/app/menus, s/ui/window_content | M0→M3 | todo |
+| App.swift | 1804 | s/app/menus, s/ui/window_content | M0→M3 | partial |
 | ApplePasswords.swift | 427 | s/apple_passwords | M5 | todo |
 | ApplePasswordsOffer.swift | 114 | c/apple_passwords/offer | M5 | todo |
 | ApplePasswordsProtocol.swift | 581 | c/apple_passwords/{srp,protocol} | M1 | todo |
@@ -986,16 +1011,16 @@ added below this one as M1 starts.
 | Bookmarks.swift | 1735 | c/bookmarks, s/ui/bookmarks/* | M3 | todo |
 | BookmarksBar.swift | 160 | s/ui/bookmarks_bar | M3 | todo |
 | BookmarksFile.swift | 165 | c/bookmarks_file | M1 | todo |
-| Browser.swift | 7518 | c/browser/*, w/delegate, w/downloads, w/print | M2→M5 | todo |
+| Browser.swift | 7518 | c/browser/*, w/delegate, w/downloads, w/print | M2→M5 | partial |
 | CleanLink.swift | 75 | c/clean_link | M2 | todo |
 | Closing.swift | 108 | c/closing | M3 | todo |
 | Crx.swift | 240 | c/crx | M1 | todo |
 | Curtain.swift | 379 | c/curtain, a/curtain, w/relays | M5 | todo |
-| Design.swift | 474 | ui/design, c/mark | M0 | todo |
-| Dialogs.swift | 433 | w/dialogs (#849) | M2 | todo |
+| Design.swift | 474 | ui/design, c/mark | M0 | partial |
+| Dialogs.swift | 433 | w/dialogs (#849) | M2 | partial |
 | Dusk.swift | 737 | a/dusk, w/dusk | M5 | todo |
 | DuskColours.swift | 694 | a/dusk-colours | M5 | todo |
-| Engine.swift | 81 | c/engine | M2 | todo |
+| Engine.swift | 81 | c/engine | M2 | tested |
 | EngineSuggest.swift | 204 | c/engine_suggest | M2 | todo |
 | ExtensionCapture.swift | 498 | w/ext/capture | M7 | todo |
 | ExtensionExternal.swift | 128 | w/ext/external, a | M7 | todo |
@@ -1031,9 +1056,9 @@ added below this one as M1 starts.
 | InternalPages.swift | 168 | c/internal_pages, s/ui/internal_pages | M3 | todo |
 | KeptScroll.swift | 36 | a/kept-scroll, w/kept_scroll | M5 | todo |
 | KeyLayout.swift | 65 | sys/key_layout | M1 | todo |
-| Keyword.swift | 73 | c/keyword | M2 | todo |
-| Lights.swift | 154 | s/ui/lights | M0 | todo |
-| Links.swift | 372 | s/app/delegate | M2 | todo |
+| Keyword.swift | 73 | c/keyword | M2 | partial |
+| Lights.swift | 154 | s/ui/lights | M0 | ported |
+| Links.swift | 372 | s/app/delegate | M2 | partial |
 | Little.swift | 480 | s/ui/little | M3 | todo |
 | LiveRate.swift | 59 | a/live-rate, c/live_rate | M5 | todo |
 | LocalText.swift | 23 | c/local_text | M2 | todo |
@@ -1042,7 +1067,7 @@ added below this one as M1 starts.
 | MediaKeys.swift | 113 | w/media_keys, a | M5 | todo |
 | NativePiP.swift | 99 | w/native_pip, a | M5 | todo |
 | Notifications.swift | 480 | w/notifications | M5 | todo |
-| Omnibox.swift | 617 | s/ui/{omnibox,address_field} | M2 | todo |
+| Omnibox.swift | 617 | s/ui/{omnibox,address_field} | M2 | partial |
 | PageFind.swift | 829 | a/page-find, c/page_find, w/page_find | M2 | todo |
 | PageQuestions.swift | 176 | s/ui/page_questions | M5 | todo |
 | PaneStage.swift | 1040 | s/ui/pane_stage | M4 | todo |
@@ -1062,12 +1087,12 @@ added below this one as M1 starts.
 | Registrable.swift | 25 | c/registrable | M1 | todo |
 | Scripting.swift | 80 | s/app/scripting | M8 | todo |
 | SearchProfile.swift (#845 branch) | 350 | i/search_profile (#845) | M6 | todo |
-| Session.swift | 195 | c/session | M1/M2 | todo |
+| Session.swift | 195 | c/session | M1/M2 | partial |
 | Settings.swift | 1454 | s/ui/settings/* | M3 | todo |
 | SettingsIndex.swift | 656 | c/settings_index | M3 | todo |
 | Sharing.swift | 23 | s/app/sharing | M8 | todo |
 | Shield.swift | 178 | c/shield, w/shield | M5 | todo |
-| Shortcuts.swift | 502 | c/shortcuts, s/app/shortcuts | M3 | todo |
+| Shortcuts.swift | 502 | c/shortcuts, s/app/shortcuts | M3 | partial |
 | ShortcutsPage.swift | 200 | s/ui/settings/shortcuts | M3 | todo |
 | Side.swift | 1535 | s/ui/side/* | M3 | todo |
 | SideIcons.swift | 318 | s/ui/side/icons | M3 | todo |
@@ -1081,14 +1106,14 @@ added below this one as M1 starts.
 | Split.swift | 78 | c/split | M4 | todo |
 | SplitTabItem.swift | 348 | s/ui/split_tab_item | M4 | todo |
 | SplitView.swift | 358 | s/ui/split_view | M4 | todo |
-| Stage.swift | 759 | s/ui/stage | M2 | todo |
+| Stage.swift | 759 | s/ui/stage | M2 | partial |
 | StatusLine.swift | 157 | s/ui/status_line, w/relays, a | M3 | todo |
-| Store.swift | 239 | c/store, w/stores | M1 | todo |
+| Store.swift | 239 | c/store, w/stores | M1 | partial |
 | StoreRelay.swift | 193 | w/relays/store, a | M7 | todo |
 | Substitutions.swift | 93 | s/app/substitutions | M5 | todo |
 | Swipe.swift | 153 | w/swipe, a | M5 | todo |
-| Tab.swift | 3012 | c/tab, w/{config,page_view,tab_host,spi,relays} | M2 | todo |
-| TabBar.swift | 1771 | s/ui/tab_bar/* | M2→M3 | todo |
+| Tab.swift | 3012 | c/tab, w/{config,page_view,tab_host,spi,relays} | M2 | partial |
+| TabBar.swift | 1771 | s/ui/tab_bar/* | M2→M3 | partial |
 | TabDrag.swift | 288 | c/tab_drag, s/ui/tab_drag | M3 | todo |
 | TabGroup.swift | 32 | c/tab_group | M3 | todo |
 | TabGroups.swift | 233 | s/ui/tab_groups | M3 | todo |

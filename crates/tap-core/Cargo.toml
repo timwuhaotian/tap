@@ -1,0 +1,20 @@
+[package]
+name = "tap-core"
+description = "Tap's model and logic: addresses, engines, tabs, sessions. No AppKit, no WebKit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+objc2.workspace = true
+objc2-foundation.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,2 +1,4 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# Names that are product and API names, not code, in doc comments ("..": keep the defaults).
+doc-valid-idents = ["AppKit", "WebKit", "WebContent", "YouTube", "JavaScript", "macOS", "objc2", ".."]

@@ -1,0 +1,928 @@
+//! One window's tabs and what is being typed: the model half of Search's `Browser.swift`
+//! and `Tab.swift` (docs/PLAN.md §5.1).
+//!
+//! Setters mark which fields changed; the shell reads the marks once per turn and
+//! redraws only what they name. Anything that has to happen to a web view is pushed as
+//! an [`Effect`] and carried out by the shell after the model is let go of.
+
+use std::time::Instant;
+
+use bitflags::bitflags;
+
+use crate::{
+    address,
+    crash::{CrashCount, PageEnd},
+    engine::{self, Engine},
+    fnd::Url,
+    keyword::{self, Keyword},
+    session,
+};
+
+/// A tab's identity for as long as the app runs. Not saved: a restored tab gets a new one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TabId(pub u64);
+
+bitflags! {
+    /// What changed on a tab since the views last looked.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct TabFields: u32 {
+        const URL = 1;
+        const TITLE = 1 << 1;
+        const LOADING = 1 << 2;
+        const PROGRESS = 1 << 3;
+        const HISTORY = 1 << 4;
+        const FAILURE = 1 << 5;
+        const AWAKE = 1 << 6;
+    }
+
+    /// What changed on the window's model since the views last looked.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct BrowserFields: u32 {
+        /// Tabs added, removed or moved.
+        const TABS = 1;
+        const ACTIVE = 1 << 1;
+        /// The field opened, closed, or moved between the tab and the floating panel.
+        const EDITING = 1 << 2;
+        /// What is typed in the field.
+        const TYPED = 1 << 3;
+        /// Return gave nothing to go to.
+        const REFUSED = 1 << 4;
+    }
+}
+
+/// Something the shell does to a web view or the disk, after the model is let go of.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Effect {
+    /// Load an address in the tab, making its web view first if it has none.
+    Load {
+        tab: TabId,
+        url: String,
+    },
+    Reload(TabId),
+    Back(TabId),
+    Forward(TabId),
+    Stop(TabId),
+    /// The tab is gone: let its web view go.
+    Discard(TabId),
+    /// Give the page the keyboard.
+    FocusPage(TabId),
+    /// Write the session (debounced by the shell's disk writer).
+    Save(session::Shape),
+}
+
+/// One page.
+#[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // the page's own states, as Search's Tab keeps them
+pub struct Tab {
+    pub id: TabId,
+    url: String,
+    title: String,
+    loading: bool,
+    progress: f64,
+    can_back: bool,
+    can_forward: bool,
+    /// Said in place of the page: a connection that failed, a process that kept dying.
+    failure: Option<String>,
+    /// Set while the failure is the one a crashing page gave up with: there is no
+    /// process behind it, so Try again asks for the address afresh (Search #849).
+    dead: bool,
+    crashes: CrashCount,
+    /// A restored tab costs nothing until it is first shown: it has no web view yet.
+    awake: bool,
+    entry: session::Entry,
+    dirty: TabFields,
+}
+
+impl Tab {
+    fn new(id: TabId) -> Tab {
+        Tab {
+            id,
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            progress: 0.0,
+            can_back: false,
+            can_forward: false,
+            failure: None,
+            dead: false,
+            crashes: CrashCount::default(),
+            awake: false,
+            entry: session::Entry::default(),
+            dirty: TabFields::all(),
+        }
+    }
+
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+    #[must_use]
+    pub fn loading(&self) -> bool {
+        self.loading
+    }
+    #[must_use]
+    pub fn progress(&self) -> f64 {
+        self.progress
+    }
+    #[must_use]
+    pub fn can_back(&self) -> bool {
+        self.can_back
+    }
+    #[must_use]
+    pub fn can_forward(&self) -> bool {
+        self.can_forward
+    }
+    #[must_use]
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+    #[must_use]
+    pub fn awake(&self) -> bool {
+        self.awake
+    }
+    /// Nothing loaded and nothing asked for: a new tab.
+    #[must_use]
+    pub fn is_blank(&self) -> bool {
+        self.url.is_empty()
+    }
+
+    /// What the tab says: the name you gave it, the page's title, the address until
+    /// there is a title, or "New Tab" (Search's `Tab.label`).
+    #[must_use]
+    pub fn label(&self) -> String {
+        if let Some(name) = self.entry.name.as_deref().filter(|n| !n.is_empty()) {
+            return name.to_owned();
+        }
+        if !self.title.is_empty() {
+            return self.title.clone();
+        }
+        match Url::parse(&self.url) {
+            Some(url) if !self.url.is_empty() => address::pretty(&url),
+            _ => "New Tab".to_owned(),
+        }
+    }
+
+    fn set<T: PartialEq>(field: &mut T, value: T, dirty: &mut TabFields, flag: TabFields) {
+        if *field != value {
+            *field = value;
+            dirty.insert(flag);
+        }
+    }
+
+    fn entry(&self) -> session::Entry {
+        session::Entry {
+            url: self.url.clone(),
+            title: self.title.clone(),
+            ..self.entry.clone()
+        }
+    }
+}
+
+/// The field, open on the live tab or floating over the page for a new one (⌘T).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Editing {
+    pub typed: String,
+    /// ⌘T: what is typed gets a tab of its own on Return, and the page the field was
+    /// raised over stays as it was. Nothing is opened if it is put away.
+    pub launching: bool,
+}
+
+/// A run of links opened from one tab land one after another beside it.
+#[derive(Clone, Copy, Debug)]
+struct LinkRun {
+    opener: TabId,
+    last: TabId,
+}
+
+/// One window's model.
+#[derive(Debug)]
+pub struct Browser {
+    tabs: Vec<Tab>,
+    active: Option<TabId>,
+    editing: Option<Editing>,
+    pub engine: Engine,
+    pub custom_engine: String,
+    pub keywords: Vec<Keyword>,
+    /// Closed tabs, newest last, with where they were: ⇧⌘T brings them back.
+    closed: Vec<(usize, session::Entry)>,
+    link_run: Option<LinkRun>,
+    refusals: u32,
+    effects: Vec<Effect>,
+    dirty: BrowserFields,
+    session_changed: bool,
+    next: u64,
+}
+
+impl Default for Browser {
+    fn default() -> Self {
+        Browser::new()
+    }
+}
+
+impl Browser {
+    /// A window with one new tab.
+    #[must_use]
+    pub fn new() -> Browser {
+        let mut browser = Browser {
+            tabs: Vec::new(),
+            active: None,
+            editing: None,
+            engine: Engine::default(),
+            custom_engine: String::new(),
+            keywords: Vec::new(),
+            closed: Vec::new(),
+            link_run: None,
+            refusals: 0,
+            effects: Vec::new(),
+            dirty: BrowserFields::all(),
+            session_changed: false,
+            next: 1,
+        };
+        let id = browser.make_tab();
+        browser.active = Some(id);
+        browser
+    }
+
+    /// The window as last time left it. Every tab comes back asleep, costing nothing
+    /// until it is shown; the one in front wakes now.
+    #[must_use]
+    pub fn restored(shape: session::Shape) -> Browser {
+        let mut browser = Browser::new();
+        if shape.tabs.is_empty() {
+            return browser;
+        }
+        browser.tabs.clear();
+        for entry in shape.tabs {
+            let id = TabId(browser.next);
+            browser.next += 1;
+            let mut tab = Tab::new(id);
+            tab.url.clone_from(&entry.url);
+            tab.title.clone_from(&entry.title);
+            tab.entry = entry;
+            browser.tabs.push(tab);
+        }
+        let front = usize::try_from(shape.active)
+            .ok()
+            .and_then(|i| browser.tabs.get(i))
+            .map(|t| t.id);
+        if let Some(id) = front {
+            browser.select(id);
+        } else {
+            // No tab was in front (a fresh start): a new one beside the rest.
+            let id = browser.make_tab();
+            browser.select(id);
+        }
+        browser.session_changed = false;
+        browser
+    }
+
+    fn make_tab(&mut self) -> TabId {
+        let id = TabId(self.next);
+        self.next += 1;
+        self.tabs.push(Tab::new(id));
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+        id
+    }
+
+    // MARK: reading
+
+    #[must_use]
+    pub fn tabs(&self) -> &[Tab] {
+        &self.tabs
+    }
+    #[must_use]
+    pub fn tab(&self, id: TabId) -> Option<&Tab> {
+        self.tabs.iter().find(|t| t.id == id)
+    }
+    fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
+        self.tabs.iter_mut().find(|t| t.id == id)
+    }
+    fn index(&self, id: TabId) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == id)
+    }
+    #[must_use]
+    pub fn active(&self) -> Option<TabId> {
+        self.active
+    }
+    #[must_use]
+    pub fn active_tab(&self) -> Option<&Tab> {
+        self.active.and_then(|id| self.tab(id))
+    }
+    #[must_use]
+    pub fn editing(&self) -> Option<&Editing> {
+        self.editing.as_ref()
+    }
+    #[must_use]
+    pub fn refusals(&self) -> u32 {
+        self.refusals
+    }
+
+    /// What changed since the last call, on the window and on each tab; the marks are
+    /// cleared.
+    pub fn take_dirty(&mut self) -> (BrowserFields, Vec<(TabId, TabFields)>) {
+        let window = std::mem::take(&mut self.dirty);
+        let tabs = self
+            .tabs
+            .iter_mut()
+            .filter(|t| !t.dirty.is_empty())
+            .map(|t| (t.id, std::mem::take(&mut t.dirty)))
+            .collect();
+        (window, tabs)
+    }
+
+    /// What the shell has to do, in order; the session last, once, if it changed.
+    pub fn take_effects(&mut self) -> Vec<Effect> {
+        let mut effects = std::mem::take(&mut self.effects);
+        if std::mem::take(&mut self.session_changed) {
+            effects.push(Effect::Save(self.shape()));
+        }
+        effects
+    }
+
+    /// The session as Search writes it.
+    #[must_use]
+    pub fn shape(&self) -> session::Shape {
+        let active = self
+            .active
+            .and_then(|id| self.index(id))
+            .map_or(-1, |i| i64::try_from(i).unwrap_or(-1));
+        session::Shape {
+            tabs: self
+                .tabs
+                .iter()
+                .filter(|t| !t.is_blank())
+                .map(Tab::entry)
+                .collect(),
+            active: if self.active_tab().is_some_and(Tab::is_blank) {
+                -1
+            } else {
+                active
+            },
+            ..session::Shape::default()
+        }
+    }
+
+    // MARK: tabs
+
+    /// Puts a tab in front, waking it if it was asleep. The field closes.
+    pub fn select(&mut self, id: TabId) {
+        if self.tab(id).is_none() {
+            return;
+        }
+        if self.active != Some(id) {
+            self.active = Some(id);
+            self.dirty.insert(BrowserFields::ACTIVE);
+            self.session_changed = true;
+        }
+        if self.editing.take().is_some() {
+            self.dirty.insert(BrowserFields::EDITING);
+        }
+        self.wake(id);
+        self.effects.push(Effect::FocusPage(id));
+    }
+
+    fn wake(&mut self, id: TabId) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        if tab.awake || tab.url.is_empty() {
+            return;
+        }
+        tab.awake = true;
+        tab.dirty.insert(TabFields::AWAKE);
+        let url = tab.url.clone();
+        self.effects.push(Effect::Load { tab: id, url });
+    }
+
+    /// Opens an address in a new tab: after a run of links from `opener`, or at the
+    /// end of the row.
+    pub fn open(&mut self, url: Option<&Url>, foreground: bool, opener: Option<TabId>) -> TabId {
+        let id = TabId(self.next);
+        self.next += 1;
+        let mut tab = Tab::new(id);
+        if let Some(url) = url {
+            url.as_str().clone_into(&mut tab.url);
+            tab.awake = true;
+            self.effects.push(Effect::Load {
+                tab: id,
+                url: tab.url.clone(),
+            });
+        }
+        let place = opener
+            .and_then(|from| {
+                let after = match self.link_run {
+                    Some(run) if run.opener == from && self.index(run.last).is_some() => run.last,
+                    _ => from,
+                };
+                self.index(after).map(|i| i + 1)
+            })
+            .unwrap_or(self.tabs.len());
+        self.tabs.insert(place, tab);
+        self.link_run = opener.map(|from| LinkRun {
+            opener: from,
+            last: id,
+        });
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+        if foreground {
+            self.select(id);
+        }
+        id
+    }
+
+    /// A tab WebKit made for a page that asked for a new window: it already has its web
+    /// view, so nothing is loaded here.
+    pub fn adopt(&mut self, opener: Option<TabId>, foreground: bool) -> TabId {
+        let id = self.open(None, false, opener);
+        if let Some(tab) = self.tab_mut(id) {
+            tab.awake = true;
+        }
+        if foreground {
+            self.select(id);
+        }
+        id
+    }
+
+    /// ⌘W, as Search closes: the neighbour on the right takes its place, or the last
+    /// tab. The only tab is replaced by a new one, unless it is already new.
+    pub fn close(&mut self, id: TabId) {
+        let Some(index) = self.index(id) else { return };
+        if self.tabs.len() == 1 {
+            if self.tabs[0].is_blank() {
+                return;
+            }
+            self.remember(index);
+            self.effects.push(Effect::Discard(id));
+            let fresh = TabId(self.next);
+            self.next += 1;
+            self.tabs[0] = Tab::new(fresh);
+            self.active = Some(fresh);
+            self.dirty
+                .insert(BrowserFields::TABS | BrowserFields::ACTIVE);
+            self.session_changed = true;
+            self.begin_editing(false);
+            return;
+        }
+        self.remember(index);
+        self.effects.push(Effect::Discard(id));
+        self.tabs.remove(index);
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+        if self.active == Some(id) {
+            let next = self.tabs[index.min(self.tabs.len() - 1)].id;
+            self.active = None;
+            self.select(next);
+        }
+    }
+
+    fn remember(&mut self, index: usize) {
+        let tab = &self.tabs[index];
+        if !tab.is_blank() {
+            self.closed.push((index, tab.entry()));
+        }
+    }
+
+    /// ⇧⌘T: the last closed tab, back where it was.
+    pub fn reopen(&mut self) {
+        let Some((index, entry)) = self.closed.pop() else {
+            return;
+        };
+        let id = TabId(self.next);
+        self.next += 1;
+        let mut tab = Tab::new(id);
+        tab.url.clone_from(&entry.url);
+        tab.title.clone_from(&entry.title);
+        tab.entry = entry;
+        // An empty new tab in front is what closing the only tab left: it gives way.
+        if self.tabs.len() == 1 && self.tabs[0].is_blank() {
+            self.tabs.clear();
+        }
+        let place = index.min(self.tabs.len());
+        self.tabs.insert(place, tab);
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+        self.select(id);
+    }
+
+    /// ⌃Tab and ⌃⇧Tab: along the row, round from one end to the other.
+    pub fn select_beside(&mut self, forward: bool) {
+        let Some(index) = self.active.and_then(|id| self.index(id)) else {
+            return;
+        };
+        let count = self.tabs.len();
+        let next = if forward {
+            (index + 1) % count
+        } else {
+            (index + count - 1) % count
+        };
+        self.select(self.tabs[next].id);
+    }
+
+    /// ⌘1 to ⌘8 by place; ⌘9 is always the last.
+    pub fn select_number(&mut self, number: usize) {
+        let index = if number >= 9 {
+            self.tabs.len().saturating_sub(1)
+        } else {
+            number.saturating_sub(1)
+        };
+        if let Some(tab) = self.tabs.get(index) {
+            self.select(tab.id);
+        }
+    }
+
+    // MARK: the field
+
+    /// ⌘L opens the field on the live tab with its address; ⌘T floats it over the page.
+    pub fn begin_editing(&mut self, launching: bool) {
+        let typed = if launching {
+            String::new()
+        } else {
+            self.active_tab()
+                .and_then(|t| Url::parse(&t.url).filter(|_| !t.url.is_empty()))
+                .map(|u| address::editable(&u))
+                .unwrap_or_default()
+        };
+        self.editing = Some(Editing { typed, launching });
+        self.dirty
+            .insert(BrowserFields::EDITING | BrowserFields::TYPED);
+    }
+
+    pub fn set_typed(&mut self, text: &str) {
+        if let Some(editing) = self.editing.as_mut().filter(|e| e.typed != text) {
+            text.clone_into(&mut editing.typed);
+            self.dirty.insert(BrowserFields::TYPED);
+        }
+    }
+
+    /// Esc, or a click away: the field closes and nothing is opened.
+    pub fn cancel_editing(&mut self) {
+        if self.editing.take().is_some() {
+            self.dirty.insert(BrowserFields::EDITING);
+            if let Some(id) = self.active {
+                self.effects.push(Effect::FocusPage(id));
+            }
+        }
+    }
+
+    /// Where Return takes what was typed: a local file, an address, a keyword's search,
+    /// or the engine's (Search's `Browser.destination(for:)`).
+    #[must_use]
+    pub fn destination(&self, typed: &str) -> Option<Url> {
+        if let Some(url) = address::file(typed).or_else(|| address::url(typed)) {
+            return Some(address::reachable(&url).unwrap_or(url));
+        }
+        if let Some((keyword, rest)) = keyword::find(typed, &self.keywords)
+            && let Some(url) = engine::url_for(&rest, &keyword.template)
+        {
+            return Some(url);
+        }
+        engine::url_for(typed, &self.engine.template(&self.custom_engine))
+    }
+
+    /// Return in the field.
+    pub fn submit(&mut self) {
+        let Some(editing) = self.editing.clone() else {
+            return;
+        };
+        let Some(url) = self.destination(&editing.typed) else {
+            self.refusals += 1;
+            self.dirty.insert(BrowserFields::REFUSED);
+            return;
+        };
+        self.editing = None;
+        self.dirty.insert(BrowserFields::EDITING);
+        let blank_in_front = self.active_tab().is_some_and(Tab::is_blank);
+        if editing.launching && !blank_in_front {
+            self.open(Some(&url), true, None);
+        } else if let Some(id) = self.active {
+            self.go(id, &url);
+        }
+    }
+
+    /// Sends a tab to an address.
+    pub fn go(&mut self, id: TabId, url: &Url) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        url.as_str().clone_into(&mut tab.url);
+        tab.title.clear();
+        tab.awake = true;
+        tab.failure = None;
+        tab.dead = false;
+        tab.dirty
+            .insert(TabFields::URL | TabFields::TITLE | TabFields::FAILURE | TabFields::AWAKE);
+        self.session_changed = true;
+        self.effects.push(Effect::Load {
+            tab: id,
+            url: url.as_str().to_owned(),
+        });
+        self.effects.push(Effect::FocusPage(id));
+    }
+
+    // MARK: the page
+
+    pub fn back(&mut self) {
+        if let Some(tab) = self.active_tab().filter(|t| t.can_back) {
+            self.effects.push(Effect::Back(tab.id));
+        }
+    }
+    pub fn forward(&mut self) {
+        if let Some(tab) = self.active_tab().filter(|t| t.can_forward) {
+            self.effects.push(Effect::Forward(tab.id));
+        }
+    }
+    /// ⌘R, or Try again over a page that said why it isn't there.
+    pub fn reload(&mut self) {
+        let Some(id) = self.active else { return };
+        let Some(tab) = self.tab_mut(id) else { return };
+        if tab.url.is_empty() {
+            return;
+        }
+        // Try again on a page that kept crashing: its process is gone, so the address
+        // is asked for afresh rather than reloading what isn't there (Search #849).
+        if tab.dead {
+            tab.dead = false;
+            tab.failure = None;
+            tab.dirty.insert(TabFields::FAILURE);
+            let url = tab.url.clone();
+            self.effects.push(Effect::Load { tab: id, url });
+            return;
+        }
+        if tab.failure.take().is_some() {
+            tab.dirty.insert(TabFields::FAILURE);
+        }
+        self.effects.push(Effect::Reload(id));
+    }
+    pub fn stop(&mut self) {
+        if let Some(id) = self.active {
+            self.effects.push(Effect::Stop(id));
+        }
+    }
+
+    // MARK: what the web view reports
+
+    pub fn page_url(&mut self, id: TabId, url: &str) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        if url.is_empty() || url == "about:blank" && tab.url.is_empty() {
+            return;
+        }
+        Tab::set(&mut tab.url, url.to_owned(), &mut tab.dirty, TabFields::URL);
+        self.session_changed = true;
+    }
+
+    pub fn page_title(&mut self, id: TabId, title: &str) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        Tab::set(
+            &mut tab.title,
+            title.to_owned(),
+            &mut tab.dirty,
+            TabFields::TITLE,
+        );
+        self.session_changed = true;
+    }
+
+    pub fn page_loading(&mut self, id: TabId, loading: bool, progress: f64) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        Tab::set(
+            &mut tab.loading,
+            loading,
+            &mut tab.dirty,
+            TabFields::LOADING,
+        );
+        if (tab.progress - progress).abs() > f64::EPSILON {
+            tab.progress = progress;
+            tab.dirty.insert(TabFields::PROGRESS);
+        }
+    }
+
+    pub fn page_history(&mut self, id: TabId, can_back: bool, can_forward: bool) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        Tab::set(
+            &mut tab.can_back,
+            can_back,
+            &mut tab.dirty,
+            TabFields::HISTORY,
+        );
+        Tab::set(
+            &mut tab.can_forward,
+            can_forward,
+            &mut tab.dirty,
+            TabFields::HISTORY,
+        );
+    }
+
+    /// A load that never arrived: said in place of the page.
+    pub fn page_failed(&mut self, id: TabId, message: &str) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        Tab::set(
+            &mut tab.failure,
+            Some(message.to_owned()),
+            &mut tab.dirty,
+            TabFields::FAILURE,
+        );
+    }
+
+    /// The tab's WebContent process ended. Made again twice a minute at most; past
+    /// that the page says so and waits for Try again (Search #849). Answers whether the
+    /// page was asked for again.
+    pub fn process_ended(&mut self, id: TabId, end: PageEnd, now: Instant) -> bool {
+        let Some(tab) = self.tab_mut(id) else {
+            return false;
+        };
+        if tab.url.is_empty() {
+            return false;
+        }
+        if !tab.crashes.another(now) {
+            tab.failure = Some(end.message().to_owned());
+            tab.dead = true;
+            tab.loading = false;
+            tab.dirty.insert(TabFields::FAILURE | TabFields::LOADING);
+            return false;
+        }
+        self.effects.push(Effect::Reload(id));
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn url(s: &str) -> Url {
+        Url::parse(s).expect("parses")
+    }
+
+    fn with_pages(pages: &[&str]) -> Browser {
+        let mut browser = Browser::new();
+        let first = browser.active().expect("a tab");
+        browser.go(first, &url(pages[0]));
+        for page in &pages[1..] {
+            browser.open(Some(&url(page)), false, None);
+        }
+        browser.take_effects();
+        browser
+    }
+
+    #[test]
+    fn closing_the_live_tab_lands_on_its_right_hand_neighbour_or_the_last() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com", "https://c.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[1]);
+        browser.close(ids[1]);
+        assert_eq!(browser.active(), Some(ids[2]));
+        browser.close(ids[2]);
+        assert_eq!(browser.active(), Some(ids[0]));
+    }
+
+    #[test]
+    fn closing_the_only_tab_leaves_a_new_one_and_reopen_brings_it_back() {
+        let mut browser = with_pages(&["https://a.com"]);
+        let only = browser.active().expect("a tab");
+        browser.close(only);
+        assert_eq!(browser.tabs().len(), 1);
+        assert!(browser.active_tab().is_some_and(Tab::is_blank));
+        assert!(browser.editing().is_some(), "the new tab's field is open");
+        let blank = browser.active().expect("a tab");
+        browser.close(blank);
+        assert_eq!(browser.tabs().len(), 1, "an empty last tab stays");
+
+        browser.reopen();
+        assert_eq!(browser.tabs().len(), 1, "the empty tab gives way");
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://a.com"));
+    }
+
+    #[test]
+    fn tabs_walk_round_and_nine_is_the_last() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com", "https://c.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[2]);
+        browser.select_beside(true);
+        assert_eq!(browser.active(), Some(ids[0]));
+        browser.select_beside(false);
+        assert_eq!(browser.active(), Some(ids[2]));
+        browser.select_number(1);
+        assert_eq!(browser.active(), Some(ids[0]));
+        browser.select_number(9);
+        assert_eq!(browser.active(), Some(ids[2]));
+    }
+
+    #[test]
+    fn return_goes_to_an_address_or_searches() {
+        let mut browser = Browser::new();
+        browser.begin_editing(false);
+        browser.set_typed("example.com");
+        browser.submit();
+        assert_eq!(
+            browser.active_tab().map(Tab::url),
+            Some("https://example.com")
+        );
+        assert!(browser.editing().is_none());
+
+        browser.begin_editing(false);
+        assert_eq!(
+            browser.editing().map(|e| e.typed.as_str()),
+            Some("example.com")
+        );
+        browser.set_typed("rust ownership");
+        browser.submit();
+        assert_eq!(
+            browser.active_tab().map(Tab::url),
+            Some("https://www.google.com/search?q=rust%20ownership")
+        );
+    }
+
+    #[test]
+    fn launching_opens_a_tab_only_on_return() {
+        let mut browser = with_pages(&["https://a.com"]);
+        browser.begin_editing(true);
+        browser.cancel_editing();
+        assert_eq!(browser.tabs().len(), 1, "put away, nothing is opened");
+
+        browser.begin_editing(true);
+        browser.set_typed("b.com");
+        browser.submit();
+        assert_eq!(browser.tabs().len(), 2);
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://b.com"));
+        assert_eq!(
+            browser.tabs()[0].url(),
+            "https://a.com",
+            "the page under the field stays"
+        );
+    }
+
+    #[test]
+    fn links_from_one_tab_land_one_after_another_beside_it() {
+        let mut browser = with_pages(&["https://a.com", "https://z.com"]);
+        let opener = browser.tabs()[0].id;
+        let one = browser.open(Some(&url("https://one.com")), false, Some(opener));
+        let two = browser.open(Some(&url("https://two.com")), false, Some(opener));
+        let order: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        assert_eq!(&order[..3], &[opener, one, two]);
+    }
+
+    #[test]
+    fn a_page_that_keeps_crashing_stops_reloading_and_try_again_loads_it_afresh() {
+        let mut browser = with_pages(&["https://heavy.example"]);
+        let id = browser.active().expect("a tab");
+        let start = Instant::now();
+        assert!(browser.process_ended(id, PageEnd::Crash, start));
+        assert!(browser.process_ended(id, PageEnd::Crash, start + Duration::from_secs(5)));
+        assert_eq!(
+            browser
+                .take_effects()
+                .iter()
+                .filter(|e| matches!(e, Effect::Reload(_)))
+                .count(),
+            2
+        );
+
+        assert!(!browser.process_ended(id, PageEnd::Memory, start + Duration::from_secs(9)));
+        assert_eq!(
+            browser.active_tab().and_then(Tab::failure),
+            Some("This page kept running out of memory.")
+        );
+        assert!(
+            !browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Reload(_))),
+            "nothing reloads behind the message"
+        );
+
+        browser.reload();
+        assert!(browser.active_tab().and_then(Tab::failure).is_none());
+        assert!(browser.take_effects().contains(&Effect::Load {
+            tab: id,
+            url: "https://heavy.example".into()
+        }));
+    }
+
+    #[test]
+    fn a_session_comes_back_asleep_but_for_the_tab_in_front() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com"]);
+        let second = browser.tabs()[1].id;
+        browser.select(second);
+        let shape = browser.shape();
+        assert_eq!(shape.active, 1);
+
+        let mut again = Browser::restored(shape);
+        assert_eq!(again.tabs().len(), 2);
+        assert!(!again.tabs()[0].awake());
+        assert!(again.tabs()[1].awake());
+        let effects = again.take_effects();
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::Load { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::Save(_))),
+            "restoring changes nothing to save"
+        );
+    }
+}
