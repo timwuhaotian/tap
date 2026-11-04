@@ -7,6 +7,7 @@
 
 mod address_bar;
 mod bench;
+mod blank;
 mod bring;
 mod crash;
 mod dialogs;

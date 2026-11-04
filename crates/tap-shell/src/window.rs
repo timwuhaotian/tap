@@ -45,6 +45,7 @@ use tap_core::{
 
 use crate::{
     address_bar::{self, AddressBar},
+    blank::BlankView,
     dialogs, downloads, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
@@ -95,6 +96,8 @@ struct Views {
     /// The address bar under the strip, while Settings has it up.
     bar: Retained<AddressBar>,
     stage: Retained<Stage>,
+    /// The instrument behind a blank tab's field.
+    blank: Retained<BlankView>,
     field: Retained<NSTextField>,
     plate: Retained<Plate>,
     /// The rows under the field, and the grey rest of the address after its text.
@@ -169,6 +172,12 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
     root.addSubview(&stage);
+    let blank = BlankView::new(mtm, stage.bounds());
+    blank.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    blank.setHidden(true);
+    stage.addSubview(&blank);
     let bar = AddressBar::new(
         mtm,
         NSRect::new(
@@ -225,6 +234,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             strip,
             bar,
             stage,
+            blank,
             field,
             plate,
             offers,
@@ -523,6 +533,7 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
 /// The active tab's page in the stage, or what it says in place of the page.
 fn show_page(views: &Views, view: &View) {
     show_own_page(views, view.page);
+    show_blank(views, view);
     let web = view.active.and_then(web::existing);
     let previous = views.shown.replace(view.active);
     if previous != view.active
@@ -561,6 +572,15 @@ fn show_page(views: &Views, view: &View) {
         }
         None => views.trouble.setHidden(true),
     }
+}
+
+/// The instrument behind a blank tab's field, or put away when the tab in
+/// front has a page of its own to show.
+fn show_blank(views: &Views, view: &View) {
+    let show = view.blank && view.page.is_none();
+    views.blank.setFrame(views.stage.bounds());
+    views.blank.setHidden(!show);
+    views.blank.set_animating(show);
 }
 
 /// One of Tap's own pages in the stage, below the find bar and the field like a web page,
