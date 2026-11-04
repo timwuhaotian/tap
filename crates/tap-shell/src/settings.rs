@@ -27,7 +27,9 @@ use objc2_app_kit::{
     NSResponder, NSScrollView, NSSearchField, NSSegmentSwitchTracking, NSSegmentedControl,
     NSSwitch, NSTextField, NSView, NSWorkspace,
 };
-use objc2_foundation::{NSArray, NSDate, NSPoint, NSRect, NSSet, NSSize, NSString, NSURL};
+use objc2_foundation::{
+    NSArray, NSDate, NSPoint, NSProcessInfo, NSRect, NSSet, NSSize, NSString, NSURL,
+};
 use objc2_web_kit::{WKWebsiteDataStore, WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache};
 use serde_json::Value;
 use tap_core::{
@@ -37,7 +39,7 @@ use tap_core::{
     settings_index::{self as index, Control, Item, Kind, Merged, Page, Prefs},
 };
 
-use crate::{palette, prefs, profile, rt, update};
+use crate::{bench, palette, prefs, profile, rt, update};
 
 const RAIL: f64 = 212.0;
 const COLUMN: f64 = 600.0;
@@ -1049,6 +1051,7 @@ fn make_control(
 
 /// A control moved: its setting written as Search writes it, then whatever acts on it
 /// told, and the page made again.
+#[allow(clippy::too_many_lines)] // one arm per kind of control, as Search's switch is
 fn act(control: &NSControl) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -1070,6 +1073,7 @@ fn act(control: &NSControl) {
         state.bindings.borrow().get(tag).cloned()
     });
     let Some(binding) = binding else { return };
+    let bench_toggled = matches!(binding, Binding::Switch("bench"));
     let mut kept = prefs::Kept::new();
     let selected = |control: &NSControl| -> usize {
         if let Some(segments) = control.downcast_ref::<NSSegmentedControl>() {
@@ -1149,6 +1153,10 @@ fn act(control: &NSControl) {
         }
     }
     prefs::apply(mtm);
+    // The bench socket follows its switch at once.
+    if bench_toggled {
+        bench::refresh();
+    }
     later(rebuild);
 }
 
@@ -1158,6 +1166,9 @@ fn press(mtm: MainThreadMarker, action: &str) {
         "import" => profile::choose_and_import(),
         "export" => profile::export(),
         "update.check" => update::check_now(),
+        "feedback" => send_feedback(),
+        "passwords" => open_passwords(),
+        "forget" => forget_choices(),
         "default" => make_default(),
         "folder" => choose_folder(mtm),
         "notes" => {
@@ -1225,6 +1236,103 @@ fn remove(mtm: MainThreadMarker, types: &NSSet<NSString>) {
     }
 }
 
+/// One part of a feedback address, with everything a query value can't carry as it
+/// stands written out.
+fn percent_encode(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// The feedback draft's address (Search's `Links.writeFeedback`): a new bug report,
+/// the version and this Mac already filled in, and nothing sent — the person still
+/// writes it and sends it themselves. Search drafts a mail, but Tap's contact address
+/// is still an open item (docs/PLAN.md §14), so the draft is on Tap's own tracker
+/// rather than addressed to Search's inbox.
+fn feedback_url(version: &str, build: &str, macos: &str) -> String {
+    format!(
+        "https://github.com/timwuhaotian/tap/issues/new?template=bug_report.yml&title={}&build={}&macos={}",
+        percent_encode(&format!("Tap feedback — {version}")),
+        percent_encode(build),
+        percent_encode(macos),
+    )
+}
+
+fn send_feedback() {
+    let version = update::current();
+    // The build beside the version, as Search puts both in its draft; a copy run from
+    // the tree has no bundle build, and the version alone is what it has.
+    let build = objc2_foundation::NSBundle::mainBundle()
+        .objectForInfoDictionaryKey(&NSString::from_str("CFBundleVersion"))
+        .and_then(|v| v.downcast::<NSString>().ok())
+        .map_or_else(|| version.clone(), |v| v.to_string());
+    let macos = NSProcessInfo::processInfo()
+        .operatingSystemVersionString()
+        .to_string();
+    let Some(url) =
+        NSURL::URLWithString(&NSString::from_str(&feedback_url(&version, &build, &macos)))
+    else {
+        return;
+    };
+    NSWorkspace::sharedWorkspace().openURL(&url);
+}
+
+/// Where Apple's passwords live, newest first: the Passwords app, or Keychain Access
+/// on a Mac too old for it.
+const PASSWORD_APPS: [&str; 2] = [
+    "/System/Applications/Passwords.app",
+    "/System/Applications/Utilities/Keychain Access.app",
+];
+
+fn passwords_app(exists: impl Fn(&str) -> bool) -> Option<&'static str> {
+    PASSWORD_APPS.iter().copied().find(|app| exists(app))
+}
+
+/// Search's Open… leads to its own passwords page; Tap keeps no passwords of its own
+/// yet (Offer to save / Fill in sign-ins aren't live), so there is no such page to
+/// lead to. Apple's app is the nearest true thing: it shows this Mac's keychain and
+/// iCloud passwords behind Touch ID — not a list of Tap's, of which there are none.
+fn open_passwords() {
+    let Some(app) = passwords_app(|path| std::path::Path::new(path).exists()) else {
+        return;
+    };
+    NSWorkspace::sharedWorkspace().openURL(&NSURL::fileURLWithPath(&NSString::from_str(app)));
+}
+
+/// A kept site choice, Search's way: the camera, microphone and location answers
+/// under `capture.`, a site's don't-float-videos under `nofloat.` (Search's
+/// `Browser.forgetCaptureChoices` and `Grounded`). Those answers live in the
+/// defaults, not in WebKit — WebKit keeps no say of its own between launches, it
+/// asks its delegate each time — so there is no WebKit store to clear for them.
+fn is_choice_key(key: &str) -> bool {
+    key.starts_with("capture.") || key.starts_with("nofloat.")
+}
+
+fn forget_choices() {
+    // Read before any are taken out: the dictionary is the defaults' own.
+    let keys: Vec<String> = prefs::defaults()
+        .dictionaryRepresentation()
+        .allKeys()
+        .iter()
+        .filter_map(|key| key.downcast_ref::<NSString>().map(ToString::to_string))
+        .filter(|key| is_choice_key(key))
+        .collect();
+    let mut kept = prefs::Kept::new();
+    for key in &keys {
+        kept.set(key, Value::Null);
+    }
+}
+
 /// Where Settings › Save to points, else Downloads (a test world keeps its own; see
 /// `downloads::folder`).
 pub fn downloads_folder() -> PathBuf {
@@ -1274,5 +1382,46 @@ fn make_default() {
             &NSString::from_str(scheme),
             Some(&done),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_feedback_draft_names_the_version_build_and_mac() {
+        assert_eq!(
+            feedback_url("0.1.1", "42", "macOS 27.0 (26A100)"),
+            "https://github.com/timwuhaotian/tap/issues/new?template=bug_report.yml&title=Tap%20feedback%20%E2%80%94%200.1.1&build=42&macos=macOS%2027.0%20%2826A100%29"
+        );
+    }
+
+    #[test]
+    fn only_a_sites_kept_choices_are_forgotten() {
+        assert_eq!(
+            [
+                is_choice_key("capture.https://example.com|1"),
+                is_choice_key("capture.https://example.com|notifications"),
+                is_choice_key("nofloat.example.com"),
+                is_choice_key("bench"),
+                is_choice_key("capture"),
+                is_choice_key("look"),
+            ],
+            [true, true, true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn the_passwords_app_is_preferred_and_keychain_access_is_the_fallback() {
+        assert_eq!(
+            passwords_app(|_| true),
+            Some("/System/Applications/Passwords.app")
+        );
+        assert_eq!(
+            passwords_app(|app| app.contains("Keychain")),
+            Some("/System/Applications/Utilities/Keychain Access.app")
+        );
+        assert_eq!(passwords_app(|_| false), None);
     }
 }

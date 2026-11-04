@@ -1,41 +1,61 @@
 //! The window: the strip across the top, the page under it, and the field (Search's
 //! `App.swift` window content, `Stage.swift` and `Omnibox.swift`).
+//!
+//! Not yet: `links.peek` and `swipe.history`. Tap's pages are `WKWebView`s owned by
+//! `web.rs`, whose public surface makes one view per tab in the row and steps back or
+//! forward one page (`Effect::Back`/`Forward`); there is no off-row view to put in a
+//! peek panel, no way to stop WebKit's own swipe (`register` turns its back/forward
+//! gestures on), and no back-forward list to pick from. Both wait on hooks there.
 
 use std::cell::RefCell;
 
-use block2::RcBlock;
+use block2::{DynBlock, RcBlock};
 use objc2::{
-    MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject, Sel},
     sel,
 };
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSFocusRingType, NSFont, NSImage, NSResponder, NSShadow,
+    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder, NSShadow,
     NSTextField, NSTextFieldDelegate, NSTextInputClient, NSTextView, NSView,
     NSViewFrameDidChangeNotification, NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidExitFullScreenNotification,
     NSWindowDidResignKeyNotification, NSWindowDidResizeNotification, NSWindowStyleMask,
     NSWindowTitleVisibility,
 };
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSData, NSHTTPURLResponse, NSNotification, NSNotificationCenter, NSOperationQueue, NSPoint,
+    NSRect, NSSize, NSString, NSURL, NSURLRequest, NSURLRequestCachePolicy, NSURLResponse,
+    NSURLSession, NSURLSessionConfiguration, NSURLSessionDataTask, NSURLSessionDelegate,
+    NSURLSessionTask, NSURLSessionTaskDelegate,
+};
 use objc2_web_kit::WKWebView;
+use serde_json::Value;
 use tap_core::{
+    address,
     browser::{Browser, BrowserFields, Editing, TabFields, TabId},
+    engine::{self, Engine},
+    identity,
     internal::Page,
+    keyword,
+    settings_index::{flag, text},
 };
 
 use crate::{
-    dialogs, findbar,
+    dialogs, downloads, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
-    palette, rt, settings,
+    palette,
+    prefs::Kept,
+    rt, settings,
     strip::Strip,
     web,
 };
 
 /// What the views need from the model, read in one go while it is borrowed.
+#[allow(clippy::struct_excessive_bools)] // one flag per thing the views ask, as read
 pub struct View {
     active: Option<TabId>,
     /// One of Tap's own pages, in place of a web page.
@@ -45,6 +65,7 @@ pub struct View {
     can_back: bool,
     can_forward: bool,
     loading: bool,
+    blank: bool,
     title: String,
     find: findbar::State,
 }
@@ -60,6 +81,7 @@ impl View {
             can_back: tab.is_some_and(tap_core::browser::Tab::can_back),
             can_forward: tab.is_some_and(tap_core::browser::Tab::can_forward),
             loading: tab.is_some_and(tap_core::browser::Tab::loading),
+            blank: tab.is_some_and(tap_core::browser::Tab::is_blank),
             title: tab.map_or_else(|| "Tap".to_owned(), tap_core::browser::Tab::label),
             find: findbar::State::of(browser),
         }
@@ -74,6 +96,11 @@ struct Views {
     plate: Retained<Plate>,
     /// The rows under the field, and the grey rest of the address after its text.
     offers: Retained<Offers>,
+    /// The search engine's rows, in their own card under the field's rows: the model
+    /// owns the field's rows and has no room in them for words that arrive later.
+    suggest: Retained<Suggest>,
+    /// The downloads door, at the strip's far end beside the helm.
+    fetch_door: Retained<NSButton>,
     ending: Retained<NSTextField>,
     trouble: Retained<NSView>,
     trouble_text: Retained<NSTextField>,
@@ -143,6 +170,8 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     for door in &helm {
         strip.addSubview(door);
     }
+    let fetch_door = fetch_door(mtm, width);
+    strip.addSubview(&fetch_door);
 
     let field_delegate = FieldDelegate::new(mtm);
     let field = field(mtm, &field_delegate);
@@ -161,6 +190,9 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     let offers = Offers::new(mtm);
     offers.setHidden(true);
     root.addSubview(&offers);
+    let suggest = Suggest::new(mtm);
+    suggest.setHidden(true);
+    root.addSubview(&suggest);
     let ending = NSTextField::labelWithString(&NSString::from_str(""), mtm);
     ending.setFont(Some(&palette::font()));
     ending.setTextColor(Some(&palette::MUTED.dynamic()));
@@ -181,6 +213,8 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             field,
             plate,
             offers,
+            suggest,
+            fetch_door,
             ending,
             trouble,
             trouble_text,
@@ -190,6 +224,22 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
         });
     });
     window.makeKeyAndOrderFront(None);
+}
+
+/// The downloads door, just before the helm at the strip's far end; the window
+/// shows it as `downloads::shows_button` says.
+fn fetch_door(mtm: MainThreadMarker, width: f64) -> Retained<NSButton> {
+    let door = downloads::button(mtm);
+    door.setFrame(NSRect::new(
+        NSPoint::new(
+            width - palette::HELM - palette::DOOR - 4.0,
+            (palette::STRIP - palette::DOOR) / 2.0,
+        ),
+        NSSize::new(palette::DOOR, palette::DOOR),
+    ));
+    door.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+    door.setHidden(true);
+    door
 }
 
 /// Back, forward and reload, at the far end of the row.
@@ -304,7 +354,19 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         .find(|(id, _)| Some(*id) == view.active)
         .map(|(_, f)| *f)
         .unwrap_or_default();
+    // ⌘T asked for the floating field whatever the setting says (the menu and the
+    // strip's plus both call `begin_editing(true)`): with `newtab.floating` off, or on
+    // a tab that is already blank, Search's `launch` is an ordinary new tab instead,
+    // so the launching field is turned into one here, where the setting is read.
+    if dirty.contains(BrowserFields::EDITING)
+        && let Some(editing) = &view.editing
+        && editing.launching
+        && launch_action(flag(&Kept::new(), "newtab.floating"), true, view.blank) != Launch::Keep
+    {
+        queue_launch_conversion();
+    }
     with_views(|views| {
+        refresh_fetch_door(views);
         if !dirty.is_empty() || !tabs.is_empty() {
             views.strip.setNeedsDisplay(true);
         }
@@ -489,16 +551,10 @@ fn place_field(views: &Views, view: &View, opened: bool) {
     }
 }
 
-/// The rows under the field, and the grey ending after the text in it. The card lines
-/// up with the live tab's pill, or with the floating field's card.
-fn place_offers(views: &Views, view: &View) {
-    let Some(editing) = view.editing.as_ref().filter(|_| view_has_field(views)) else {
-        views.offers.setHidden(true);
-        views.ending.setHidden(true);
-        return;
-    };
-    // The card's left edge and width, in the window's content.
-    let (x, top, width) = if editing.launching {
+/// The card's left edge, its top and its width, in the window's content: lined up
+/// with the live tab's pill, or with the floating field's card.
+fn offers_geometry(views: &Views, editing: &Editing) -> (f64, f64, f64) {
+    if editing.launching {
         let plate = views.plate.frame();
         (
             plate.origin.x + 20.0,
@@ -512,7 +568,19 @@ fn place_offers(views: &Views, view: &View) {
             palette::STRIP + 4.0,
             field.size.width + 20.0,
         )
+    }
+}
+
+/// The rows under the field, and the grey ending after the text in it. The card lines
+/// up with the live tab's pill, or with the floating field's card.
+fn place_offers(views: &Views, view: &View) {
+    let Some(editing) = view.editing.as_ref().filter(|_| view_has_field(views)) else {
+        views.offers.setHidden(true);
+        views.suggest.setHidden(true);
+        views.ending.setHidden(true);
+        return;
     };
+    let (x, top, width) = offers_geometry(views, editing);
     if editing.offers.is_empty() {
         views.offers.setHidden(true);
     } else {
@@ -526,6 +594,7 @@ fn place_offers(views: &Views, view: &View) {
         views.offers.setHidden(false);
         views.offers.setNeedsDisplay(true);
     }
+    place_suggest(views, view, x, top, width);
 
     // The ending sits right after the typed text, in the field's own font; a label and
     // a borderless field put their text at the same inset. Not while a row is picked,
@@ -554,6 +623,699 @@ fn place_offers(views: &Views, view: &View) {
             views.ending.setHidden(false);
         }
         _ => views.ending.setHidden(true),
+    }
+}
+
+/// What a launching (⌘T) field becomes, once `newtab.floating` has its say
+/// (Search's `Browser.launch`): kept floating only over a page that is showing
+/// something; anywhere else ⌘T is an ordinary new tab, made at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Launch {
+    Keep,
+    /// The tab in front is already blank: the field opens on it, in the strip.
+    ReuseBlank,
+    /// A new blank tab is made now, and the field opens on it, in the strip.
+    OpenBlank,
+}
+
+fn launch_action(floating: bool, launching: bool, blank: bool) -> Launch {
+    if !launching || (floating && !blank) {
+        Launch::Keep
+    } else if blank {
+        Launch::ReuseBlank
+    } else {
+        Launch::OpenBlank
+    }
+}
+
+/// Turns a launching field into the ordinary new tab `launch_action` names. Queued
+/// through `rt`, as `update` runs inside a flush: the change lands right after it.
+fn queue_launch_conversion() {
+    rt::dispatch(|browser| {
+        let Some(editing) = browser.editing().cloned() else {
+            return;
+        };
+        let blank = browser
+            .active_tab()
+            .is_some_and(tap_core::browser::Tab::is_blank);
+        let typed = editing.typed.clone();
+        match launch_action(
+            flag(&Kept::new(), "newtab.floating"),
+            editing.launching,
+            blank,
+        ) {
+            Launch::Keep => {}
+            Launch::ReuseBlank => {
+                browser.cancel_editing();
+                browser.begin_editing(false);
+            }
+            Launch::OpenBlank => {
+                browser.open(None, true, None);
+                browser.begin_editing(false);
+            }
+        }
+        if !typed.is_empty() {
+            browser.set_typed(&typed, false);
+        }
+    });
+}
+
+/// The downloads door, shown and named for what is coming in (Search's `FetchDoor.shows`:
+/// always with the setting on, otherwise only while a file comes in).
+fn refresh_fetch_door(views: &Views) {
+    let going = downloads::going();
+    let always = flag(&Kept::new(), "downloads.button");
+    views
+        .fetch_door
+        .setHidden(!downloads::shows_button(always, going));
+    let tip = if going > 0 {
+        format!("Downloading {going} \u{2014} open the folder downloads are saved in")
+    } else {
+        "Downloads \u{2014} open the folder downloads are saved in".to_owned()
+    };
+    views.fetch_door.setToolTip(Some(&NSString::from_str(&tip)));
+}
+
+/// A download started or ended: the door follows, without waiting for the model.
+pub fn downloads_moved() {
+    with_views(refresh_fetch_door);
+}
+
+// MARK: the engine's suggestions (`search.suggest`, Search's `EngineSuggest.swift`)
+
+/// How long typing has to pause before a question goes out, and how long an answer
+/// is worth waiting for.
+const SUGGEST_PAUSE_NS: i64 = 120_000_000;
+const SUGGEST_PATIENCE: f64 = 0.8;
+/// At most this many rows from the engine; longer than this is a paste, not a search.
+const SUGGEST_MOST: usize = 6;
+const SUGGEST_LONGEST: usize = 80;
+
+struct SuggestState {
+    /// What the words on show answered, trimmed.
+    typed: String,
+    words: Vec<String>,
+    /// Which question is the latest, so a late answer lands nowhere.
+    round: u64,
+    task: Option<Retained<NSURLSessionDataTask>>,
+    session: Option<Retained<NSURLSession>>,
+    delegate: Option<Retained<SuggestDelegate>>,
+}
+
+thread_local! {
+    static SUGGEST: RefCell<SuggestState> = const {
+        RefCell::new(SuggestState {
+            typed: String::new(),
+            words: Vec::new(),
+            round: 0,
+            task: None,
+            session: None,
+            delegate: None,
+        })
+    };
+}
+
+/// Where each engine answers, `OpenSearch`'s JSON `["words", ["…"]]`, as Search
+/// checked them; a custom engine has none we could know, and so shows nothing.
+fn suggest_endpoint(engine: Engine) -> Option<&'static str> {
+    Some(match engine {
+        Engine::Google => "https://suggestqueries.google.com/complete/search?client=firefox&q=%s",
+        Engine::DuckDuckGo => "https://duckduckgo.com/ac/?q=%s&type=list",
+        Engine::Bing => "https://www.bing.com/osjson.aspx?query=%s",
+        Engine::Ecosia => "https://ac.ecosia.org/autocomplete?q=%s&type=list",
+        Engine::Startpage => "https://www.startpage.com/osuggestions?q=%s",
+        Engine::Kagi => "https://kagi.com/api/autosuggest?q=%s",
+        Engine::Brave => "https://search.brave.com/api/suggest?q=%s",
+        Engine::Qwant => "https://api.qwant.com/api/suggest/?q=%s&client=opensearch",
+        Engine::Custom => return None,
+    })
+}
+
+/// The question for these words, or `None` when there is nowhere to ask. Only ever
+/// https — except, in a test run, a fake engine on this Mac (`suggest.testURL`).
+fn suggest_url(words: &str, engine: Engine, test: Option<&str>) -> Option<String> {
+    let template = test.or_else(|| suggest_endpoint(engine))?;
+    let url = engine::url_for(words, template)?;
+    let scheme = url.scheme()?.to_lowercase();
+    if scheme == "https" {
+        return Some(url.as_str().to_owned());
+    }
+    let host = url.host().unwrap_or_default();
+    if test.is_some() && scheme == "http" && matches!(host.as_str(), "127.0.0.1" | "localhost") {
+        return Some(url.as_str().to_owned());
+    }
+    None
+}
+
+/// A long run with no space that mixes letters and digits, or reads as a key's
+/// encoding: a password, a token, a card or account number (Search's `secretLike`).
+fn suggest_secret_like(token: &str) -> bool {
+    let count = token.chars().count();
+    let letters = token.chars().any(char::is_alphabetic);
+    let digits = token.chars().any(char::is_numeric);
+    if count >= 12 && letters && digits {
+        return true;
+    }
+    if count >= 9 && digits && token.chars().all(|c| c.is_numeric() || c == '-') {
+        return true;
+    }
+    count >= 24
+        && token
+            .chars()
+            .all(|c| c.is_ascii() && (c.is_alphanumeric() || "+/=_-".contains(c)))
+}
+
+/// Whether these words may leave the Mac at all (Search's `EngineSuggest.sendable`).
+/// Only plain words do: nothing the field would go to as an address, no scheme, no
+/// path, no email, nothing long, nothing that reads like a password or a key. Tap has
+/// no private tabs yet, so Search's private-tab refusal has nothing to refuse here;
+/// the moment it grows them, this is where they are checked.
+fn suggest_sendable(typed: &str) -> bool {
+    let text = typed.trim();
+    if text.is_empty() || text.chars().count() > SUGGEST_LONGEST || text.contains('\n') {
+        return false;
+    }
+    if address::url(text).is_some() {
+        return false;
+    }
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let first = tokens.first().copied().unwrap_or(text);
+    if let Some(colon) = first.find(':') {
+        let head = &first[..colon];
+        if !head.is_empty()
+            && head.chars().next().is_some_and(char::is_alphabetic)
+            && !first[colon + 1..].is_empty()
+            && head
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '+' | '.' | '-'))
+        {
+            return false;
+        }
+    }
+    if first.starts_with('/')
+        || first.starts_with('~')
+        || first.starts_with("./")
+        || first.starts_with("../")
+        || text.contains('\\')
+    {
+        return false;
+    }
+    for token in &tokens {
+        if tokens.len() == 1 && (token.contains('.') || token.contains('/')) {
+            return false;
+        }
+        if token.contains('@') && token.contains('.') {
+            return false;
+        }
+        if suggest_secret_like(token) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The words in an `OpenSearch` answer: trimmed, each once, none the same as what was
+/// typed, at most `SUGGEST_MOST` (Search's `EngineSuggest.parse`).
+fn suggest_parse(data: &[u8], asked: &str) -> Vec<String> {
+    let Ok(Value::Array(top)) = serde_json::from_slice::<Value>(data) else {
+        return Vec::new();
+    };
+    let Some(Value::Array(words)) = top.get(1) else {
+        return Vec::new();
+    };
+    let typed = asked.trim().to_lowercase();
+    let mut seen = std::collections::HashSet::from([typed]);
+    let mut out = Vec::new();
+    for word in words {
+        let Some(word) = word.as_str() else { continue };
+        let clean = word.trim();
+        if clean.is_empty()
+            || clean.chars().count() > 200
+            || clean.contains('\n')
+            || !seen.insert(clean.to_lowercase())
+        {
+            continue;
+        }
+        out.push(clean.to_owned());
+        if out.len() == SUGGEST_MOST {
+            break;
+        }
+    }
+    out
+}
+
+/// Last question's words that still fit what is typed now, while the new answer is
+/// on its way (Search's `askEngine`): rows that came and went with every key would
+/// be a list nobody could read.
+fn suggest_still(previous: &[String], typed: &str, offered: &[String]) -> Vec<String> {
+    let lower = typed.trim().to_lowercase();
+    previous
+        .iter()
+        .filter(|word| {
+            let word = word.to_lowercase();
+            word.starts_with(&lower) && word != lower && !offered.iter().any(|o| o == &word)
+        })
+        .take(SUGGEST_MOST)
+        .cloned()
+        .collect()
+}
+
+/// The fake engine a test run asks instead, if it set one; never read outside one.
+fn suggest_test_endpoint() -> Option<String> {
+    std::env::var_os(identity::PROBE_ENV)?;
+    let raw = text(&Kept::new(), "suggest.testURL");
+    (!raw.trim().is_empty()).then_some(raw)
+}
+
+/// The words on show for this editing: the state's, if they answer what is typed,
+/// and none the field's own rows already say.
+fn suggest_words(editing: &Editing) -> Vec<String> {
+    SUGGEST.with_borrow(|state| {
+        if state.typed != editing.typed.trim() {
+            return Vec::new();
+        }
+        let offered: Vec<String> = editing
+            .offers
+            .iter()
+            .map(|o| o.key.to_lowercase())
+            .collect();
+        state
+            .words
+            .iter()
+            .filter(|word| !offered.contains(&word.to_lowercase()))
+            .take(SUGGEST_MOST)
+            .cloned()
+            .collect()
+    })
+}
+
+fn place_suggest(views: &Views, view: &View, x: f64, top: f64, width: f64) {
+    let Some(editing) = view.editing.as_ref() else {
+        views.suggest.setHidden(true);
+        return;
+    };
+    let words = suggest_words(editing);
+    if words.is_empty() {
+        views.suggest.setHidden(true);
+        return;
+    }
+    // Its card starts where the field's own card ends; with no rows of its own, it
+    // takes their place under the field.
+    let y = if editing.offers.is_empty() {
+        top - offers::SHADOW
+    } else {
+        top - offers::SHADOW + offers::height(editing.offers.len()) - 2.0 * offers::SHADOW
+    };
+    views.suggest.setFrame(NSRect::new(
+        NSPoint::new(x - offers::SHADOW, y),
+        NSSize::new(width + 2.0 * offers::SHADOW, offers::height(words.len())),
+    ));
+    views.suggest.setHidden(false);
+    views.suggest.setNeedsDisplay(true);
+}
+
+/// The card caught up after an answer landed, outside a model change.
+fn refresh_suggest() {
+    with_views(|views| {
+        let Some(view) = rt::read(View::of) else {
+            views.suggest.setHidden(true);
+            return;
+        };
+        let Some(editing) = view.editing.as_ref().filter(|_| view_has_field(views)) else {
+            views.suggest.setHidden(true);
+            return;
+        };
+        let (x, top, width) = offers_geometry(views, editing);
+        place_suggest(views, &view, x, top, width);
+    });
+}
+
+fn suggest_cancel_task() {
+    SUGGEST.with_borrow_mut(|state| {
+        state.round += 1;
+        if let Some(task) = state.task.take() {
+            task.cancel();
+        }
+    });
+}
+
+/// Nothing is to be asked, or shown, any more: the switch off, the field gone, or
+/// words that stay on this Mac.
+fn suggest_clear() {
+    suggest_cancel_task();
+    SUGGEST.with_borrow_mut(|state| {
+        state.typed.clear();
+        state.words.clear();
+    });
+    refresh_suggest();
+}
+
+/// What is typed may be asked about, and the asking itself, a pause after the last
+/// key (Search's `Browser.askEngine` and `EngineSuggester`).
+fn ask_engine_suggest(typed: &str, composing: bool) {
+    if composing {
+        return;
+    }
+    let kept = Kept::new();
+    let engine = Engine::from_raw(&text(&kept, "search.engine")).unwrap_or_default();
+    let test = suggest_test_endpoint();
+    let allowed = flag(&kept, "search.suggest")
+        && suggest_sendable(typed)
+        && rt::read(|browser| {
+            browser.editing().is_some() && keyword::find(typed, &browser.keywords).is_none()
+        })
+        .unwrap_or(false);
+    let Some(url) = allowed
+        .then(|| suggest_url(typed.trim(), engine, test.as_deref()))
+        .flatten()
+    else {
+        suggest_clear();
+        return;
+    };
+    let words = typed.trim().to_owned();
+    let round = SUGGEST.with_borrow_mut(|state| {
+        state.round += 1;
+        if let Some(task) = state.task.take() {
+            task.cancel();
+        }
+        let offered = rt::read(|browser| {
+            browser
+                .editing()
+                .map(|e| {
+                    e.offers
+                        .iter()
+                        .map(|o| o.key.to_lowercase())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+        state.words = suggest_still(&state.words, &words, &offered);
+        state.typed.clone_from(&words);
+        state.round
+    });
+    refresh_suggest();
+    let later = dispatch2::DispatchTime::NOW.time(SUGGEST_PAUSE_NS);
+    let _ = dispatch2::DispatchQueue::main().after(later, move || {
+        let current = SUGGEST.with_borrow(|state| state.round) == round
+            && rt::read(|browser| browser.editing().is_some_and(|e| e.typed.trim() == words))
+                .unwrap_or(false);
+        if current {
+            start_suggest_fetch(&url, &words, round);
+        }
+    });
+}
+
+/// One question, on a session that keeps nothing: no cookies either way, no
+/// credentials, no cache, and no following an engine somewhere else (Search's
+/// `EngineSuggest.session` and `NoRedirects`).
+fn start_suggest_fetch(url: &str, asked: &str, round: u64) {
+    // The session and its state live on the main thread's `SUGGEST`.
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let Some(target) = NSURL::URLWithString(&NSString::from_str(url)) else {
+        return;
+    };
+    let session = SUGGEST.with_borrow_mut(|state| {
+        if state.session.is_none() {
+            let delegate = SuggestDelegate::new();
+            let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
+            // SAFETY: AppKit's own cookie policy constant, read as the value it is.
+            configuration
+                .setHTTPCookieAcceptPolicy(objc2_foundation::NSHTTPCookieAcceptPolicy::Never);
+            configuration.setURLCache(None);
+            configuration
+                .setRequestCachePolicy(NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData);
+            configuration.setTimeoutIntervalForRequest(SUGGEST_PATIENCE);
+            configuration.setTimeoutIntervalForResource(SUGGEST_PATIENCE);
+            // SAFETY: the delegate is kept in `SUGGEST` for the app's life, and every
+            // answer is delivered on the main queue this session is given.
+            let session = unsafe {
+                NSURLSession::sessionWithConfiguration_delegate_delegateQueue(
+                    &configuration,
+                    Some(ProtocolObject::from_ref(&*delegate)),
+                    Some(&NSOperationQueue::mainQueue()),
+                )
+            };
+            state.delegate = Some(delegate);
+            state.session = Some(session);
+        }
+        state.session.clone()
+    });
+    let Some(session) = session else { return };
+    let request = NSURLRequest::requestWithURL_cachePolicy_timeoutInterval(
+        &target,
+        NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData,
+        SUGGEST_PATIENCE,
+    );
+    let asked = asked.to_owned();
+    let answer = RcBlock::new(
+        move |data: *mut NSData,
+              response: *mut NSURLResponse,
+              _error: *mut objc2_foundation::NSError| {
+            // SAFETY: Foundation hands a valid object or null, for the call's length;
+            // the bytes are copied before anything else is done with them.
+            let bytes = unsafe { data.as_ref() }
+                .map(NSData::to_vec)
+                .unwrap_or_default();
+            // SAFETY: as above, a plain read of the response's status.
+            let status = unsafe { response.as_ref() }
+                .and_then(|r| r.downcast_ref::<NSHTTPURLResponse>())
+                .map(NSHTTPURLResponse::statusCode);
+            if status != Some(200) {
+                return;
+            }
+            let words = suggest_parse(&bytes, &asked);
+            // Typed on since, or the field gone: nothing to answer.
+            let current = SUGGEST.with_borrow(|state| state.round) == round
+                && rt::read(|browser| browser.editing().is_some_and(|e| e.typed.trim() == asked))
+                    .unwrap_or(false);
+            if !current {
+                return;
+            }
+            SUGGEST.with_borrow_mut(|state| {
+                state.task = None;
+                state.words = words;
+            });
+            refresh_suggest();
+        },
+    );
+    // SAFETY: a live session and request, and a block kept by the session until the
+    // task ends; the task is kept in `SUGGEST` until it ends or is cancelled.
+    let task = unsafe { session.dataTaskWithRequest_completionHandler(&request, &answer) };
+    SUGGEST.with_borrow_mut(|state| state.task = Some(task.clone()));
+    task.resume();
+}
+
+/// A row of the engine's card was clicked: it is searched for, as Return on that row
+/// in Search. Not through `submit`: the grey ending the field holds for a visited
+/// place would take the words to that place instead of searching them.
+fn pick_suggest_word(word: &str) {
+    suggest_cancel_task();
+    SUGGEST.with_borrow_mut(|state| state.words.clear());
+    refresh_suggest();
+    let word = word.to_owned();
+    rt::dispatch(move |browser| {
+        let Some(editing) = browser.editing().cloned() else {
+            return;
+        };
+        let Some(url) = browser.destination(&word) else {
+            return;
+        };
+        let blank = browser
+            .active_tab()
+            .is_some_and(tap_core::browser::Tab::is_blank);
+        browser.cancel_editing();
+        if editing.launching && !blank {
+            browser.open(Some(&url), true, None);
+        } else if let Some(id) = browser.active() {
+            browser.go(id, &url);
+        }
+    });
+}
+
+define_class!(
+    /// The search engine's rows, in a card of their own under the field's rows. It
+    /// never takes the keyboard: a click on a row is a choice, not a click away.
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "TapSuggest"]
+    struct Suggest;
+
+    impl Suggest {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            self.draw();
+        }
+
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            if let Some(row) = self.row_at(event)
+                && let Some(word) = rt::read(|browser| {
+                    browser.editing().and_then(|e| suggest_words(e).get(row).cloned())
+                })
+                .flatten()
+            {
+                pick_suggest_word(&word);
+            }
+        }
+
+        /// Only the card takes clicks; its shadow's room lets them through.
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
+            // SAFETY: a plain read of a live view's superview.
+            let holder = unsafe { self.superview() };
+            let local = self.convertPoint_fromView(point, holder.as_deref());
+            let card = self.card();
+            let inside = local.x >= card.origin.x
+                && local.x < card.origin.x + card.size.width
+                && local.y >= card.origin.y
+                && local.y < card.origin.y + card.size.height;
+            // SAFETY: the superclass's own hit test, for a point inside the card.
+            inside.then(|| unsafe { msg_send![super(self), hitTest: point] }).flatten()
+        }
+    }
+);
+
+impl Suggest {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: NSView's designated initialiser.
+        unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
+    }
+
+    fn card(&self) -> NSRect {
+        let bounds = self.bounds();
+        NSRect::new(
+            NSPoint::new(offers::SHADOW, offers::SHADOW),
+            NSSize::new(
+                bounds.size.width - 2.0 * offers::SHADOW,
+                bounds.size.height - 2.0 * offers::SHADOW,
+            ),
+        )
+    }
+
+    fn row_rect(&self, row: usize) -> NSRect {
+        let card = self.card();
+        #[allow(clippy::cast_precision_loss)] // a handful of rows
+        let top = card.origin.y + 6.0 + row as f64 * offers::ROW;
+        NSRect::new(
+            NSPoint::new(card.origin.x + 6.0, top),
+            NSSize::new(card.size.width - 12.0, offers::ROW),
+        )
+    }
+
+    fn row_at(&self, event: &NSEvent) -> Option<usize> {
+        let point = self.convertPoint_fromView(event.locationInWindow(), None);
+        let count = rt::read(|browser| browser.editing().map_or(0, |e| suggest_words(e).len()))
+            .unwrap_or(0);
+        (0..count).find(|&row| {
+            let r = self.row_rect(row);
+            point.y >= r.origin.y
+                && point.y < r.origin.y + r.size.height
+                && point.x >= r.origin.x
+                && point.x < r.origin.x + r.size.width
+        })
+    }
+
+    fn draw(&self) {
+        let dark = palette::is_dark(self);
+        let Some(words) = rt::read(|browser| browser.editing().map(suggest_words)).flatten() else {
+            return;
+        };
+        if words.is_empty() {
+            return;
+        }
+        let shadow = NSShadow::new();
+        shadow.setShadowBlurRadius(14.0);
+        shadow.setShadowOffset(NSSize::new(0.0, -3.0));
+        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
+            0.0,
+            if dark { 0.5 } else { 0.16 },
+        )));
+        shadow.set();
+        palette::GROUND.resolve(dark).setFill();
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.card(), 12.0, 12.0).fill();
+        NSShadow::new().set();
+        let engine = Engine::from_raw(&text(&Kept::new(), "search.engine")).unwrap_or_default();
+        let detail = format!(
+            "Search {}",
+            engine.name(&text(&Kept::new(), "search.custom"))
+        );
+        for (row, word) in words.iter().enumerate() {
+            let rect = self.row_rect(row);
+            let text_top = rect.origin.y + (offers::ROW - 17.0) / 2.0;
+            let left = rect.origin.x + 12.0;
+            let width = rect.size.width - 24.0;
+            let main_width = palette::text_width(word).min(width * 0.62);
+            palette::draw_text(
+                word,
+                NSRect::new(
+                    NSPoint::new(left, text_top),
+                    NSSize::new(main_width + 1.0, 17.0),
+                ),
+                &palette::INK.resolve(dark),
+            );
+            let x = left + main_width + 10.0;
+            palette::draw_text(
+                &format!("\u{2014} {detail}"),
+                NSRect::new(
+                    NSPoint::new(x, text_top),
+                    NSSize::new((left + width - x).max(0.0), 17.0),
+                ),
+                &palette::MUTED.resolve(dark),
+            );
+        }
+    }
+}
+
+define_class!(
+    /// The suggestions session's delegate: an engine that answers by sending us
+    /// somewhere else isn't followed there — the words would go to a host
+    /// nobody picked (Search's `NoRedirects`).
+    // No thread kind: a session delegate is handed to Foundation, which asks that
+    // it be sendable; its one answer is always given on the main queue below.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = AllocAnyThread]
+    #[name = "TapSuggestDelegate"]
+    struct SuggestDelegate;
+
+    unsafe impl NSObjectProtocol for SuggestDelegate {}
+
+    unsafe impl NSURLSessionDelegate for SuggestDelegate {}
+
+    unsafe impl NSURLSessionTaskDelegate for SuggestDelegate {
+        #[unsafe(method(URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:))]
+        #[allow(non_snake_case)] // Foundation's own name for it
+        fn URLSession_task_willPerformHTTPRedirection_newRequest_completionHandler(
+            &self,
+            _session: &NSURLSession,
+            _task: &NSURLSessionTask,
+            _response: &NSHTTPURLResponse,
+            _request: &NSURLRequest,
+            handler: &DynBlock<dyn Fn(*mut NSURLRequest)>,
+        ) {
+            handler.call((std::ptr::null_mut(),));
+        }
+    }
+);
+
+impl SuggestDelegate {
+    fn new() -> Retained<Self> {
+        let this = Self::alloc().set_ivars(());
+        // SAFETY: NSObject's designated initialiser.
+        unsafe { msg_send![super(this), init] }
     }
 }
 
@@ -930,7 +1692,9 @@ define_class!(
                 .currentEditor()
                 .and_then(|editor| editor.downcast::<NSTextView>().ok())
                 .is_some_and(|editor| editor.hasMarkedText());
+            let asked = typed.clone();
             rt::dispatch(move |browser| browser.set_typed(&typed, composing));
+            ask_engine_suggest(&asked, composing);
         }
 
         #[unsafe(method(control:textView:doCommandBySelector:))]
@@ -985,5 +1749,107 @@ impl FieldDelegate {
         let this = Self::alloc(mtm).set_ivars(());
         // SAFETY: NSObject's designated initialiser.
         unsafe { msg_send![super(this), init] }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn floating_only_floats_over_a_page_with_something_on_it() {
+        assert_eq!(launch_action(true, true, false), Launch::Keep);
+        assert_eq!(launch_action(true, true, true), Launch::ReuseBlank);
+        assert_eq!(launch_action(false, true, false), Launch::OpenBlank);
+        assert_eq!(launch_action(false, true, true), Launch::ReuseBlank);
+        assert_eq!(launch_action(false, false, false), Launch::Keep);
+    }
+
+    #[test]
+    fn only_plain_words_are_sent_for_suggestions() {
+        for sent in ["coffee", "coffee near me", "how do i boil eggs", "café"] {
+            assert!(suggest_sendable(sent), "{sent}");
+        }
+        for kept in [
+            "",
+            "example.com",
+            "https://example.com/x",
+            "localhost:3000",
+            "person@example.com",
+            "mailto:person@example.com",
+            "/Users/me/report.pdf",
+            "~/notes.txt",
+            "./report.pdf",
+            "hunter2hunter2",
+            "4111111111111111",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+        ] {
+            assert!(!suggest_sendable(kept), "{kept}");
+        }
+        assert!(!suggest_sendable(&"word ".repeat(30)));
+    }
+
+    #[test]
+    fn suggestion_answers_are_cleaned_and_capped() {
+        let data =
+            br#"["coff",[" Coffee ","coffee","coffee near me","coffee","a","b","c","d","e"]]"#;
+        assert_eq!(
+            suggest_parse(data, "coff"),
+            ["Coffee", "coffee near me", "a", "b", "c", "d"]
+        );
+        assert_eq!(suggest_parse(b"not json", "coff"), Vec::<String>::new());
+        assert_eq!(suggest_parse(br#"["coff"]"#, "coff"), Vec::<String>::new());
+        assert_eq!(
+            suggest_parse(br#"["coff",[1,2]]"#, "coff"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn suggestion_questions_go_to_the_engine_chosen_and_nowhere_else() {
+        assert_eq!(
+            suggest_url("cats & dogs", Engine::Google, None).as_deref(),
+            Some(
+                "https://suggestqueries.google.com/complete/search?client=firefox&q=cats%20%26%20dogs"
+            )
+        );
+        assert_eq!(
+            suggest_url("cats", Engine::DuckDuckGo, None).as_deref(),
+            Some("https://duckduckgo.com/ac/?q=cats&type=list")
+        );
+        assert_eq!(suggest_url("cats", Engine::Custom, None), None);
+        assert_eq!(
+            suggest_url("cats", Engine::Custom, Some("http://127.0.0.1:9/s?q=%s")).as_deref(),
+            Some("http://127.0.0.1:9/s?q=cats"),
+            "a test run's fake engine on this Mac"
+        );
+        assert_eq!(
+            suggest_url("cats", Engine::Custom, Some("http://example.com/s?q=%s")),
+            None,
+            "plain http is never asked"
+        );
+    }
+
+    #[test]
+    fn words_that_still_fit_stay_while_the_next_answer_comes() {
+        let previous = vec![
+            "coffee".to_owned(),
+            "coffee near me".to_owned(),
+            "tea".to_owned(),
+        ];
+        assert_eq!(
+            suggest_still(&previous, "coff", &[]),
+            ["coffee", "coffee near me"]
+        );
+        assert_eq!(
+            suggest_still(&previous, "coffee", &[]),
+            ["coffee near me"],
+            "not the words themselves again"
+        );
+        assert_eq!(
+            suggest_still(&previous, "coff", &["coffee".to_owned()]),
+            ["coffee near me"],
+            "and not a row the field already shows"
+        );
     }
 }

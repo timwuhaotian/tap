@@ -10,6 +10,7 @@ mod crash;
 mod dialogs;
 mod downloads;
 mod findbar;
+mod float;
 mod icons;
 mod links;
 mod menu;
@@ -19,6 +20,7 @@ mod page_find;
 mod palette;
 mod prefs;
 mod profile;
+mod reader;
 mod rt;
 mod settings;
 mod sleep;
@@ -71,6 +73,8 @@ pub fn run() {
     rt::install(browser);
     prefs::apply(mtm);
     window::open(mtm, &commands);
+    reader::install();
+    float::install(mtm);
     bench::start();
     sleep::start(mtm);
     if let Some(item) = update_item {

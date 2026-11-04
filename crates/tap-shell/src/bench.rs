@@ -6,8 +6,12 @@
 //! line out, one request per connection, and always exactly one answer: a request that
 //! nothing answers is answered with an error after its patience runs out.
 //!
-//! Listening only on a test run (`TAP_PROBE`) for now: such a world holds nothing of
-//! yours. Search's Settings switch and keychain consent come with Settings.
+//! Listening on a test run (`TAP_PROBE`) always: such a world holds nothing of yours,
+//! and the test worlds are set up by scripts that expect the socket there. Off a test
+//! run, only while Settings' `bench` switch is on. Search also demands a keychain
+//! consent mark before it honours that switch, so a defaults write alone can't open
+//! it; Tap has no Security-framework link to keep such a mark with, so here the
+//! switch alone gates it and the same-uid check below is the guard.
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -15,7 +19,11 @@ use std::{
         fs::PermissionsExt,
         net::{UnixListener, UnixStream},
     },
-    sync::mpsc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -47,27 +55,118 @@ use crate::{
 /// The longest request line read: a line that never ends is not a request.
 const LONGEST: usize = 4_000_000;
 
-/// Starts listening, on a test run.
+/// The listening thread's stop flag, while there is one. Kept so the Settings switch
+/// can close the socket again; a blocking `accept` couldn't be woken to notice.
+static CONTROL: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+
+/// Whether a run should listen: a test world always (its scripts set the world up and
+/// drive it through the socket, whatever its copied-in settings say), a real one only
+/// while the switch is on.
+fn should_listen(test_run: bool, switched_on: bool) -> bool {
+    test_run || switched_on
+}
+
+fn test_run() -> bool {
+    identity::world(std::env::var(identity::PROBE_ENV).ok().as_deref()).is_some()
+}
+
+/// At launch, and whenever the switch moves (Settings, or a `settings` request here):
+/// listening follows the switch, and stops following it the moment it goes off.
+pub fn refresh() {
+    let on = should_listen(
+        test_run(),
+        tap_core::settings_index::flag(&crate::prefs::Kept::new(), "bench"),
+    );
+    if on {
+        listen();
+    } else {
+        stop();
+    }
+}
+
+/// Starts listening, if this run should. Called once at launch; the switch moving is
+/// [`refresh`]'s business.
 pub fn start() {
-    if std::env::var_os(identity::PROBE_ENV).is_none() {
-        return;
+    refresh();
+}
+
+/// Closes the socket and takes its file away, so a script can see the bench is off
+/// rather than knock on a door nobody answers.
+pub fn stop() {
+    let flag = CONTROL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(flag) = flag {
+        flag.store(true, Ordering::Relaxed);
+        let _ = std::fs::remove_file(store::file("bench.sock"));
+    }
+}
+
+/// Whether something is listening now, for the bench's own `settings` answer.
+pub fn running() -> bool {
+    CONTROL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|flag| !flag.load(Ordering::Relaxed))
+}
+
+fn listen() {
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let mut control = CONTROL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if control
+            .as_ref()
+            .is_some_and(|flag| !flag.load(Ordering::Relaxed))
+        {
+            return;
+        }
+        *control = Some(stop.clone());
     }
     let path = store::file("bench.sock");
     let _ = std::fs::remove_file(&path);
     let Ok(listener) = UnixListener::bind(&path) else {
         eprintln!("bench: can't listen at {}", path.display());
+        stop.store(true, Ordering::Relaxed);
         return;
     };
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    let _ = thread::Builder::new()
+    if listener.set_nonblocking(true).is_err() {
+        stop.store(true, Ordering::Relaxed);
+        return;
+    }
+    let mine = stop.clone();
+    let thread_stop = stop.clone();
+    let spawned = thread::Builder::new()
         .name("tap.bench".into())
         .spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let _ = thread::Builder::new()
-                    .name("tap.bench.client".into())
-                    .spawn(move || serve(stream));
+            // Polled, not blocking: `stop` has to be able to end this between knocks.
+            while !thread_stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let _ = thread::Builder::new()
+                            .name("tap.bench.client".into())
+                            .spawn(move || serve(stream));
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(25)),
+                }
+            }
+            let mut control = CONTROL
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if control
+                .as_ref()
+                .is_some_and(|flag| Arc::ptr_eq(flag, &mine))
+            {
+                *control = None;
             }
         });
+    if spawned.is_err() {
+        stop.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Whether the other end is this user.
@@ -85,6 +184,10 @@ fn serve(stream: UnixStream) {
     if !same_user(&stream) {
         return;
     }
+    // The listener is nonblocking so `stop` can end it; an accepted socket inherits
+    // that on macOS, and a nonblocking `write_all` then drops everything past the
+    // socket buffer instead of waiting (a `settings` answer is bigger than it is).
+    let _ = stream.set_nonblocking(false);
     let Ok(clone) = stream.try_clone() else {
         return;
     };
@@ -311,6 +414,8 @@ fn handle(request: &Value, reply: Reply) {
                     }
                 }
                 crate::prefs::apply(mtm);
+                // A `bench` setting among them opens or closes this very socket.
+                refresh();
                 settings::changed();
             }
             if let Some(page) = text("page")
@@ -325,6 +430,10 @@ fn handle(request: &Value, reply: Reply) {
                 settings::find(&words);
             }
             let mut out = settings::describe();
+            out["bench"] = json!({
+                "on": tap_core::settings_index::flag(&crate::prefs::Kept::new(), "bench"),
+                "listening": running(),
+            });
             out["engine"] = json!(rt::read(|b| b.engine.raw()));
             out["keywords"] = json!(rt::read(|b| b
                 .keywords
@@ -709,4 +818,22 @@ fn key_equivalent(mtm: MainThreadMarker, key: &str, modifiers: &[String]) -> boo
     NSApplication::sharedApplication(mtm)
         .mainMenu()
         .is_some_and(|menu: Retained<_>| menu.performKeyEquivalent(&event))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_test_world_always_listens_and_a_real_one_only_when_switched_on() {
+        assert_eq!(
+            [
+                should_listen(true, true),
+                should_listen(true, false),
+                should_listen(false, true),
+                should_listen(false, false),
+            ],
+            [true, true, true, false]
+        );
+    }
 }

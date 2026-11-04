@@ -7,6 +7,37 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.3 — 2026-11-04
+
+Twenty-six more Settings rows work, so Settings now shows 53 of its 81 rows and
+every one of them does what it says.
+
+- **Privacy**: Block ads and trackers (a built-in rule list in WebKit's own
+  blocker, YouTube's ads included, pausable per site), Prevent cross-site
+  tracking as in Safari, and Let sites ask to send notifications (asked in
+  Tap's name, the answer kept per site). Forget choices clears what sites were
+  allowed or refused.
+- **Browsing**: search suggestions from your engine as you type (never for an
+  address, never from a private tab), Reading mode (⇧⌘R; a site's own Markdown
+  when it has one, following light and dark), the floating video (Tap's window
+  or the system's picture in picture, out on its own when you leave the tab or
+  Tap), Pages at 120 Hz, Darken pages that stay light, Open sized pop-ups in
+  small windows, Press Esc twice to leave full screen, and Scroll with the
+  middle button.
+- **Tabs and the tab bar**: site icons or letters, how far you've read on the
+  tab you're on, tabs that give when pressed, tab numbers while ⌘ is held, the
+  address on the tab you're on, New tab in a floating field, Reduce animations
+  in Low Power Mode, and the downloads button that stays (and with it the
+  Keyboard & Mouse page is back in the rail).
+- **Passwords** is back in the rail: Open… opens the macOS Passwords app.
+  Saving and filling in Tap itself are still to come.
+- **About**: Send Feedback opens a draft with the version in it, and Let a
+  script drive Tap now really turns the bench socket off and on (a test run's
+  socket stays, as it must).
+- A bench answer larger than the socket's buffer (the whole of Settings, for
+  one) is no longer cut short: the listening socket is nonblocking so the
+  switch can close it, and an accepted one no longer inherits that.
+
 ## 0.1.2 — 2026-11-04
 
 Settings you can use, more of Search's tab behaviour, and Search's own profile

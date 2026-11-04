@@ -33,12 +33,15 @@ with its own name and icon, and with fixes of its own.
 - **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
   ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon.
 - **Tab groups**: a group's name heads its tabs, and a click folds it away or opens it.
-- **Settings** (⌘,), laid out as Search's, with only the settings that work: where new
-  tabs go, what closing one lands on, background links that wait, closing tabs you leave
-  alone, a fresh window at launch, sleeping tabs, the search engine and site shortcuts,
-  "settings" or "new tab" typed in the field, asking where to save, videos that wait for
-  a click, page zoom, removing click trackers from links, Global Privacy Control, light
-  or dark, downloads folder, default browser, clearing data, updates.
+- **Settings** (⌘,), laid out as Search's, with only the settings that work — 53 of
+  its 81 rows: where new tabs go, what closing one lands on, background links that wait,
+  closing tabs you leave alone, a fresh window at launch, sleeping tabs, the search
+  engine (with suggestions and site shortcuts), "settings" or "new tab" typed in the
+  field, asking where to save, videos that wait for a click, page zoom, light or dark
+  (and pages that stay light, darkened), downloads, default browser, clearing data,
+  updates. Blocking ads and trackers, reading mode (⇧⌘R), the floating video,
+  120 Hz pages, middle-button scrolling and the tab bar's icons, reading progress
+  and ⌘ numbers are all in there too.
 - **Your profile on your other Mac.** File › Export Tap Profile… writes one offline
   file of your tabs and their groups, history, bookmarks and settings, and offers it to
   AirDrop; open it on the other Mac and it all comes in, groups folded or open as they
@@ -70,10 +73,12 @@ with its own name and icon, and with fixes of its own.
 Everything else Search does, including:
 
 - Bookmarks, the History page, private windows, and tabs down the side, pinned tabs,
-  making and naming groups, Spaces and profiles, two pages side by side.
-- **A content blocker that runs before the page**, in WebKit's network layer.
-- **Reading mode, picture-in-picture, hiding any element for good, dark pages.**
-- **Passwords and passkeys** in the macOS keychain, and **Chrome extensions** on
+  making and naming groups, Spaces and profiles, two pages side by side, peeking at
+  a link and the small window for links from other apps.
+- **Hiding any element for good**, and Search's fuller dark-pages engine (0.1.3
+  darkens a light page's colours; it doesn't sample the page as Search does).
+- **Saving and filling passwords, and passkeys**, in the macOS keychain (Settings ›
+  Passwords opens the Passwords app meanwhile), and **Chrome extensions** on
   WebKit's own extension engine.
 - **Import** from Chrome, Arc, Brave, Edge, Dia, Safari and Firefox, including their
   open tabs and tab groups ([#841](https://github.com/driceroland/Search/pull/841)).

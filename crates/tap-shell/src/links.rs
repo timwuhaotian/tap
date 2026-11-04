@@ -11,7 +11,13 @@
 //! AirDrop on the other Mac, is brought in rather than shown (`profile::open_file`).
 //!
 //! Not yet: Search's small window for links (Little), the Dock menu's New Window, and
-//! staying open with no window.
+//! staying open with no window. Little is blocked on the window and web layers, not
+//! on this file: Tap has the one window (`window::VIEWS`) and `web.rs` makes a web
+//! view only for a tab in that window's row, staged in its stage, so a link's page
+//! has nowhere of its own to live, and no way to be kept by moving it into the row
+//! already loaded. It needs an off-row tab and web view there first (as a peek
+//! would); until then links take the ordinary path below, whatever `links.little`
+//! says, rather than a small window that is secretly the main one.
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSApplication;

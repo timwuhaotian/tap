@@ -9,7 +9,8 @@
 //! closing it cancels the download.
 //!
 //! Not yet: the list of downloads (⇧⌘J) and `downloads.json`, progress in the strip,
-//! cancel and resume, and the PDF bar's own save button.
+//! cancel and resume, and the PDF bar's own save button. Until the list lands, the
+//! strip's downloads door opens the folder downloads are saved in.
 
 use std::{cell::RefCell, path::PathBuf, ptr};
 
@@ -18,8 +19,9 @@ use objc2::{
     MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
     runtime::{NSObject, NSObjectProtocol, ProtocolObject},
+    sel,
 };
-use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
+use objc2_app_kit::{NSButton, NSImage, NSModalResponseOK, NSSavePanel, NSWorkspace};
 use objc2_foundation::{
     NSData, NSDistributedNotificationCenter, NSError, NSString, NSURL, NSURLResponse,
 };
@@ -79,6 +81,76 @@ pub fn folder() -> PathBuf {
     crate::settings::downloads_folder()
 }
 
+/// Whether the strip's downloads door is in the row (Search's `FetchDoor.shows`):
+/// always with Settings › Always show the downloads button, otherwise only while
+/// a file is coming in.
+#[must_use]
+pub fn shows_button(always: bool, going: usize) -> bool {
+    always || going > 0
+}
+
+/// The folder downloads are saved in, in the Finder: what the door opens, until
+/// Tap has a downloads list of its own to open instead.
+fn open_folder() {
+    let path = folder().display().to_string();
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path));
+    NSWorkspace::sharedWorkspace().openURL(&url);
+}
+
+define_class!(
+    /// The downloads door's target: the one click it takes.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "TapDownloadsDoor"]
+    struct DoorTarget;
+
+    unsafe impl NSObjectProtocol for DoorTarget {}
+
+    impl DoorTarget {
+        #[unsafe(method(open:))]
+        fn open_action(&self, _sender: Option<&objc2::runtime::AnyObject>) {
+            open_folder();
+        }
+    }
+);
+
+impl DoorTarget {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: NSObject's designated initialiser.
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+thread_local! {
+    /// The door's target, kept for the app's life beside the delegates below.
+    static DOOR: RefCell<Option<Retained<DoorTarget>>> = const { RefCell::new(None) };
+}
+
+/// The strip's downloads door (Search's `FetchDoor`): an arrow at rest. The window
+/// shows and hides it (`window::refresh_fetch_door`); a click opens the folder.
+pub fn button(mtm: MainThreadMarker) -> Retained<NSButton> {
+    let target =
+        DOOR.with_borrow_mut(|slot| slot.get_or_insert_with(|| DoorTarget::new(mtm)).clone());
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str("arrow.down.circle"),
+        Some(&NSString::from_str("Downloads")),
+    );
+    // SAFETY: the target outlives the button (both live for the app's life in `DOOR`
+    // and the window), and `open:` takes the sender, as an action must.
+    let button = unsafe {
+        NSButton::buttonWithImage_target_action(
+            &image.unwrap_or_default(),
+            Some(&target),
+            Some(sel!(open:)),
+            mtm,
+        )
+    };
+    button.setBordered(false);
+    button.setToolTip(Some(&NSString::from_str("Downloads")));
+    button
+}
+
 /// Files finished so far, for the bench.
 pub fn done() -> Vec<String> {
     DONE.with_borrow(|done| done.iter().map(|p| p.display().to_string()).collect())
@@ -103,6 +175,7 @@ pub fn keep(mtm: MainThreadMarker, download: &WKDownload, tab: Option<TabId>) {
     // SAFETY: the delegate lives for the app's life in `DELEGATE`, longer than any download.
     unsafe { download.setDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
     GOING.with_borrow_mut(|going| going.push((download.retain(), None, tab)));
+    crate::window::downloads_moved();
 }
 
 fn same(a: &WKDownload, b: &WKDownload) -> bool {
@@ -167,11 +240,13 @@ define_class!(
                 }
             }
             DONE.with_borrow_mut(|done| done.push(file));
+            crate::window::downloads_moved();
         }
 
         #[unsafe(method(download:didFailWithError:resumeData:))]
         fn failed(&self, download: &WKDownload, error: &NSError, _resume: Option<&NSData>) {
             let file = release(download);
+            crate::window::downloads_moved();
             eprintln!(
                 "A download failed ({}): {}",
                 file.map(|f| f.display().to_string()).unwrap_or_default(),
@@ -186,5 +261,18 @@ impl DownloadDelegate {
         let this = Self::alloc(mtm).set_ivars(());
         // SAFETY: NSObject's designated initialiser.
         unsafe { msg_send![super(this), init] }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_door_is_always_there_only_when_asked_and_otherwise_while_downloading() {
+        assert!(shows_button(true, 0));
+        assert!(shows_button(true, 2));
+        assert!(shows_button(false, 1));
+        assert!(!shows_button(false, 0));
     }
 }

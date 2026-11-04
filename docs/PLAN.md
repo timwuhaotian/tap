@@ -800,6 +800,66 @@ Settings can't really be used: fix it"), then released as 0.1.2 ("发版").
   "settings" in the field, a fresh start keeping the imported 22 grouped and 2 named
   tabs; the Tabs page by eye. Not checked on a real video: `media.click`.
 
+### 0.1.3 — Twenty-six more Settings rows live
+
+At the user's request (2026-11-04: "Settings 大部分不能用的功能帮我全部实现",
+then release a patch). `settings_index::LIVE` goes 27 → 53 of 81; the bench
+`settings` answer lists every one `shown`, on a macOS 27 Mac (the two WebKit-gated
+privacy rows included).
+
+- [x] **Page level** (`web.rs`, new `shield.rs`): `tabs.popupWindows`, `sites.keep`
+  (WebKit's `_setResourceLoadStatisticsEnabled:` + cookie policy, as Search),
+  `notifications.ask` (the private permission delegate, answers kept as
+  `capture.<origin>|notifications`), `pages.120` (the 60 FPS feature flag + IOKit
+  power watch), `pages.dusk` (Search's filter fallback only: root/body luminance,
+  no sampling engine, no per-site memory), `shield` (a built-in
+  `WKContentRuleListStore` list, per-site `shield.paused`, YouTube page-data
+  stripping + skipper), `fullscreen.escapeTwice` (an event monitor; WebKit has no
+  key hook in the UI delegate), `autocorrect` (`WebAutomaticSpellingCorrectionEnabled`,
+  as Search), `autoscroll` (Search's `AutoScroll.swift` script, `__tap` names),
+  `motion.light` (the strip's give lands at once while Low Power Mode or a
+  serious thermal state holds; Tap has no other chrome springs yet).
+- [x] **Tab bar** (`strip.rs`, read from `Kept` on every draw): `glyph`,
+  `tabs.reading` (a 200 ms scroll poll through Tap's content world),
+  `tabs.give`, `tabs.shortcuts`, `tabs.address` (a registrable-domain table, not
+  the Public Suffix List; IDN stays punycode, never decoded).
+- [x] **Actions** (`settings.rs`, `bench.rs`): `about.feedback` (a GitHub draft
+  with the version; Search's mailto goes to Search's author, Tap's contact is
+  still the §14 open item), `privacy.forget` (deletes `capture.*`/`nofloat.*`
+  as Search does — no writer of those keys exists yet, so it is a correct no-op
+  until the capture delegate lands), `passwords.open` (the macOS Passwords app,
+  not a Tap page: there is no vault yet), `bench` (the switch gates the real
+  socket; a test world's always listens). **Bench fix found by hand:** the
+  nonblocking listener's accepted sockets inherited nonblocking on macOS, so a
+  reply past the socket buffer (a full `settings` answer) was cut at 8 KB;
+  `serve` puts its socket back to blocking.
+- [x] **Window and field** (`window.rs`, `downloads.rs`): `search.suggest`
+  (Search's endpoints and sendability rules, a card under the offers — the
+  model's offer list has no injection point, so arrow keys don't reach them),
+  `newtab.floating` (gated at `window::update`, the one place all ⌘T paths
+  pass), `downloads.button` (the folder, there being no Downloads page yet).
+- [x] **Reader and float** (new `reader.rs`, `float.rs`): `reader.twins`
+  (⇧⌘R; Search's same-origin Markdown twin, else a scored prose guess),
+  `reader.follows` (the article-corner look switch is Search's stage overlay
+  and isn't in; a kept `reader.look` is honoured), `float.style` (system PiP,
+  or Tap's panel with the page's own view moved into it), `float.own` (a 0.5 s
+  poll of the active tab, Search's known-players table only).
+- Still hidden, with their triggers: the sidebar family and `pins.list`
+  (`tabs.layout` — M3's column), `bookmarks.bar` (no bookmarks surface — M3),
+  `links.little`/`links.peek` (off-row web views — M3, hooks named in
+  `links.rs`/`window.rs`), `swipe.history` (WebKit owns the gesture — M5),
+  `arc.setup`/`arc.import`, `spaces`, `profiles`, `pins.keep` (M4/M6),
+  `passwords.save`/`passwords.fill`/`passkeys`/`passwords.apple` (M5's vault),
+  Extensions (M7), and the `note.*` find-only rows whose always-there features
+  (Split View, side panel, keep-awake, tab-to-search, shared pins, pin-back,
+  switcher keys, link bubble, flick) aren't Tap's yet. Their keys still travel.
+- Checked: `cargo test` (tap-core 86, tap-shell 37, tap-import 8), clippy
+  `-D warnings`, nightly fmt; through the bench in a test world: 53 live = 53
+  shown, autoscroll arriving and leaving an open page, `__tapDusk` on a new tab
+  in dark, `navigator.globalPrivacyControl` true, Settings open at Appearance.
+  Not checked by hand: popup window sizes, 120 Hz feel, Esc-twice, the
+  notification sheet, Reader and float on real video sites, shield on YouTube.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -1219,6 +1279,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | No more pull requests ("后面不要PR了，改动直接在main分支推送发布版本"): changes are committed on `main`, pushed and shipped as a release. The upstream Search PRs (#841, #845, #849) aren't updated; their behaviour lives in Tap, and Search-side fixes stay local. |
 | 2026-11-04 | At the user's request ("为什么settings里面的大部分选项都没办法真实的使用，修复优化"), Settings shows only the rows Tap acts on, replacing 0.1.1's dimmed rows, and twelve more rows are made live (§8 "0.1.2"). The rest come back as their features land; their values are kept and travel meanwhile. |
 | 2026-11-04 | At the user's request ("全部完成后，发布0.1.0版本"), 0.1.0 is released once M2 is done, rather than waiting for full parity at 1.0: browsing, the field, history, page questions, downloads, find, sleeping tabs, session, site icons, links from other apps and #849. `releases/` is committed from 0.1.0; the README says what isn't in yet. Full parity stays the bar for 1.0. Not in 0.1.0 and needed before people rely on it: the updater (M8 in the plan, ported from Kil). |
+| 2026-11-04 | At the user's request ("Settings 大部分不能用的功能帮我全部实现", then a patch release), 0.1.3 makes 26 more Settings rows live (53 of 81, §8 "0.1.3"). The rows behind whole milestones (sidebar column, Spaces/profiles/pins, the passwords vault, extensions) stay hidden until those land; reduced forms are marked where they are (dusk, passwords.open, downloads.button, search.suggest). |
 
 ## Appendix A — Parity tracker
 
