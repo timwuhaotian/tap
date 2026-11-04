@@ -355,6 +355,19 @@ fn reach() -> Result<(), String> {
     ))
 }
 
+/// The answer after the follow-up wait: a failed wait replaces it, so its
+/// error decides the exit code even for `act`, whose tab nests below.
+fn after_wait(command: &Command, mut answer: Value, waited: Value) -> Value {
+    if waited.get("error").is_some() {
+        waited
+    } else if matches!(command, Command::Act { .. }) {
+        answer["tab"] = waited;
+        answer
+    } else {
+        waited
+    }
+}
+
 /// Runs a command and says how it went.
 pub fn run(args: &[String]) -> ExitCode {
     let json = args.iter().any(|a| a == "--json");
@@ -393,13 +406,12 @@ pub fn run(args: &[String]) -> ExitCode {
         let waited = ask(&json!({ "do": "wait", "id": id, "seconds": 20 })).unwrap_or(Value::Null);
         if json {
             println!("{waited}");
+            if waited.get("error").is_some() {
+                return ExitCode::FAILURE;
+            }
             return ExitCode::SUCCESS;
         }
-        if matches!(command, Command::Act { .. }) {
-            answer["tab"] = waited;
-        } else {
-            answer = waited;
-        }
+        answer = after_wait(&command, answer, waited);
     }
     if let Some(error) = answer.get("error") {
         if json {
@@ -512,6 +524,29 @@ mod tests {
              [e4] link \"Help\" → https://example.com/help\n\
              (2 more not listed)"
         );
+    }
+
+    #[test]
+    fn a_failed_wait_replaces_the_answer_so_it_fails() {
+        let click = parse(&args("click 4 e1")).unwrap();
+        let answer = json!({ "clicked": {} });
+        let waited = json!({ "error": "no such tab" });
+        let settled = after_wait(&click, answer, waited.clone());
+        assert_eq!(settled, waited);
+        assert!(settled.get("error").is_some());
+    }
+
+    #[test]
+    fn a_finished_wait_nests_below_an_act() {
+        let click = parse(&args("click 4 e1")).unwrap();
+        let answer = json!({ "clicked": {} });
+        let waited = json!({ "tab": {} });
+        assert_eq!(
+            after_wait(&click, answer.clone(), waited.clone()),
+            json!({ "clicked": {}, "tab": { "tab": {} } })
+        );
+        let go = Command::Go("4".to_owned(), "https://example.com/".to_owned());
+        assert_eq!(after_wait(&go, answer, waited.clone()), waited);
     }
 
     #[test]
