@@ -161,10 +161,7 @@ fn draw_row(offer: &Suggestion, rect: NSRect, dark: bool) {
     let main_width = palette::text_width(&main).min(width * 0.62);
     palette::draw_text(
         &main,
-        NSRect::new(
-            NSPoint::new(left, text_top),
-            NSSize::new(main_width + 1.0, 17.0),
-        ),
+        NSRect::new(NSPoint::new(left, text_top), NSSize::new(main_width, 17.0)),
         &palette::INK.resolve(dark),
     );
     if !detail.is_empty() {

@@ -304,7 +304,7 @@ impl AddressBar {
                 && point.y < rect.origin.y + rect.size.height
         };
         if inside(badge_rect(capsule)) {
-            self.security_menu(badge_rect(capsule));
+            self.security_menu(capsule);
         } else if inside(capsule) {
             rt::dispatch(|browser| {
                 if browser.editing().is_none() {
@@ -318,7 +318,7 @@ impl AddressBar {
     }
 
     /// What the connection is, under the badge.
-    fn security_menu(&self, badge: NSRect) {
+    fn security_menu(&self, capsule: NSRect) {
         let Some(shown) = rt::read(Shown::of) else {
             return;
         };
@@ -343,10 +343,15 @@ impl AddressBar {
                     &NSString::from_str(""),
                 )
             };
-            item.setEnabled(false);
+            // VoiceOver skips disabled rows, so these stay enabled with no action to run.
+            item.setEnabled(true);
             menu.addItem(&item);
         }
-        let at = NSPoint::new(badge.origin.x, badge.origin.y + badge.size.height + 4.0);
+        // Under the capsule, not the badge, so the menu clears the capsule's rounded foot.
+        let at = NSPoint::new(
+            capsule.origin.x + 4.0,
+            capsule.origin.y + capsule.size.height + 4.0,
+        );
         menu.popUpMenuPositioningItem_atLocation_inView(None, at, Some(self));
     }
 
@@ -387,22 +392,25 @@ impl AddressBar {
         if !shown.editing {
             draw_address(&shown, text_rect(capsule), dark);
         }
-        if shown.loading {
+        if shown.loading && !shown.editing {
             // Along the capsule's foot, as far as the load has come.
-            let done = shown.progress.clamp(0.08, 1.0);
-            NSColor::controlAccentColor().setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                NSRect::new(
-                    NSPoint::new(
-                        capsule.origin.x + palette::RADIUS,
-                        capsule.origin.y + capsule.size.height - 2.5,
+            // From zero, so an early load shows nothing yet rather than a stub.
+            let done = shown.progress.clamp(0.0, 1.0);
+            if done > 0.0 {
+                NSColor::controlAccentColor().setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                    NSRect::new(
+                        NSPoint::new(
+                            capsule.origin.x + palette::RADIUS,
+                            capsule.origin.y + capsule.size.height - 2.5,
+                        ),
+                        NSSize::new((capsule.size.width - 2.0 * palette::RADIUS) * done, 2.0),
                     ),
-                    NSSize::new((capsule.size.width - 2.0 * palette::RADIUS) * done, 2.0),
-                ),
-                1.0,
-                1.0,
-            )
-            .fill();
+                    1.0,
+                    1.0,
+                )
+                .fill();
+            }
         }
     }
 }

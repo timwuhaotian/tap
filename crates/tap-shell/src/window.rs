@@ -736,14 +736,13 @@ fn place_offers(views: &Views, view: &View) {
     }
 }
 
-/// What a launching (⌘T) field becomes, once `newtab.floating` has its say
-/// (Search's `Browser.launch`): kept floating only over a page that is showing
-/// something; anywhere else ⌘T is an ordinary new tab, made at once.
+/// What a launching (⌘T) field becomes, once `newtab.floating` has its say.
+/// Tap differs from Search's `Browser.launch` here: Search reuses a blank tab in
+/// front, so repeated ⌘T never leaves a row of empty tabs; Tap always makes a new
+/// blank tab, so new tabs pile up and each one closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Launch {
     Keep,
-    /// The tab in front is already blank: the field opens on it, in the strip.
-    ReuseBlank,
     /// A new blank tab is made now, and the field opens on it, in the strip.
     OpenBlank,
 }
@@ -751,8 +750,6 @@ enum Launch {
 fn launch_action(floating: bool, launching: bool, blank: bool) -> Launch {
     if !launching || (floating && !blank) {
         Launch::Keep
-    } else if blank {
-        Launch::ReuseBlank
     } else {
         Launch::OpenBlank
     }
@@ -775,10 +772,6 @@ fn queue_launch_conversion() {
             blank,
         ) {
             Launch::Keep => {}
-            Launch::ReuseBlank => {
-                browser.cancel_editing();
-                browser.begin_editing(false);
-            }
             Launch::OpenBlank => {
                 browser.open(None, true, None);
                 browser.begin_editing(false);
@@ -1865,9 +1858,9 @@ mod tests {
     #[test]
     fn floating_only_floats_over_a_page_with_something_on_it() {
         assert_eq!(launch_action(true, true, false), Launch::Keep);
-        assert_eq!(launch_action(true, true, true), Launch::ReuseBlank);
+        assert_eq!(launch_action(true, true, true), Launch::OpenBlank);
         assert_eq!(launch_action(false, true, false), Launch::OpenBlank);
-        assert_eq!(launch_action(false, true, true), Launch::ReuseBlank);
+        assert_eq!(launch_action(false, true, true), Launch::OpenBlank);
         assert_eq!(launch_action(false, false, false), Launch::Keep);
     }
 

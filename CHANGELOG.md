@@ -14,6 +14,16 @@ Chrome refinement, no behaviour change.
 - **The live tab reads as a plate**: a hairline edge in both themes, and the
   hovered and picked tabs wear one too.
 
+Chrome polish, no behaviour changes: the tab row's plus always shows, presses land at
+once under Reduce Motion, the live tab keeps a hover wash, narrow-tab letters and the
+load line read better; address-bar progress shows only while loading; tab-menu
+dividers, dimming and the colour tick fixed; Settings rows tint fully, explain
+themselves and line up; the find bar's count, clicks, dimming and pitch fixed.
+
+- **New tabs pile up and close**: +/⌘T and the "new tab" field command always open a
+  fresh blank tab instead of reusing the blank one in front; the cross on a new tab
+  closes it, and closing the only tab when it is already new closes the window.
+
 ## 0.1.8 — 2026-11-05
 
 Picked tabs close together and move together.
@@ -22,6 +32,9 @@ Picked tabs close together and move together.
   ⇧⌘T brings them all back.
 - **Picked tabs move together**: drag one of them and the others come along, side by
   side, and stay picked.
+- **Picked tabs share a group**: right-click one of them and Move to Group takes
+  them all — New Group holds them all, a group is off only when every picked tab
+  is already in it, and Remove from Group takes them all out.
 
 ## 0.1.7 — 2026-11-04
 
