@@ -2,5 +2,3 @@
 .DS_Store
 # Signing material stays on the maintainer's Mac (docs/PLAN.md §12).
 /packaging/Tap.provisionprofile
-# Release artifacts are committed from 1.0 on (docs/PLAN.md §12); until then they stay local.
-/releases/

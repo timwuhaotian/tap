@@ -30,7 +30,7 @@ of Tap from the start:
 |---|---|
 | Language | **Pure Rust, no Swift at all.** Features that need Swift-only Apple APIs are dropped. Today that means page translation (`Translate.swift` uses `TranslationSession`). |
 | Engine | **WebKit**, the system `WKWebView`, driven from Rust through `objc2`. The UI is AppKit. |
-| Scope | **Full parity with Search before the first release** (minus translation). |
+| Scope | **Full parity with Search before 1.0** (minus translation). Changed 2026-11-04: 0.1.0 ships once M2 is done (§15). |
 | Signing | **Developer ID Application: HAOTIAN WU (43VLF3KTFZ)**, the identity in the login keychain that Kil signs with. Signing, notarization, the passkeys entitlement and the updater are set up from the start. |
 | Release flow | **Copied from Kil** (`~/code/kil/RELEASING.md`, `scripts/release.sh`, `crates/kil/src/update.rs`). Releases are built, signed and notarized locally; CI never builds them. Each release overwrites one file in git, `releases/Tap-arm64.dmg`. The updater reads `releases/latest.toml` on `main`. Versions are for maintainers, not users. As with Kil, only **arm64** is released (§12). |
 | Icon | **"Bolt T"**: a heavy T whose stem breaks into a lightning bolt, on a warm gradient plate. Drawn in code (§13). |
@@ -986,10 +986,10 @@ means following these steps.
    `curl -sIL …/Tap-arm64.dmg | grep -i content-length` matches
    `stat -f %z releases/Tap-arm64.dmg`.
 
-**Until 1.0** (full parity comes first), `release.sh` runs at M0 and M8 only to prove
-the pipeline. `releases/` isn't committed. Its first commit is the 1.0.0 release, and
-from then on the repo `timwuhaotian/tap` must be public so the raw download links
-work, as Kil's is.
+**From 0.1.0** `releases/` is committed with every release, as Kil's is, and the repo
+`timwuhaotian/tap` stays public so the raw download link works. Releases before 1.0 are
+early ones: each says in the README what it doesn't do yet. Until the updater lands,
+`latest.toml` is written for it but nothing reads it, and an update is a new download.
 
 ### Updater (port of Kil's `update.rs`, replacing Search's appcast updater)
 
@@ -1064,6 +1064,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | The bench came forward from M1 to check the browsing build by, and found three bugs no unit test could: `selectText:` ending the field's own editing session, focus handed out before the page was in the window, and shifted key equivalents that a real keyboard never matches (⇧⌘T must be "T"; ⌃⇧Tab is the back-tab character). |
 | 2026-11-04 | Browsing came before M1's foundations, at the user's request: the core model, runtime, window, tabs, field and web views are in (M2 progress). The bench moves up next: driving the UI with synthetic keystrokes is unreliable and can reach other apps. |
 | 2026-11-04 | The GitHub repo `timwuhaotian/tap` is public from day one, not only from 1.0. Nothing is downloadable until `releases/` is first committed at 1.0. |
+| 2026-11-04 | At the user's request ("全部完成后，发布0.1.0版本"), 0.1.0 is released once M2 is done, rather than waiting for full parity at 1.0: browsing, the field, history, page questions, downloads, find, sleeping tabs, session, site icons, links from other apps and #849. `releases/` is committed from 0.1.0; the README says what isn't in yet. Full parity stays the bar for 1.0. Not in 0.1.0 and needed before people rely on it: the updater (M8 in the plan, ported from Kil). |
 
 ## Appendix A — Parity tracker
 

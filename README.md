@@ -17,39 +17,52 @@ browser by Office Commun. Search's behaviour is the specification. Tap rewrites 
 it in Rust (AppKit and WebKit through [`objc2`](https://github.com/madsmtm/objc2)),
 with its own name and icon, and with fixes of its own.
 
-> **Status: in development.** Nothing to download yet. The first release comes once
-> Tap does everything Search does, page translation aside, and passes Search's own
-> test suite. [`docs/PLAN.md`](docs/PLAN.md) is the plan, and its parity tracker shows
+> **Status: early.** Tap browses well and can be your Mac's browser, but much of
+> Search isn't in yet (below), and Tap doesn't update itself yet: download it again for
+> a newer one. [`docs/PLAN.md`](docs/PLAN.md) is the plan; its parity tracker shows
 > where each part stands.
 
 **Download:** [`Tap-arm64.dmg`](https://github.com/timwuhaotian/tap/raw/main/releases/Tap-arm64.dmg)
-(from the first release) · macOS 14 or later · Apple silicon
+· macOS 14 or later · Apple silicon · signed and notarized by Apple
 
-## What it will do
+## What it does now
 
-Everything Search does, including:
+- **One field** for addresses and searches. It finishes addresses from your own
+  history as you type, with the rest drawn grey after the caret (Tab takes it), and
+  leaves pinyin and kana alone while an input method is composing.
+- **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
+  ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon.
+- **Tabs come back** where you left them, and cost nothing until you look at them.
+- **Tabs you aren't using sleep** after half an hour and give their memory back; they
+  wake on the same page, with Back and the scroll position. Never a tab playing sound,
+  on a call, downloading or holding something you typed.
+- **Find on page** (⌘F) with a live "3 of 17", Match Case and Whole Words.
+- **Downloads** into Downloads, under their own names.
+- **Pages can ask**: alerts, confirms, prompts, file uploads and site sign-ins, each
+  titled with the site that asks.
+- **It can be your browser.** Choose Tap under System Settings › Desktop & Dock ›
+  Default web browser; links from other apps open in it, and so do HTML files.
+- **A page that keeps crashing stops reloading itself** and says so
+  ([#849](https://github.com/driceroland/Search/pull/849)).
+- **Nothing phones home.** No account, no sync, no telemetry. The only requests Tap
+  makes on its own are the pages you open and their icons.
 
-- **One field** for addresses and searches, completed from your own history.
-- **Tabs** across the top or down the left, pinned tabs, groups, Spaces and profiles, and
-  two pages side by side.
+## Still to come
+
+Everything else Search does, including:
+
+- Bookmarks, the History page, Settings, private windows, and tabs down the side,
+  pinned tabs, groups, Spaces and profiles, two pages side by side.
 - **A content blocker that runs before the page**, in WebKit's network layer.
 - **Reading mode, picture-in-picture, hiding any element for good, dark pages.**
 - **Passwords and passkeys** in the macOS keychain, and **Chrome extensions** on
   WebKit's own extension engine.
 - **Import** from Chrome, Arc, Brave, Edge, Dia, Safari and Firefox, including their
-  open tabs and tab groups. Search's own data comes over too.
-- **Nothing phones home.** No account, no sync, no telemetry. The only requests Tap
-  makes on its own are the pages you open, their icons, and a check for a newer
-  release.
-
-Tap also carries three changes first proposed to Search:
-
-- Open tabs and tab groups come over when importing from a Chromium browser
-  ([#841](https://github.com/driceroland/Search/pull/841)).
-- A whole profile can be exported and imported as one offline file
+  open tabs and tab groups ([#841](https://github.com/driceroland/Search/pull/841)).
+  Search's own data comes over too.
+- **A whole profile exported and imported** as one offline file
   ([#845](https://github.com/driceroland/Search/pull/845)).
-- A page whose process keeps crashing stops reloading itself and says so
-  ([#849](https://github.com/driceroland/Search/pull/849)).
+- **Updates** that download and install themselves when Tap quits.
 
 ## Building
 

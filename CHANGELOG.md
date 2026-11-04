@@ -7,6 +7,11 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.0 — 2026-11-04
+
+The first release: Tap browses, and can be the Mac's browser. Much of Search is still
+to come (docs/PLAN.md, Appendix A); Tap doesn't update itself yet.
+
 - **Tap browses.** One window with Search's row of tabs across the top: the live tab on a
   grey pill, a cross to close, the plus for a new tab, back, forward and reload at the
   far end, and the traffic lights centred in the row. Click the live tab or press ⌘L to
