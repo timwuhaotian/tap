@@ -1135,7 +1135,7 @@ At the user's request (2026-11-04: "多选的tab支持一起关闭和拖动"), a
   (b d a c e), lifted together on the way and still picked after; ⌘W closed the three
   (b d left, d in front); one ⇧⌘T brought them back in place, a in front.
 
-### Unreleased — Chrome polish
+### 0.2.0 — Chrome polish
 
 At the user's request (2026-11-05: "polish ui ux"), one polish-only pass over the
 tab row, address bar, menus, Settings rail, find bar and window chrome. No behaviour
@@ -1166,7 +1166,7 @@ changes, no new features; the two noted deviations from Search's menu are delibe
   `-D warnings`, nightly fmt. Not checked by eye: light/dark feel of each wash and
   the VoiceOver pass over the badge menu.
 
-### Agents use Tap (unreleased)
+### 0.2.0 — Agents use Tap
 
 At the user's request (2026-11-05: "我们的tap 要专门支持agent协作…mcp还是配套自动安装的
 cli？我希望我们所有的agent都能知道使用Tap来做必要的browser tool使用"). Coding agents on
@@ -1214,7 +1214,7 @@ client and a few verbs on it, not a server. Delivered as a PR at the user's requ
 - Not in: screenshots (a background tab's WKWebView has nothing drawn to snapshot), a
   mark on agents' tabs, handing a tab back for a sign-in, MCP (a `tap mcp` verb on
   the same client, if an agent without a shell needs one).
-### Unreleased — A click on any tab puts the cursor in the field
+### 0.2.0 — A click on any tab puts the cursor in the field
 
 At the user's request (2026-11-05: "每当点击任何一个tab，甚至是new tab，自动focus/选中地址栏的url" —
 the cursor, not the pointer), a deliberate departure from Search's `DragStrip`:

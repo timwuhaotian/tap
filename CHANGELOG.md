@@ -7,6 +7,10 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.0 — 2026-11-05
+
+Agents browse with Tap; new tabs pile up behind a quiet instrument; a click on any tab lands in the field.
+
 Chrome refinement, no behaviour change.
 
 - **One card, one pill, one shadow**: every floating card and pill now shares
@@ -23,6 +27,9 @@ themselves and line up; the find bar's count, clicks, dimming and pitch fixed.
 - **New tabs pile up and close**: +/⌘T and the "new tab" field command always open a
   fresh blank tab instead of reusing the blank one in front; the cross on a new tab
   closes it, and closing the only tab when it is already new closes the window.
+- **A blank tab draws a quiet instrument**: a small isometric signal-bench behind the
+  field — a carriage breathing on a 12 s loop, a dial with a breathing needle, one
+  softly lit signal dot. Native drawing, no web view; still under Reduce Motion.
 
 A load stops paying for what didn't change: the page-load path is tightened end to
 end, behaviour-preserving (docs/PLAN.md §10 "The page-load path").
@@ -52,6 +59,9 @@ Coding agents browse with Tap.
   a browser.
 - **Settings › Let agents use Tap** is on by default; off takes the command and skill
   away. Only scripts running as you can reach Tap's socket.
+- **A click on any tab lands in the field**: clicking any tab — the live one or one
+  behind — opens the address bar's field with its address selected; a blank tab opens
+  it empty with the cursor in it.
 
 ## 0.1.8 — 2026-11-05
 
