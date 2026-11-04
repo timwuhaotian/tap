@@ -1898,6 +1898,13 @@ impl Browser {
             .collect()
     }
 
+    /// Whether Copy Addresses has anything to copy: a picked tab with a page
+    /// (Search's `selectedTabLinkCount != 0` disables the menu item).
+    #[must_use]
+    pub fn can_copy_selected(&self) -> bool {
+        !self.selected_links().is_empty()
+    }
+
     pub fn focus_page(&mut self) {
         if self.editing.is_none()
             && let Some(id) = self.active
@@ -2866,6 +2873,21 @@ mod tests {
         browser.clear_selection();
         assert_eq!(browser.selection_count(), 0);
         assert_eq!(browser.selected_links(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn copy_addresses_is_off_when_no_picked_tab_has_a_page() {
+        let mut browser = Browser::new();
+        assert!(!browser.can_copy_selected(), "nothing picked");
+        let blank = browser.open(None, false, None);
+        browser.extend_selection(blank, false, true);
+        assert_eq!(browser.selection_count(), 2);
+        assert!(
+            !browser.can_copy_selected(),
+            "picked blanks have no address"
+        );
+        browser.go(blank, &url("https://a.com"));
+        assert!(browser.can_copy_selected(), "a picked page can be copied");
     }
 
     #[test]

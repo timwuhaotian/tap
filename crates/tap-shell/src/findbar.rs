@@ -15,7 +15,7 @@ use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
     NSControlStateValueOff, NSControlStateValueOn, NSControlTextEditingDelegate,
     NSEventModifierFlags, NSFocusRingType, NSFont, NSFontWeightMedium, NSImage, NSMenu, NSMenuItem,
-    NSResponder, NSShadow, NSTextField, NSTextFieldDelegate, NSTextView, NSView,
+    NSResponder, NSShadow, NSTextAlignment, NSTextField, NSTextFieldDelegate, NSTextView, NSView,
 };
 use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString};
 use tap_core::browser::Browser;
@@ -60,6 +60,8 @@ struct Bar {
     pill: Retained<Pill>,
     field: Retained<NSTextField>,
     status: Retained<NSTextField>,
+    previous: Retained<NSButton>,
+    next: Retained<NSButton>,
     options: Retained<NSButton>,
     menu: Retained<NSMenu>,
     _delegate: Retained<FindFieldDelegate>,
@@ -108,6 +110,7 @@ pub fn install(mtm: MainThreadMarker, stage: &NSView, commands: &Commands) {
     let digits =
         unsafe { NSFont::monospacedDigitSystemFontOfSize_weight(10.0, NSFontWeightMedium) };
     status.setFont(Some(&digits));
+    status.setAlignment(NSTextAlignment::Right);
     status.setFrame(NSRect::new(
         NSPoint::new(SHADOW + 12.0 + FIELD + 6.0, SHADOW + 10.0),
         NSSize::new(64.0, 14.0),
@@ -136,7 +139,8 @@ pub fn install(mtm: MainThreadMarker, stage: &NSView, commands: &Commands) {
         ));
         button
     };
-    let right = SHADOW + WIDTH - 10.0;
+    // Search's trailing 8, and one 26 pitch from Done back to Previous.
+    let right = SHADOW + WIDTH - 8.0;
     let done = button("xmark", "Done", Command::CloseFind, right - 22.0);
     let options = button(
         "ellipsis.circle",
@@ -154,7 +158,7 @@ pub fn install(mtm: MainThreadMarker, stage: &NSView, commands: &Commands) {
         "chevron.up",
         "Previous match",
         Command::FindPrevious,
-        right - 98.0,
+        right - 100.0,
     );
 
     let menu = NSMenu::new(mtm);
@@ -193,6 +197,8 @@ pub fn install(mtm: MainThreadMarker, stage: &NSView, commands: &Commands) {
             pill,
             field,
             status,
+            previous,
+            next,
             options,
             menu,
             _delegate: delegate,
@@ -212,12 +218,33 @@ pub fn update(state: &State, focus: bool) {
         }
         bar.status
             .setStringValue(&NSString::from_str(state.status.as_deref().unwrap_or("")));
+        bar.status.sizeToFit();
+        // The count hugs the nav: sized to its words and pinned by its right edge, so a
+        // long count grows left over open space, never under the arrows.
+        let edge = bar.previous.frame().origin.x - 6.0;
+        let min = SHADOW + 12.0 + FIELD + 6.0;
+        let mut frame = bar.status.frame();
+        frame.size.width = frame.size.width.min(edge - min).max(0.0);
+        frame.origin.x = edge - frame.size.width;
+        bar.status.setFrame(frame);
         let color = if state.missed {
             NSColor::systemRedColor()
         } else {
             palette::MUTED.dynamic()
         };
         bar.status.setTextColor(Some(&color));
+        // Return and ⇧Return with nothing found only ask again: the arrows rest unless
+        // the page counted matches.
+        let has_matches = !state.missed && state.status.is_some();
+        bar.previous.setEnabled(has_matches);
+        bar.next.setEnabled(has_matches);
+        // The dots read as on while either switch is: the menu itself still shows which.
+        let tint = if state.match_case || state.whole_words {
+            palette::INK.dynamic()
+        } else {
+            palette::MUTED.dynamic()
+        };
+        bar.options.setContentTintColor(Some(&tint));
         for (index, on) in [state.match_case, state.whole_words]
             .into_iter()
             .enumerate()
@@ -281,6 +308,21 @@ define_class!(
             palette::HAIRLINE.resolve(dark).setStroke();
             path.setLineWidth(1.0);
             path.stroke();
+        }
+
+        /// Only the card takes clicks; its shadow's room lets them through.
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
+            // SAFETY: a plain read of a live view's superview.
+            let holder = unsafe { self.superview() };
+            let local = self.convertPoint_fromView(point, holder.as_deref());
+            let card = NSRect::new(NSPoint::new(SHADOW, SHADOW), NSSize::new(WIDTH, HEIGHT));
+            let inside = local.x >= card.origin.x
+                && local.x < card.origin.x + card.size.width
+                && local.y >= card.origin.y
+                && local.y < card.origin.y + card.size.height;
+            // SAFETY: the superclass's own hit test, for a point inside the card.
+            inside.then(|| unsafe { msg_send![super(self), hitTest: point] }).flatten()
         }
     }
 );
