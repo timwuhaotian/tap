@@ -227,7 +227,7 @@ enum Move {
 /// A click whose meaning waits for the release, so the press can still become a carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Click {
-    /// The live tab: the field opens on it.
+    /// Any tab plainly clicked: the field opens on the tab in front.
     Edit,
     /// A heading: its group folds or opens.
     Fold(String),
@@ -915,12 +915,14 @@ impl Strip {
             Spot::Tab(index) => {
                 let Some(id) = tab_at(index) else { return };
                 let live = rt::read(|browser| browser.active() == Some(id)).unwrap_or(false);
-                // Any other tab is picked at once, as it goes into the hand; the live
-                // one becomes the field on release, unless the address bar holds the
-                // field, or the press became a carry.
-                // A plain click lets any picked tabs go, and the page has the keys;
-                // on one of several picked, only once it is let go without a carry,
-                // since a carry takes them all along.
+                // Any other tab is picked at once, as it goes into the hand; any tab
+                // becomes the field on release, unless the press became a carry. Tap
+                // departs from Search's `DragStrip` here, which opens the field on the
+                // live tab alone and only while the address bar is away (docs/PLAN.md).
+                // A plain click lets any picked tabs go, and the page has the keys
+                // until the field opens on release; on one of several picked, only
+                // once it is let go without a carry, since a carry takes them all
+                // along.
                 let (picked, among) = rt::read(|browser| {
                     let count = browser.selection_count();
                     (count > 0, count > 1 && browser.is_selected(id))
@@ -934,7 +936,7 @@ impl Strip {
                 }
                 if among {
                     self.ivars().click.replace(Some(Click::Unpick(id)));
-                } else if live && !self.look_now().bar {
+                } else {
                     self.ivars().click.replace(Some(Click::Edit));
                 }
                 if !live && !among {
