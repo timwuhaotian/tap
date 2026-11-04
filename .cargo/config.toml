@@ -1,0 +1,10 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
+[env]
+# Tap runs on macOS 14 or later, like Search (docs/PLAN.md §12).
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+
+[target.aarch64-apple-darwin]
+# Apple silicon only, as Kil releases (docs/PLAN.md §10).
+rustflags = ["-C", "target-cpu=apple-m1"]

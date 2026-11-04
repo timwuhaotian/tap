@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- scripts/bundle.sh fills __VERSION__ from Cargo.toml. Search's keys (docs/PLAN.md §12),
+	     with Tap's name; the http/https URL types, the document types and the AppleScript
+	     keys arrive with the milestones that handle them (M2, M8), so a build never claims
+	     what it can't do yet. -->
+	<key>CFBundleName</key>
+	<string>Tap</string>
+	<key>CFBundleDisplayName</key>
+	<string>Tap</string>
+	<key>CFBundleExecutable</key>
+	<string>tap</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.timwuhaotian.tap</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Haotian Wu · Tap, ported from Search by Office Commun · MIT</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- A browser goes wherever it is pointed, including http sites and localhost. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<!-- Pages ask for these, not Tap itself. macOS still wants a sentence for its prompt, and
+	     touching the APIs without one is a crash rather than a refusal. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Websites you visit can ask to use your camera. Tap asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Websites you visit can ask to use your microphone. Tap asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Websites you visit can ask for your location. Tap asks you each time a site does, unless you choose Always allow for it; Settings › Privacy forgets those choices.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Websites you visit can ask for your location. Tap asks you each time a site does, unless you choose Always allow for it; Settings › Privacy forgets those choices.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Files you download are saved to your Downloads folder.</string>
+</dict>
+</plist>
