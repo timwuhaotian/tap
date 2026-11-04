@@ -26,6 +26,10 @@ Info.plist.
   waits until you go to that tab.
 - **A tab behind whose page went away** is loaded again when you come back to it, rather
   than in the background.
+- **Downloads.** A download link, a file the server sends as an attachment, or anything
+  WebKit can't show goes into Downloads under its own name, numbered if the name is
+  taken; the Downloads stack in the Dock bounces when it arrives. A tab opened only for
+  a download closes again.
 - **Tabs come back.** The session is kept in Search's own format, written as it changes
   and when Tap quits; restored tabs cost nothing until you look at them.
 - **The bench**, for scripts and tests: Search's socket protocol on a test run

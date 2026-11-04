@@ -8,6 +8,7 @@
 mod bench;
 mod crash;
 mod dialogs;
+mod downloads;
 mod menu;
 mod offers;
 mod palette;

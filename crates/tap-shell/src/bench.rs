@@ -38,7 +38,7 @@ use tap_core::{
     identity,
 };
 
-use crate::{dialogs, rt, store, web, window};
+use crate::{dialogs, downloads, rt, store, web, window};
 
 /// The longest request line read: a line that never ends is not a request.
 const LONGEST: usize = 4_000_000;
@@ -312,6 +312,7 @@ fn handle(request: &Value, reply: Reply) {
             editor.unmarkText();
             reply.say(json!({ "field": window::field_text() }));
         }
+        "downloads" => reply.say(json!({ "done": downloads::done(), "going": downloads::going() })),
         "history" => reply.say(json!({ "visits": rt::read(|b| b.history().len()) })),
         "keyeq" => {
             let Some(key) = text("key") else {

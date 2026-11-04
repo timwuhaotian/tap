@@ -574,6 +574,14 @@ BookmarksFile, Registrable.
   (Search's `pageProcessEnded`). Checked through the bench and, once, by eye outside a
   test run. Not yet: the bad-certificate sheet ("Continue Anyway") and trusting this
   Mac's own servers; a question over one page of a pair (no Split View yet).
+- [x] Downloads (2026-11-04): `<a download>`, an `attachment` response or anything
+  WebKit can't show becomes a download, into Downloads (a test world's own on a test
+  run) under its own name, numbered when taken (`tap_core::fetching`); a tab opened
+  for a download alone goes and its opener comes back (`drop_empty`); a finished file
+  bounces the Dock's Downloads stack. WebKit marks each file with
+  `com.apple.quarantine`. Checked through the bench (`downloads`). Not yet: the list
+  (⇧⌘J) and `downloads.json`, progress in the strip, cancel and resume, asking where to
+  save, the PDF bar's save button, local text files shown as text.
 - [ ] Still to come for M2: find on page, downloads, dialogs
   (alert/confirm/prompt, uploads, sign-in), sleeping tabs, icons, the os_log line for
   #849 (now on stderr).
@@ -1069,7 +1077,7 @@ added below this one as M1 starts.
 | ExtensionSocket.swift | 164 | w/ext/socket | M7 | todo |
 | ExtensionsUI.swift | 342 | s/ui/extensions_ui | M7 | todo |
 | ExtensionWorkerRecovery.swift | 187 | w/ext/worker_recovery | M7 | todo |
-| Fetching.swift | 673 | c/fetching, s/ui/downloads_page | M2 | todo |
+| Fetching.swift | 673 | c/fetching, s/ui/downloads_page | M2 | partial |
 | Find.swift | 135 | s/ui/find_bar | M2 | todo |
 | Float.swift | 1367 | w/float, a/float | M5 | todo |
 | Fold.swift | 554 | s/ui/fold | M3 | todo |

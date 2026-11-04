@@ -13,6 +13,7 @@ pub mod address;
 pub mod browser;
 pub mod crash;
 pub mod engine;
+pub mod fetching;
 pub mod fnd;
 pub mod history;
 pub mod identity;

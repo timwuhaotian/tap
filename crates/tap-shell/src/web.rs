@@ -12,7 +12,7 @@ use objc2::{
 };
 use objc2_app_kit::{NSEventModifierFlags, NSWorkspace};
 use objc2_foundation::{
-    NSArray, NSBundle, NSDictionary, NSError, NSInteger, NSKeyValueChangeKey,
+    NSArray, NSBundle, NSDictionary, NSError, NSHTTPURLResponse, NSInteger, NSKeyValueChangeKey,
     NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSRect, NSString, NSURL,
     NSURLAuthenticationChallenge, NSURLCredential, NSURLRequest,
     NSURLSessionAuthChallengeDisposition,
@@ -20,17 +20,18 @@ use objc2_foundation::{
 #[allow(deprecated)]
 use objc2_web_kit::WKProcessPool;
 use objc2_web_kit::{
-    WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
-    WKNavigationType, WKOpenPanelParameters, WKUIDelegate, WKWebView, WKWebViewConfiguration,
-    WKWindowFeatures,
+    WKDownload, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
+    WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy, WKNavigationType,
+    WKOpenPanelParameters, WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWindowFeatures,
 };
 use tap_core::{
     browser::{Effect, TabId},
     crash::PageEnd,
+    fetching,
     fnd::Url,
 };
 
-use crate::{dialogs, rt, store, window};
+use crate::{dialogs, downloads, rt, store, window};
 
 /// What the observer watches on every web view; each change re-reads the lot.
 const OBSERVED: [&str; 6] = [
@@ -305,6 +306,33 @@ define_class!(
             dialogs::challenge(web, tab_of(web), challenge, handler);
         }
 
+        #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
+        fn decide_response(
+            &self,
+            _web: &WKWebView,
+            response: &WKNavigationResponse,
+            handler: &DynBlock<dyn Fn(WKNavigationResponsePolicy)>,
+        ) {
+            handler.call((decide_response(response),));
+        }
+
+        #[unsafe(method(webView:didCommitNavigation:))]
+        fn committed(&self, web: &WKWebView, _navigation: Option<&WKNavigation>) {
+            if let Some(tab) = tab_of(web) {
+                rt::dispatch(move |browser| browser.page_committed(tab));
+            }
+        }
+
+        #[unsafe(method(webView:navigationAction:didBecomeDownload:))]
+        fn action_download(&self, web: &WKWebView, _action: &WKNavigationAction, download: &WKDownload) {
+            became_download(web, download);
+        }
+
+        #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
+        fn response_download(&self, web: &WKWebView, _response: &WKNavigationResponse, download: &WKDownload) {
+            became_download(web, download);
+        }
+
         #[unsafe(method(webView:didFinishNavigation:))]
         fn finished(&self, web: &WKWebView, _navigation: Option<&WKNavigation>) {
             if let Some(tab) = tab_of(web) {
@@ -420,6 +448,12 @@ fn create_tab(
 /// ⌘-click opens a link behind the page; a link to another app (mailto:, an app's own
 /// scheme) goes to that app.
 fn decide(web: &WKWebView, action: &WKNavigationAction) -> WKNavigationActionPolicy {
+    // A link that says it is a file to keep (`<a download>`): left to load, nothing
+    // happens and nothing says why.
+    // SAFETY: a plain property read on the action WebKit hands us.
+    if unsafe { action.shouldPerformDownload() } {
+        return WKNavigationActionPolicy::Download;
+    }
     // SAFETY: plain property reads on the action WebKit hands us.
     let (request_url, kind, modifiers, main_frame) = unsafe {
         (
@@ -463,6 +497,32 @@ fn decide(web: &WKWebView, action: &WKNavigationAction) -> WKNavigationActionPol
         return WKNavigationActionPolicy::Cancel;
     }
     WKNavigationActionPolicy::Allow
+}
+
+/// What arrives is shown if WebKit can show it, and kept as a file if not, or if the
+/// server says it is an attachment (Search's response policy).
+fn decide_response(response: &WKNavigationResponse) -> WKNavigationResponsePolicy {
+    // SAFETY: plain property reads on the response WebKit hands us.
+    let (showable, answer) = unsafe { (response.canShowMIMEType(), response.response()) };
+    let attachment = answer
+        .downcast::<NSHTTPURLResponse>()
+        .ok()
+        .and_then(|http| http.valueForHTTPHeaderField(&NSString::from_str("Content-Disposition")))
+        .is_some_and(|disposition| fetching::is_attachment(&disposition.to_string()));
+    if attachment || !showable {
+        WKNavigationResponsePolicy::Download
+    } else {
+        WKNavigationResponsePolicy::Allow
+    }
+}
+
+/// The navigation became a download: it is kept until it ends, and a tab opened for it
+/// alone goes.
+fn became_download(web: &WKWebView, download: &WKDownload) {
+    downloads::keep(MainThreadMarker::from(web), download);
+    if let Some(tab) = tab_of(web) {
+        rt::dispatch(move |browser| browser.drop_empty(tab));
+    }
 }
 
 /// A load that never arrived is said in place of the page. A load stopped on purpose

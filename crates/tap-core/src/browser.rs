@@ -121,6 +121,11 @@ pub struct Tab {
     awake: bool,
     /// Its process went away while it was behind another tab: made again when shown.
     stale: bool,
+    /// A page has been committed in it: it is more than a tab opened for a link that
+    /// turned out to be a download.
+    committed: bool,
+    /// The tab whose page opened this one.
+    opener: Option<TabId>,
     entry: session::Entry,
     dirty: TabFields,
 }
@@ -140,6 +145,8 @@ impl Tab {
             crashes: CrashCount::default(),
             awake: false,
             stale: false,
+            committed: false,
+            opener: None,
             entry: session::Entry::default(),
             dirty: TabFields::all(),
         }
@@ -468,6 +475,7 @@ impl Browser {
         let id = TabId(self.next);
         self.next += 1;
         let mut tab = Tab::new(id);
+        tab.opener = opener;
         if let Some(url) = url {
             url.as_str().clone_into(&mut tab.url);
             tab.awake = true;
@@ -861,6 +869,34 @@ impl Browser {
         self.session_changed = true;
         if !url.is_empty() && self.history.retitle(&url, title) {
             self.history_changed = true;
+        }
+    }
+
+    /// A page arrived in the tab (WebKit committed its navigation).
+    pub fn page_committed(&mut self, id: TabId) {
+        if let Some(tab) = self.tab_mut(id) {
+            tab.committed = true;
+        }
+    }
+
+    /// The tab's navigation became a download. A tab opened for it alone, with nothing
+    /// ever shown in it, goes: left, it is an empty tab nobody asked for, and it is not
+    /// offered back by ⇧⌘T either (Search's `dropEmpty`). Its opener comes back in front.
+    pub fn drop_empty(&mut self, id: TabId) {
+        let Some(index) = self.index(id) else { return };
+        let tab = &self.tabs[index];
+        if tab.committed || self.tabs.len() < 2 {
+            return;
+        }
+        let opener = tab.opener.filter(|o| self.index(*o).is_some());
+        self.effects.push(Effect::Discard(id));
+        self.tabs.remove(index);
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+        if self.active == Some(id) {
+            self.active = None;
+            let next = opener.unwrap_or(self.tabs[index.min(self.tabs.len() - 1)].id);
+            self.select(next);
         }
     }
 
@@ -1261,5 +1297,22 @@ mod tests {
             !browser.take_effects().contains(&Effect::Reload(behind)),
             "once"
         );
+    }
+
+    #[test]
+    fn a_tab_opened_only_for_a_download_goes_and_its_opener_comes_back() {
+        let mut browser = with_pages(&["https://mail.example"]);
+        let opener = browser.tabs()[0].id;
+        browser.page_committed(opener);
+        let fresh = browser.adopt(Some(opener), true);
+        assert_eq!(browser.active(), Some(fresh));
+        browser.drop_empty(fresh);
+        assert_eq!(browser.tabs().len(), 1);
+        assert_eq!(browser.active(), Some(opener));
+        browser.reopen();
+        assert_eq!(browser.tabs().len(), 1, "not offered back by ⇧⌘T");
+
+        browser.drop_empty(opener);
+        assert_eq!(browser.tabs().len(), 1, "a tab that has shown a page stays");
     }
 }
