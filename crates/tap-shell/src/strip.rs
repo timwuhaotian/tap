@@ -12,8 +12,8 @@ use std::{
 
 use block2::RcBlock;
 use objc2::{
-    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
-    rc::Retained, runtime::NSObject,
+    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class,
+    msg_send, rc::Retained, runtime::NSObject,
 };
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSEventModifierFlags,
@@ -27,7 +27,13 @@ use tap_core::{
     settings_index,
 };
 
-use crate::{downloads, icons, palette, prefs, rt, web};
+use crate::{
+    downloads, icons,
+    menu::Commands,
+    palette, prefs, rt,
+    tabmenu::{self, TabState},
+    web,
+};
 
 /// The strip's look, read from Kept on every draw (and on every tick), so a Settings
 /// change shows at once without anyone having to tell the strip (Search reads its
@@ -305,6 +311,9 @@ fn editing_slot(browser: &Browser, row: &[Item]) -> Option<usize> {
 }
 
 pub struct Ivars {
+    /// Every menu item's target, the app delegate: the tab menu's items send
+    /// their commands to it, as the find bar's do.
+    commands: Retained<Commands>,
     spot: Cell<Spot>,
     inside: Cell<bool>,
     tracking: RefCell<Option<Retained<NSTrackingArea>>>,
@@ -385,6 +394,11 @@ define_class!(
             }
         }
 
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            self.context_menu(event);
+        }
+
         #[unsafe(method(otherMouseDown:))]
         fn other_mouse_down(&self, event: &NSEvent) {
             // The wheel closes a tab, as everywhere.
@@ -398,8 +412,9 @@ define_class!(
 );
 
 impl Strip {
-    pub fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+    pub fn new(mtm: MainThreadMarker, frame: NSRect, commands: &Commands) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars {
+            commands: commands.retain(),
             spot: Cell::new(Spot::Nothing),
             inside: Cell::new(false),
             tracking: RefCell::new(None),
@@ -486,6 +501,53 @@ impl Strip {
             ))
         })
         .flatten()
+    }
+
+    /// Right-click: a tab's menu, or its heading's (see `tabmenu`). Clicking
+    /// nowhere in particular offers nothing, as it does nothing.
+    fn context_menu(&self, event: &NSEvent) {
+        match self.spot_at(event) {
+            Spot::Tab(index) | Spot::Close(index) => {
+                let Some(id) = tab_at(index) else { return };
+                let Some(state) = rt::read(|browser| {
+                    let tab = browser.tab(id)?;
+                    let tabs = browser.tabs();
+                    Some(TabState {
+                        has_page: !tab.is_blank() && !tab.is_internal(),
+                        others: tabs.iter().any(|t| t.id != id && !t.is_pinned()),
+                        right: tabs[index + 1..].iter().any(|t| !t.is_pinned()),
+                        can_reopen: browser.can_reopen(),
+                    })
+                })
+                .flatten() else {
+                    return;
+                };
+                tabmenu::show_tab(
+                    self.mtm(),
+                    &self.ivars().commands,
+                    event,
+                    self.as_ref(),
+                    id,
+                    state,
+                );
+            }
+            Spot::Heading(place) => {
+                let Some(collapsed) =
+                    rt::read(|browser| browser.groups().get(place).map(|g| g.collapsed)).flatten()
+                else {
+                    return;
+                };
+                tabmenu::show_group(
+                    self.mtm(),
+                    &self.ivars().commands,
+                    event,
+                    self.as_ref(),
+                    place,
+                    collapsed,
+                );
+            }
+            Spot::Plus | Spot::Nothing => {}
+        }
     }
 
     fn spot_at(&self, event: &NSEvent) -> Spot {

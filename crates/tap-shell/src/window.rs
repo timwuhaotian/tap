@@ -151,6 +151,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     let strip = Strip::new(
         mtm,
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, palette::STRIP)),
+        commands,
     );
     strip.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     let stage = Stage::new(
