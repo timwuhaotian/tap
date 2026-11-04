@@ -824,6 +824,79 @@ impl Browser {
         self.session_changed = true;
     }
 
+    /// Move to Group for several tabs at once: into the group at `place`, or out
+    /// of any (`None`, Remove from Group). The group they join opens; ones they
+    /// empty go. A pin stays out of groups. `place` is resolved once, so groups
+    /// emptied along the way can't shift it.
+    pub fn move_tabs_to_group(&mut self, ids: &[TabId], place: Option<usize>) {
+        let group = match place {
+            Some(place) => match self.groups.get(place) {
+                Some(group) => Some(group.id.clone()),
+                None => return,
+            },
+            None => None,
+        };
+        let mut moved = false;
+        for id in ids {
+            let Some(index) = self.index(*id) else {
+                continue;
+            };
+            let tab = &mut self.tabs[index];
+            if tab.is_pinned() || tab.entry.group_id == group {
+                continue;
+            }
+            tab.entry.group_id.clone_from(&group);
+            moved = true;
+        }
+        if !moved {
+            return;
+        }
+        if let Some(place) = place
+            && let Some(group) = self.groups.get_mut(place)
+        {
+            group.collapsed = false;
+        }
+        self.order();
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// Move to Group for every picked tab, in the row's order (the menu of one
+    /// of them). Nothing picked, nothing done.
+    pub fn move_selected_to_group(&mut self, place: Option<usize>) {
+        let ids: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| self.selected.contains(&t.id))
+            .map(|t| t.id)
+            .collect();
+        self.move_tabs_to_group(&ids, place);
+    }
+
+    /// Move to Group › New Group for every picked tab: one group holding them
+    /// all, open, after the others. Pins stay out; nothing movable picked, no
+    /// group. Answers the group's place.
+    pub fn add_group_selected(&mut self) -> Option<usize> {
+        if !self
+            .tabs
+            .iter()
+            .any(|t| self.selected.contains(&t.id) && !t.is_pinned())
+        {
+            return None;
+        }
+        let group = TabGroup {
+            id: fnd::uuid(),
+            name: format!("Group {}", self.groups.len() + 1),
+            collapsed: false,
+            colour: Some(groups::next_colour(&self.groups).to_owned()),
+        };
+        let key = group.id.clone();
+        self.groups.push(group);
+        let place = self.groups.len() - 1;
+        self.move_selected_to_group(Some(place));
+        self.groups.iter().position(|g| g.id == key)
+    }
+
     /// Rename Group: a name with something in it.
     pub fn rename_group(&mut self, place: usize, name: &str) {
         let trimmed = name.trim();
@@ -2619,6 +2692,70 @@ mod tests {
         assert_eq!(
             urls(&browser)[3..],
             ["https://loose.com", "https://gone.com"]
+        );
+    }
+
+    #[test]
+    fn picked_tabs_take_a_new_group_join_one_and_leave_together() {
+        let mut browser = with_pages(&[
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+        ]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.tab_mut(ids[3]).expect("a tab").entry.pin = Some("D".to_owned());
+        browser.select(ids[0]);
+        browser.extend_selection(ids[2], false, true);
+        browser.extend_selection(ids[3], false, true);
+        assert_eq!(browser.selection_count(), 3);
+        let place = browser
+            .add_group_selected()
+            .expect("a group for the picked");
+        let group = browser.groups()[place].id.clone();
+        for id in [ids[0], ids[2]] {
+            assert_eq!(
+                browser.tab(id).and_then(Tab::group),
+                Some(group.as_str()),
+                "picked tabs move together"
+            );
+        }
+        assert_eq!(
+            browser.tab(ids[3]).and_then(Tab::group),
+            None,
+            "a pin stays out of groups"
+        );
+        assert_eq!(
+            browser.tab(ids[1]).and_then(Tab::group),
+            None,
+            "what isn't picked stays where it is"
+        );
+        browser.toggle_group(place);
+        let other = browser.add_group(ids[1]).expect("a group for b");
+        browser.toggle_group(other);
+        browser.move_selected_to_group(Some(other));
+        assert_eq!(browser.groups().len(), 1, "the group they left goes");
+        assert!(!browser.groups()[0].collapsed, "the group they join opens");
+        let joined = browser.groups()[0].id.clone();
+        for id in [ids[0], ids[1], ids[2]] {
+            assert_eq!(browser.tab(id).and_then(Tab::group), Some(joined.as_str()));
+        }
+        browser.extend_selection(ids[1], false, true);
+        browser.move_selected_to_group(None);
+        assert!(
+            [ids[0], ids[1], ids[2]]
+                .iter()
+                .all(|id| browser.tab(*id).and_then(Tab::group).is_none()),
+            "Remove from Group takes them all out"
+        );
+        assert!(
+            browser.groups().is_empty(),
+            "the group they left had no other tab"
+        );
+        browser.move_selected_to_group(Some(7));
+        assert!(
+            browser.groups().is_empty(),
+            "no such group: nothing happens"
         );
     }
 

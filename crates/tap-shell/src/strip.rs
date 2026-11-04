@@ -756,6 +756,7 @@ impl Strip {
                 let Some(state) = rt::read(|browser| {
                     let tab = browser.tab(id)?;
                     let tabs = browser.tabs();
+                    let among = browser.is_selected(id);
                     Some(TabState {
                         has_page: !tab.is_blank() && !tab.is_internal(),
                         others: tabs.iter().any(|t| t.id != id && !t.is_pinned()),
@@ -767,10 +768,20 @@ impl Strip {
                             .and_then(|g| browser.groups().iter().position(|x| x.id == g)),
                         groups: browser.groups().iter().map(|g| g.name.clone()).collect(),
                         can_sleep: browser.awake_because(id).is_none(),
-                        picked: if browser.is_selected(id) {
-                            browser.selection_count()
+                        picked: if among { browser.selection_count() } else { 0 },
+                        picked_groups: if among && browser.selection_count() > 1 {
+                            browser
+                                .tabs()
+                                .iter()
+                                .filter(|t| browser.is_selected(t.id))
+                                .map(|t| {
+                                    t.group().and_then(|g| {
+                                        browser.groups().iter().position(|x| x.id == g)
+                                    })
+                                })
+                                .collect()
                         } else {
-                            0
+                            Vec::new()
                         },
                     })
                 })
