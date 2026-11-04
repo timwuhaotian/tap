@@ -1110,7 +1110,7 @@ patch release"; "tabs要支持多选（click+shift+click)…cmd+click+click 多�
   picked the run from the last clicked, and a plain click let them go and gave the page
   the keys back.
 
-### Next patch — Picked tabs close and move together
+### 0.1.8 — Picked tabs close and move together
 
 At the user's request (2026-11-04: "多选的tab支持一起关闭和拖动"), after 0.1.7.
 
