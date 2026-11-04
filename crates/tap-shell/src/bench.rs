@@ -364,7 +364,11 @@ fn handle(request: &Value, reply: Reply) {
             });
             reply.say(out.unwrap_or_else(|| json!({ "error": "no browser" })));
         }
-        "row" => reply.say(rt::read(row).unwrap_or_default()),
+        "row" => {
+            let mut out = rt::read(row).unwrap_or_default();
+            out["rects"] = json!(crate::strip::slot_rects());
+            reply.say(out);
+        }
         "fold" => {
             // A click on a group's heading, by its place among the groups.
             let Some(place) = request.get("group").and_then(Value::as_u64) else {

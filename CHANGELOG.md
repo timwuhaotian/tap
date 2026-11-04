@@ -7,6 +7,12 @@ Info.plist.
 
 ## Unreleased
 
+- **A tab is grabbed anywhere in its column**: above, below or between the pills is
+  the tab now, not title bar, so dragging a tab no longer drags the window instead.
+- **Drag a tab onto a group to join it**: carried over another group's heading or
+  tabs, the group lights up in its colour, and letting go puts the tab (or every picked
+  tab) into it beside the tab under the pointer.
+
 ## 0.2.0 — 2026-11-05
 
 Agents browse with Tap; new tabs pile up behind a quiet instrument; a click on any tab lands in the field.

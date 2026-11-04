@@ -1723,6 +1723,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-05 | At the user's request (New Tab should open many, and its cross should close it), new tabs pile up: +/⌘T and the "new tab" field command always open a fresh blank tab instead of reusing the blank one in front, and closing the only tab when it is already new closes the window as Search's `close` does (`fixed-deviation` from Search's `newTab` reusing a blank tab). Core asks with a new `Effect::CloseWindow`, carried out by the shell. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 | 2026-11-05 | The page-load path is audited end to end at the user's request and tightened in seven places (§10 "The page-load path"), all behaviour-preserving, as a PR like the one before it. |
 | 2026-11-05 | At the user's request, agents drive Tap through a `tap` CLI and a skill Tap installs, not MCP (§8 "Agents use Tap"): every agent here has a shell, a skill loads only when a task needs it, and one install in `~/.agents/skills` reaches them all. The bench switch is on by default (`fixed-deviation`). Delivered as a PR at the user's request. |
+| 2026-11-05 | At the user's request ("tab的拖拽应该是整个tab都可以拖拽 而不只是四周；…tab拖拽会容易跟着整个app拖拽…tab拖拽到group，自动可以加入这个group"): a press takes a strip slot by its whole column, the strip's full 52-point height and the gap to its right, not just its 30-point pill. The bands above, below and between the pills had been empty title bar, so a press meant for a tab dragged the window. Only the row's truly empty ends still move the window. Tabs carried over another group (heading or tabs) stop moving along their own block, the group shows a plate of its colour, and on release they join it beside the tab under the hand, or at its end over the heading or a folded group (Search's `GroupDropFrames.resolve` and `move(_:toGroup:)`: `groups::drop_target`, `Browser::drop_into_group`). Not done: dragging a grouped tab out among the loose tabs (Remove from Group does that). The bench's `row` now reports each slot's rect. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 
 ## Appendix A — Parity tracker
 
@@ -1870,7 +1871,7 @@ added below this one as M1 starts.
 | TabBar.swift | 1771 | s/ui/tab_bar/* | M2→M3 | partial |
 | TabDrag.swift | 288 | c/tab_drag, s/ui/tab_drag | M3 | partial: reorder within the strip (`strip.rs`, 0.1.6); no drag out, no split bands |
 | TabGroup.swift | 32 | c/session (TabGroup), c/groups | M3 | ported |
-| TabGroups.swift | 233 | c/groups, s/strip (headings), s/tabmenu | M3 | partial: fold, rename, ungroup, close, move, reorder by drag (0.1.6), colours chosen; no in-place rename |
+| TabGroups.swift | 233 | c/groups, s/strip (headings), s/tabmenu | M3 | partial: fold, rename, ungroup, close, move, reorder by drag (0.1.6), colours chosen, a tab dropped on a group joins it; no in-place rename |
 | TabOffers.swift | 146 | s/ui/tab_offers | M2 | todo |
 | TabShortcutHint.swift | 26 | s/ui/tab_shortcut_hint | M3 | todo |
 | TabSwitcher.swift | 631 | c/tab_switcher, s/ui/tab_switcher | M3 | todo |
