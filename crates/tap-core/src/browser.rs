@@ -15,7 +15,7 @@ use crate::{
     engine::{self, Engine},
     find::{self, Find},
     fnd::{self, Url},
-    groups::{self, Item},
+    groups::{self, GroupDrop, Item},
     history::{self, History, Suggestion},
     internal::{self, Page},
     keyword::{self, Keyword},
@@ -875,6 +875,58 @@ impl Browser {
             .map(|t| t.id)
             .collect();
         self.move_tabs_to_group(&ids, place);
+    }
+
+    /// Tabs carried onto a group and let go there (Search's `move(_:toGroup:)` with
+    /// a `GroupDropTarget`): they join it beside the tab they were let go on, in
+    /// their row order, or after its last tab. The group opens; a group they empty
+    /// goes. Pins stay out; a group that isn't there, or an anchor that is carried
+    /// or not of the group, moves nothing.
+    pub fn drop_into_group(&mut self, run: &[TabId], to: &GroupDrop) {
+        let Some(place) = self.groups.iter().position(|g| g.id == to.group) else {
+            return;
+        };
+        let moving: Vec<TabId> = run
+            .iter()
+            .copied()
+            .filter(|id| self.tab(*id).is_some_and(|t| !t.is_pinned()))
+            .collect();
+        if moving.is_empty() {
+            return;
+        }
+        if let Some(member) = to.member
+            && (moving.contains(&member)
+                || self.tab(member).and_then(Tab::group) != Some(to.group.as_str()))
+        {
+            return;
+        }
+        let (mut taken, mut rest): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .partition(|t| moving.contains(&t.id));
+        let at = to
+            .member
+            .and_then(|member| rest.iter().position(|t| t.id == member))
+            .map(|index| index + usize::from(to.after))
+            .or_else(|| {
+                rest.iter()
+                    .rposition(|t| t.entry.group_id.as_deref() == Some(to.group.as_str()))
+                    .map(|index| index + 1)
+            })
+            .unwrap_or_else(|| {
+                rest.iter()
+                    .position(|t| !t.is_pinned())
+                    .unwrap_or(rest.len())
+            });
+        for tab in &mut taken {
+            tab.entry.group_id = Some(to.group.clone());
+        }
+        rest.splice(at..at, taken);
+        self.tabs = rest;
+        self.groups[place].collapsed = false;
+        // Stable by rank, so they keep the place they were given among the group's.
+        self.order();
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
     }
 
     /// Move to Group › New Group for every picked tab: one group holding them
@@ -2809,6 +2861,102 @@ mod tests {
             browser.groups().is_empty(),
             "no such group: nothing happens"
         );
+    }
+
+    #[test]
+    fn tabs_dropped_on_a_group_join_it_where_they_were_let_go() {
+        let mut browser = Browser::restored(grouped());
+        // a1 a2 (软件开发, folded) · b1 (AI Providers) · loose gone
+        let id = |url: &str| {
+            browser
+                .tabs()
+                .iter()
+                .find(|t| t.url() == url)
+                .map(|t| t.id)
+                .expect("a tab")
+        };
+        let (a1, a2, b1, loose, gone) = (
+            id("https://a1.com"),
+            id("https://a2.com"),
+            id("https://b1.com"),
+            id("https://loose.com"),
+            id("https://gone.com"),
+        );
+        let first = browser.groups()[0].id.clone();
+        let second = browser.groups()[1].id.clone();
+        browser.drop_into_group(
+            &[loose],
+            &GroupDrop {
+                group: first.clone(),
+                member: Some(a2),
+                after: false,
+            },
+        );
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://a1.com",
+                "https://loose.com",
+                "https://a2.com",
+                "https://b1.com",
+                "https://gone.com"
+            ],
+            "before the tab it was let go on"
+        );
+        assert_eq!(browser.tab(loose).and_then(Tab::group), Some(first.as_str()));
+        assert!(!browser.groups()[0].collapsed, "the group it joins opens");
+        // Two carried together, after a member: both join, in their order.
+        browser.drop_into_group(
+            &[loose, gone],
+            &GroupDrop {
+                group: second.clone(),
+                member: Some(b1),
+                after: true,
+            },
+        );
+        assert_eq!(
+            urls(&browser)[2..],
+            ["https://b1.com", "https://loose.com", "https://gone.com"]
+        );
+        // The last tab out of a group: the group goes.
+        browser.drop_into_group(
+            &[b1, loose, gone],
+            &GroupDrop {
+                group: first.clone(),
+                member: None,
+                after: false,
+            },
+        );
+        assert_eq!(browser.groups().len(), 1, "the emptied group goes");
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://a1.com",
+                "https://a2.com",
+                "https://b1.com",
+                "https://loose.com",
+                "https://gone.com"
+            ],
+            "no member: after the group's last tab"
+        );
+        let before = urls(&browser).join(" ");
+        browser.drop_into_group(
+            &[a1],
+            &GroupDrop {
+                group: "no such group".to_owned(),
+                member: None,
+                after: false,
+            },
+        );
+        browser.drop_into_group(
+            &[a1],
+            &GroupDrop {
+                group: first,
+                member: Some(a1),
+                after: false,
+            },
+        );
+        assert_eq!(urls(&browser).join(" "), before, "nowhere to go: nothing moves");
     }
 
     #[test]
