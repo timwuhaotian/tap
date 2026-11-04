@@ -336,11 +336,16 @@ impl Tab {
         }
     }
 
-    fn set<T: PartialEq>(field: &mut T, value: T, dirty: &mut TabFields, flag: TabFields) {
+    /// Sets `field` and answers whether it moved. Only a real change marks the tab
+    /// dirty, so a caller that reports the same page state again on every progress
+    /// tick writes nothing.
+    fn set<T: PartialEq>(field: &mut T, value: T, dirty: &mut TabFields, flag: TabFields) -> bool {
         if *field != value {
             *field = value;
             dirty.insert(flag);
+            return true;
         }
+        false
     }
 
     fn entry(&self) -> session::Entry {
@@ -1884,18 +1889,22 @@ impl Browser {
         if url.is_empty() || url == "about:blank" && tab.url.is_empty() {
             return;
         }
-        Tab::set(&mut tab.url, url.to_owned(), &mut tab.dirty, TabFields::URL);
+        if !Tab::set(&mut tab.url, url.to_owned(), &mut tab.dirty, TabFields::URL) {
+            return;
+        }
         self.session_changed = true;
     }
 
     pub fn page_title(&mut self, id: TabId, title: &str) {
         let Some(tab) = self.tab_mut(id) else { return };
-        Tab::set(
+        if !Tab::set(
             &mut tab.title,
             title.to_owned(),
             &mut tab.dirty,
             TabFields::TITLE,
-        );
+        ) {
+            return;
+        }
         let url = tab.url.clone();
         self.session_changed = true;
         if !url.is_empty() && self.history.retitle(&url, title) {
@@ -2443,6 +2452,25 @@ mod tests {
             !effects.iter().any(|e| matches!(e, Effect::Save(_))),
             "restoring changes nothing to save"
         );
+    }
+
+    #[test]
+    fn a_report_that_changed_nothing_writes_no_session() {
+        let mut browser = with_pages(&["https://a.com"]);
+        let id = browser.active().expect("a tab");
+        let _ = browser.take_effects();
+
+        // What a progress tick reports: the same address and title again, as WebKit
+        // fires its observers many times over one load.
+        browser.page_url(id, "https://a.com");
+        browser.page_title(id, "");
+        assert!(
+            !browser.take_effects().iter().any(|e| matches!(e, Effect::Save(_)))
+        );
+
+        browser.page_url(id, "https://a.com/next");
+        browser.page_title(id, "Example Domain");
+        assert!(browser.take_effects().iter().any(|e| matches!(e, Effect::Save(_))));
     }
 
     /// A session as Search writes one with groups: tabs of a group need not stand
