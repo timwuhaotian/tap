@@ -33,14 +33,18 @@ with its own name and icon, and with fixes of its own.
 - **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
   ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon.
 - **Tab groups**: a group's name heads its tabs, and a click folds it away or opens it.
-- **Settings** (⌘,), laid out as Search's: every setting is there to find, and the ones
-  Tap acts on already (search engine, sleeping tabs, light or dark, downloads folder,
-  default browser, clearing data, updates) work from there.
+- **Settings** (⌘,), laid out as Search's, with only the settings that work: where new
+  tabs go, what closing one lands on, background links that wait, closing tabs you leave
+  alone, a fresh window at launch, sleeping tabs, the search engine and site shortcuts,
+  "settings" or "new tab" typed in the field, asking where to save, videos that wait for
+  a click, page zoom, removing click trackers from links, Global Privacy Control, light
+  or dark, downloads folder, default browser, clearing data, updates.
 - **Your profile on your other Mac.** File › Export Tap Profile… writes one offline
   file of your tabs and their groups, history, bookmarks and settings, and offers it to
   AirDrop; open it on the other Mac and it all comes in, groups folded or open as they
   were. Search's profile files
-  ([#845](https://github.com/driceroland/Search/pull/845)) come in too. Sign-ins,
+  ([#845](https://github.com/driceroland/Search/pull/845)) come in too, and
+  `cargo xtask search-profile` packs the Search on this Mac as one. Sign-ins,
   passwords and cookies never go in the file.
 - **It updates itself**: checked against Apple's notarization and the developer's
   signature, installed when Tap quits, or at once with Restart Now.

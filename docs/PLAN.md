@@ -448,7 +448,7 @@ across NSUserDefaults (done in 0.1.1, §8).
   identical layout and `format: 1`.
 
 **"Bring things over from Search"** (`tap_import::from_search`, new; its file half is
-in: `from_search::pack` and `cargo xtask search-profile`, §8 "After 0.1.1"). If
+in: `from_search::pack` and `cargo xtask search-profile`, §8 "0.1.2"). If
 `~/Library/Application Support/Search` exists, Search is offered as an import source.
 - It builds the same `IncomingProfile` that #845's import reads, from the live folder
   plus `CFPreferencesCopyMultiple("com.officecommun.search")`, so both paths share all
@@ -740,14 +740,14 @@ that asks:
   Tap reads `session.json` as the first space's whether or not the list is there.
   Fixed on both sides after 0.1.1 (below).
 
-### After 0.1.1 — Settings that work, #845's space list, Search's profile brought over
+### 0.1.2 — Settings that work, #845's space list, Search's profile brought over
 
 At the user's request (2026-11-04: fix #845's `spaces.json`; export this Mac's Search
 profile in Tap's format and bring it into the installed Tap, groups and all; "most of
-Settings can't really be used: fix it"). Unreleased.
+Settings can't really be used: fix it"), then released as 0.1.2 ("发版").
 
 - [x] **#845's space list, fixed in Search** (branch `export-search-profile`, commit
-  `0df6942`, local, not pushed): the export stages the list `Spaces.read` makes on the
+  `0df6942`, kept local: the user wants no more PRs, see §15): the export stages the list `Spaces.read` makes on the
   spot when there is no `spaces.json`, and the import reads a file without one as
   Personal's one space, so files already written bring their tabs too.
   `SearchProfileTests` (2 tests) fail without it and pass with it; the ImportFile and
@@ -1214,7 +1214,8 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | Browsing came before M1's foundations, at the user's request: the core model, runtime, window, tabs, field and web views are in (M2 progress). The bench moves up next: driving the UI with synthetic keystrokes is unreliable and can reach other apps. |
 | 2026-11-04 | The GitHub repo `timwuhaotian/tap` is public from day one, not only from 1.0. Nothing is downloadable until `releases/` is first committed at 1.0. |
 | 2026-11-04 | At the user's request, 0.1.1 brings forward Settings (Search's whole index, the rows Tap acts on live, the rest dimmed with their values), #845 profile files (export, import, opened from the Finder), tab groups in the row, and Kil's updater (§8 "0.1.1"), then ships as a patch release. Profile files are read in memory with the `zip` crate in a new `tap-import` crate, as §4 and §7 planned. |
-| 2026-11-04 | At the user's request ("为什么settings里面的大部分选项都没办法真实的使用，修复优化"), Settings shows only the rows Tap acts on, replacing 0.1.1's dimmed rows, and twelve more rows are made live (§8 "After 0.1.1"). The rest come back as their features land; their values are kept and travel meanwhile. |
+| 2026-11-04 | No more pull requests ("后面不要PR了，改动直接在main分支推送发布版本"): changes are committed on `main`, pushed and shipped as a release. The upstream Search PRs (#841, #845, #849) aren't updated; their behaviour lives in Tap, and Search-side fixes stay local. |
+| 2026-11-04 | At the user's request ("为什么settings里面的大部分选项都没办法真实的使用，修复优化"), Settings shows only the rows Tap acts on, replacing 0.1.1's dimmed rows, and twelve more rows are made live (§8 "0.1.2"). The rest come back as their features land; their values are kept and travel meanwhile. |
 | 2026-11-04 | At the user's request ("全部完成后，发布0.1.0版本"), 0.1.0 is released once M2 is done, rather than waiting for full parity at 1.0: browsing, the field, history, page questions, downloads, find, sleeping tabs, session, site icons, links from other apps and #849. `releases/` is committed from 0.1.0; the README says what isn't in yet. Full parity stays the bar for 1.0. Not in 0.1.0 and needed before people rely on it: the updater (M8 in the plan, ported from Kil). |
 
 ## Appendix A — Parity tracker

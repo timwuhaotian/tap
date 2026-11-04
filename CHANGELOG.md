@@ -7,6 +7,11 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.2 — 2026-11-04
+
+Settings you can use, more of Search's tab behaviour, and Search's own profile
+brought over.
+
 - **Settings shows only what works.** Every row on it now changes what Tap does, at
   once; rows for what Tap can't do yet are no longer shown (their values are still kept
   and still travel in a profile), and pages with none left (Passwords, Extensions,
