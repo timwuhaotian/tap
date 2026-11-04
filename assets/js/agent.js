@@ -127,7 +127,7 @@ if (verb === "fill") {
         const option = [...element.options].find(o => o.value === text || o.text.trim() === text);
         if (!option) return { error: `no option "${text}"` };
         element.value = option.value;
-    } else if (tag === "input" || tag === "textarea") {
+    } else if (tag === "textarea" || (tag === "input" && !["checkbox", "radio"].includes(element.type))) {
         // The prototype's setter, so a framework that watches the property sees a change.
         const prototype = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
         Object.getOwnPropertyDescriptor(prototype, "value").set.call(element, text);
