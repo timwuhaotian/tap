@@ -91,8 +91,9 @@ pub enum Effect {
     FocusPage(TabId),
     /// Write the session (debounced by the shell's disk writer).
     Save(session::Shape),
-    /// Write `history.json`, already encoded.
-    SaveHistory(Vec<u8>),
+    /// Write `history.json` (`now` fixes its ordering); the shell's writer thread
+    /// encodes it, off the main thread.
+    SaveHistory(History, f64),
     /// Ask the tab's page about the word looked for.
     Find(find::Ask),
     /// Take what the find painted off the tab's page.
@@ -340,11 +341,16 @@ impl Tab {
         }
     }
 
-    fn set<T: PartialEq>(field: &mut T, value: T, dirty: &mut TabFields, flag: TabFields) {
+    /// Sets `field` and answers whether it moved. Only a real change marks the tab
+    /// dirty, so a caller that reports the same page state again on every progress
+    /// tick writes nothing.
+    fn set<T: PartialEq>(field: &mut T, value: T, dirty: &mut TabFields, flag: TabFields) -> bool {
         if *field != value {
             *field = value;
             dirty.insert(flag);
+            return true;
         }
+        false
     }
 
     fn entry(&self) -> session::Entry {
@@ -604,7 +610,7 @@ impl Browser {
             effects.push(Effect::Save(self.shape()));
         }
         if std::mem::take(&mut self.history_changed) {
-            effects.push(Effect::SaveHistory(self.history.encode(history::now())));
+            effects.push(Effect::SaveHistory(self.history.clone(), history::now()));
         }
         effects
     }
@@ -1158,7 +1164,9 @@ impl Browser {
         self.effects.push(Effect::FocusPage(id));
     }
 
-    fn wake(&mut self, id: TabId) {
+    /// Wakes a sleeping tab where it stands, the tab in front staying in front: as
+    /// selecting one does, and as an agent reading one needs (bench `snapshot`).
+    pub fn wake(&mut self, id: TabId) {
         let Some(tab) = self.tab_mut(id) else { return };
         if tab.stale {
             tab.stale = false;
@@ -2026,18 +2034,22 @@ impl Browser {
         if url.is_empty() || url == "about:blank" && tab.url.is_empty() {
             return;
         }
-        Tab::set(&mut tab.url, url.to_owned(), &mut tab.dirty, TabFields::URL);
+        if !Tab::set(&mut tab.url, url.to_owned(), &mut tab.dirty, TabFields::URL) {
+            return;
+        }
         self.session_changed = true;
     }
 
     pub fn page_title(&mut self, id: TabId, title: &str) {
         let Some(tab) = self.tab_mut(id) else { return };
-        Tab::set(
+        if !Tab::set(
             &mut tab.title,
             title.to_owned(),
             &mut tab.dirty,
             TabFields::TITLE,
-        );
+        ) {
+            return;
+        }
         let url = tab.url.clone();
         self.session_changed = true;
         if !url.is_empty() && self.history.retitle(&url, title) {
@@ -2213,6 +2225,11 @@ impl Browser {
         }
     }
 
+    /// The finest progress step that counts as change. The drawn line moves by less
+    /// than a pixel inside a tab's pill at this size, while a load reports far finer
+    /// steps many times over, and every one of them marked the whole row dirty.
+    const PROGRESS_STEP: f64 = 1.0 / 128.0;
+
     pub fn page_loading(&mut self, id: TabId, loading: bool, progress: f64) {
         let Some(tab) = self.tab_mut(id) else { return };
         Tab::set(
@@ -2221,10 +2238,10 @@ impl Browser {
             &mut tab.dirty,
             TabFields::LOADING,
         );
-        if (tab.progress - progress).abs() > f64::EPSILON {
-            tab.progress = progress;
+        if (tab.progress - progress).abs() >= Self::PROGRESS_STEP {
             tab.dirty.insert(TabFields::PROGRESS);
         }
+        tab.progress = progress;
     }
 
     /// What WebKit says of the page's connection: whether every resource on it came
@@ -2626,6 +2643,58 @@ mod tests {
         assert!(
             !effects.iter().any(|e| matches!(e, Effect::Save(_))),
             "restoring changes nothing to save"
+        );
+    }
+
+    #[test]
+    fn a_report_that_changed_nothing_writes_no_session() {
+        let mut browser = with_pages(&["https://a.com"]);
+        let id = browser.active().expect("a tab");
+        let _ = browser.take_effects();
+
+        // What a progress tick reports: the same address and title again, as WebKit
+        // fires its observers many times over one load.
+        browser.page_url(id, "https://a.com");
+        browser.page_title(id, "");
+        assert!(
+            !browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Save(_)))
+        );
+
+        browser.page_url(id, "https://a.com/next");
+        browser.page_title(id, "Example Domain");
+        assert!(
+            browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Save(_)))
+        );
+    }
+
+    #[test]
+    fn an_agent_wakes_a_sleeping_tab_where_it_stands() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com"]);
+        let second = browser.tabs()[1].id;
+        browser.select(second);
+        let mut again = Browser::restored(browser.shape());
+        let (first, front) = (again.tabs()[0].id, again.tabs()[1].id);
+        again.take_effects();
+
+        again.wake(first);
+        assert!(again.tabs()[0].awake());
+        assert_eq!(
+            again.active(),
+            Some(front),
+            "the tab in front stays in front"
+        );
+        assert_eq!(
+            again.take_effects(),
+            [Effect::Load {
+                tab: first,
+                url: "https://a.com".into()
+            }]
         );
     }
 
@@ -3364,7 +3433,47 @@ mod tests {
         browser.page_finished(id);
         assert_eq!(browser.history().len(), 1);
         let effects = browser.take_effects();
-        assert!(effects.iter().any(|e| matches!(e, Effect::SaveHistory(data) if String::from_utf8_lossy(data).contains("Example Domain"))));
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::SaveHistory(history, _)
+                if String::from_utf8_lossy(&history.encode(history::now())).contains("Example Domain")))
+        );
+    }
+
+    #[test]
+    fn a_progress_step_too_small_to_draw_marks_nothing() {
+        let mut browser = with_pages(&["https://a.com"]);
+        let id = browser.active().expect("a tab");
+        browser.page_loading(id, true, 0.5);
+        let _ = browser.take_dirty();
+
+        browser.page_loading(id, true, 0.5 + 1e-9);
+        let (_, tabs) = browser.take_dirty();
+        assert!(
+            !tabs
+                .iter()
+                .any(|(_, fields)| fields.contains(TabFields::PROGRESS)),
+            "a step smaller than the drawn line changes nothing"
+        );
+
+        browser.page_loading(id, true, 0.9);
+        let (_, tabs) = browser.take_dirty();
+        assert!(
+            tabs.iter()
+                .any(|(_, fields)| fields.contains(TabFields::PROGRESS))
+        );
+    }
+
+    #[test]
+    fn a_progress_step_too_small_to_draw_still_moves_the_value() {
+        let mut browser = with_pages(&["https://a.com"]);
+        let id = browser.active().expect("a tab");
+        browser.page_loading(id, true, 1.0 - 1.0 / 256.0);
+        browser.page_loading(id, false, 1.0);
+        assert_eq!(
+            browser.tab(id).map(Tab::progress),
+            Some(1.0),
+            "the last tick lands even when it moves less than the drawn line"
+        );
     }
 
     #[test]

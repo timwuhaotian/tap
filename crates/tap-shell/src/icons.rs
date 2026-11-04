@@ -7,7 +7,7 @@
 //! view of its own; a second icon for the dark look; the letter shown before an icon
 //! arrives; icons in the field's rows.
 
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, ptr};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, ptr, time::Duration};
 
 use block2::RcBlock;
 use objc2::{AllocAnyThread, rc::Retained};
@@ -34,6 +34,10 @@ const SIDE: isize = 32;
 const EDGE: f64 = 32.0;
 /// An icon file bigger than this is not an icon.
 const LARGEST: usize = 1_000_000;
+/// How long a kept icon stands for the page (Search's `Favicons.fresh`): after this, a
+/// finished page is asked again, in case the site has changed what it wears.
+#[allow(clippy::duration_suboptimal_units)] // `Duration::from_days` is unstable
+const FRESH: Duration = Duration::from_secs(7 * 86_400);
 
 /// What the page declares, read in Tap's own world (Search's `Favicons.probe`).
 const PROBE: &str = r"(() => {
@@ -100,6 +104,17 @@ pub fn fetch(tab: TabId, web: &WKWebView) {
     {
         return;
     }
+    // Fresh and right for this look: nothing to do (Search's `Icons.fetch`). Without
+    // this every visit re-probed the page, re-downloaded and redrew its icon, and
+    // rewrote the PNG and the whole index JSON on the main thread. Only the page's
+    // own record counts: a neighbour's fresh icon is no proof this page was probed.
+    if let Some(name) = with_index(|index| index.exact(&page, false))
+        && std::fs::metadata(folder().join(format!("{name}.png")))
+            .and_then(|kept| kept.modified())
+            .is_ok_and(|kept| kept.elapsed().is_ok_and(|age| age < FRESH))
+    {
+        return;
+    }
     web::evaluate_in_world(web, PROBE, move |value| {
         let declared: Vec<Declared> = value
             .and_then(|v| serde_json::from_value(v).ok())
@@ -163,9 +178,10 @@ fn keep(page: &Url, address: &str, bytes: &[u8]) -> bool {
         return false;
     };
     let name = icons::ident(address);
-    if std::fs::write(folder().join(format!("{name}.png")), &png).is_err() {
-        return false;
-    }
+    // The PNG goes through the writer thread. If that write were to fail, the index
+    // would still name it; the next visit's freshness check finds no file and asks
+    // again, so the miss heals itself.
+    store::save(folder().join(format!("{name}.png")), png);
     IMAGES.with_borrow_mut(|images| images.remove(&name));
     let data = with_index(|index| {
         index.record(page, &name, false, history::now());

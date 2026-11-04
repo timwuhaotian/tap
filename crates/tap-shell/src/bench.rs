@@ -66,7 +66,7 @@ fn should_listen(test_run: bool, switched_on: bool) -> bool {
     test_run || switched_on
 }
 
-fn test_run() -> bool {
+pub(crate) fn test_run() -> bool {
     identity::world(std::env::var(identity::PROBE_ENV).ok().as_deref()).is_some()
 }
 
@@ -82,6 +82,8 @@ pub fn refresh() {
     } else {
         stop();
     }
+    // The tap command and the agents' skill follow the same switch.
+    crate::agents::refresh();
 }
 
 /// Starts listening, if this run should. Called once at launch; the switch moving is
@@ -664,24 +666,51 @@ fn handle(request: &Value, reply: Reply) {
             };
             // "world": "tap" (or Search's "search"): in Tap's own content world.
             if matches!(text("world").as_deref(), Some("tap" | "search")) {
-                let Some(web) = web::existing(id) else {
-                    return reply.say(json!({ "error": "the tab has no page" }));
-                };
-                let reply = std::cell::RefCell::new(Some(reply));
-                web::evaluate_in_world(&web, &js, move |value| {
-                    if let Some(reply) = reply.borrow_mut().take() {
-                        reply.say(json!({ "value": value }));
-                    }
+                return with_page(id, reply, move |web, reply| {
+                    let reply = std::cell::RefCell::new(Some(reply));
+                    web::evaluate_in_world(&web, &js, move |value| {
+                        if let Some(reply) = reply.borrow_mut().take() {
+                            reply.say(json!({ "value": value }));
+                        }
+                    });
                 });
-                return;
             }
-            evaluate(id, &js, reply);
+            with_page(id, reply, move |_, reply| evaluate(id, &js, reply));
         }
         "text" => {
             let Some(id) = tab_id(request) else {
                 return reply.say(json!({ "error": "no such tab" }));
             };
-            evaluate(id, "document.body ? document.body.innerText : ''", reply);
+            with_page(id, reply, move |_, reply| {
+                evaluate(id, "document.body ? document.body.innerText : ''", reply);
+            });
+        }
+        "snapshot" => {
+            let Some(id) = tab_id(request) else {
+                return reply.say(json!({ "error": "no such tab" }));
+            };
+            with_page(id, reply, move |_, reply| {
+                agent(id, "snapshot", "", "", reply);
+            });
+        }
+        "act" => {
+            // A control from the last `snapshot`, clicked, filled or pressed on.
+            let Some(id) = tab_id(request) else {
+                return reply.say(json!({ "error": "no such tab" }));
+            };
+            let action = text("action").unwrap_or_default();
+            if !matches!(action.as_str(), "click" | "fill" | "press") {
+                return reply.say(json!({ "error": "act needs action: click, fill or press" }));
+            }
+            let target = text("ref").unwrap_or_default();
+            if target.is_empty() && action != "press" {
+                return reply
+                    .say(json!({ "error": format!("{action} needs a ref from snapshot") }));
+            }
+            let value = text("value").unwrap_or_default();
+            with_page(id, reply, move |_, reply| {
+                agent(id, &action, &target, &value, reply);
+            });
         }
         "field" => field(request, reply),
         "fieldkey" => {
@@ -899,6 +928,63 @@ fn later(seconds: f64, work: impl FnOnce() + Send + 'static) {
     let nanos = (seconds * 1e9) as u64;
     let when = dispatch2::DispatchTime::NOW.time(i64::try_from(nanos).unwrap_or(i64::MAX));
     let _ = dispatch2::DispatchQueue::main().after(when, work);
+}
+
+/// How long a page read waits for a sleeping tab to wake and load, in seconds: well
+/// inside the request's patience.
+const WAKING: f64 = 15.0;
+
+/// Hands the tab's page on to `then`, waking the tab first where it stands if it sleeps
+/// (a session's tabs come back asleep), once it has loaded or [`WAKING`] has passed.
+fn with_page(
+    id: TabId,
+    reply: Reply,
+    then: impl FnOnce(Retained<objc2_web_kit::WKWebView>, Reply) + Send + 'static,
+) {
+    if rt::read(|b| b.tab(id).is_some_and(|t| !t.awake())).unwrap_or(false) {
+        rt::dispatch(move |browser| browser.wake(id));
+    }
+    settle(id, WAKING, reply, then);
+}
+
+fn settle(
+    id: TabId,
+    seconds: f64,
+    reply: Reply,
+    then: impl FnOnce(Retained<objc2_web_kit::WKWebView>, Reply) + Send + 'static,
+) {
+    let loading = rt::read(|b| b.tab(id).is_some_and(Tab::loading)).unwrap_or(false);
+    match web::existing(id) {
+        Some(web) if !loading || seconds <= 0.0 => then(web, reply),
+        None if seconds <= 0.0 => reply.say(json!({ "error": "the tab has no page" })),
+        _ => later(0.1, move || settle(id, seconds - 0.1, reply, then)),
+    }
+}
+
+/// The agents' page script (docs/PLAN.md §8 "Agents use Tap"), as one expression.
+const AGENT: &str = concat!(
+    "(async () => {\n",
+    include_str!("../../../assets/js/agent.js"),
+    "\n})()"
+);
+
+/// One of the agent script's verbs on the tab's page, in Tap's own world, answered with
+/// what the script says.
+fn agent(id: TabId, verb: &str, target: &str, value: &str, reply: Reply) {
+    let Some(web) = web::existing(id) else {
+        return reply.say(json!({ "error": "the tab has no page" }));
+    };
+    let reply = std::cell::RefCell::new(Some(reply));
+    web::call_in_world(
+        &web,
+        AGENT,
+        &[("verb", verb), ("ref", target), ("value", value)],
+        move |answer| {
+            if let Some(reply) = reply.borrow_mut().take() {
+                reply.say(answer.unwrap_or_else(|| json!({ "error": "the page gave no answer" })));
+            }
+        },
+    );
 }
 
 /// Evaluates an expression in the tab's page and answers with its value, as JSON.

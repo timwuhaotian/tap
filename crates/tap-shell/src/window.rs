@@ -7,7 +7,7 @@
 //! peek panel, no way to stop WebKit's own swipe (`register` turns its back/forward
 //! gestures on), and no back-forward list to pick from. Both wait on hooks there.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use block2::{DynBlock, RcBlock};
 use objc2::{
@@ -112,6 +112,11 @@ struct Views {
     trouble_text: Retained<NSTextField>,
     helm: [Retained<NSButton>; 3],
     shown: RefCell<Option<TabId>>,
+    /// Whether the helm's third door last showed Stop, so its symbol is rebuilt only
+    /// on change. Starts the other way round, so the first update draws it.
+    stopping: Cell<bool>,
+    /// The window's last title, so AppKit is told only when it moves.
+    title: RefCell<String>,
     _field_delegate: Retained<FieldDelegate>,
 }
 
@@ -245,10 +250,15 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             trouble_text,
             helm,
             shown: RefCell::new(None),
+            stopping: Cell::new(true),
+            title: RefCell::new(String::new()),
             _field_delegate: field_delegate,
         });
     });
     with_views(arrange);
+    // The downloads door's first state; after this, launch-time Settings, a download
+    // starting or ending, and Settings moving tell it what to do.
+    with_views(refresh_fetch_door);
     window.makeKeyAndOrderFront(None);
 }
 
@@ -464,25 +474,39 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         queue_launch_conversion();
     }
     with_views(|views| {
-        refresh_fetch_door(views);
-        if !dirty.is_empty() || !tabs.is_empty() {
+        // The strip draws every tab; the bar, the window's fields and the front tab's.
+        // A background tab's progress is drawn nowhere, so it marks nothing for redraw.
+        let strip_moved = !dirty.is_empty()
+            || tabs.iter().any(|(id, fields)| {
+                Some(*id) == view.active
+                    || fields.intersects(TabFields::all() - TabFields::PROGRESS)
+            });
+        if strip_moved {
             views.strip.setNeedsDisplay(true);
+        }
+        if !dirty.is_empty() || !active_dirty.is_empty() {
             views.bar.setNeedsDisplay(true);
         }
         views.helm[0].setEnabled(view.can_back);
         views.helm[1].setEnabled(view.can_forward);
-        let (symbol, name) = if view.loading {
-            ("xmark", "Stop")
-        } else {
-            ("arrow.clockwise", "Reload")
-        };
-        if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str(symbol),
-            Some(&NSString::from_str(name)),
-        ) {
-            views.helm[2].setImage(Some(&image));
+        // Loading flips twice a load; the SF Symbol lookup ran on every update.
+        if views.stopping.replace(view.loading) != view.loading {
+            let (symbol, name) = if view.loading {
+                ("xmark", "Stop")
+            } else {
+                ("arrow.clockwise", "Reload")
+            };
+            if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str(symbol),
+                Some(&NSString::from_str(name)),
+            ) {
+                views.helm[2].setImage(Some(&image));
+            }
         }
-        views.window.setTitle(&NSString::from_str(&view.title));
+        if views.title.borrow().as_str() != view.title {
+            views.window.setTitle(&NSString::from_str(&view.title));
+            views.title.borrow_mut().clone_from(&view.title);
+        }
 
         if dirty.intersects(BrowserFields::ACTIVE | BrowserFields::TABS)
             || active_dirty.intersects(TabFields::AWAKE | TabFields::FAILURE | TabFields::URL)

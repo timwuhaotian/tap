@@ -86,6 +86,16 @@ with its own name and icon, and with fixes of its own.
   titled with the site that asks.
 - **It can be your browser.** Choose Tap under System Settings › Desktop & Dock ›
   Default web browser; links from other apps open in it, and so do HTML files.
+- **New tabs pile up.** +/⌘T always opens a fresh blank tab instead of reusing the
+  blank one in front; a blank tab draws a quiet animated instrument behind the
+  field, and stays cheap with no web view.
+- **A click on any tab lands in the field**, its address selected and ready to type.
+- **Coding agents browse with it.** Tap puts a `tap` command in `~/.local/bin` and a
+  skill where Claude Code, Codex, Gemini and opencode look, so an agent on this Mac
+  reaches for Tap when a task needs a browser: `tap open`, `tap snapshot` (the page's
+  controls, each with a ref), `tap click`, `tap fill`, `tap press`, `tap text`. Its tabs
+  open behind yours, with your sign-ins. Settings › Let agents use Tap turns it off and
+  takes the command and skill away.
 - **A page that keeps crashing stops reloading itself** and says so
   ([#849](https://github.com/driceroland/Search/pull/849)).
 - **Nothing phones home.** No account, no sync, no telemetry. The only requests Tap

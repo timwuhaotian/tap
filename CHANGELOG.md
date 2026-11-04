@@ -13,6 +13,10 @@ Info.plist.
   tabs, the group lights up in its colour, and letting go puts the tab (or every picked
   tab) into it beside the tab under the pointer.
 
+## 0.2.0 — 2026-11-05
+
+Agents browse with Tap; new tabs pile up behind a quiet instrument; a click on any tab lands in the field.
+
 Chrome refinement, no behaviour change.
 
 - **One card, one pill, one shadow**: every floating card and pill now shares
@@ -29,6 +33,41 @@ themselves and line up; the find bar's count, clicks, dimming and pitch fixed.
 - **New tabs pile up and close**: +/⌘T and the "new tab" field command always open a
   fresh blank tab instead of reusing the blank one in front; the cross on a new tab
   closes it, and closing the only tab when it is already new closes the window.
+- **A blank tab draws a quiet instrument**: a small isometric signal-bench behind the
+  field — a carriage breathing on a 12 s loop, a dial with a breathing needle, one
+  softly lit signal dot. Native drawing, no web view; still under Reduce Motion.
+
+A load stops paying for what didn't change: the page-load path is tightened end to
+end, behaviour-preserving (docs/PLAN.md §10 "The page-load path").
+
+- A page that keeps loading no longer rewrites `session.json` on every progress tick;
+  the session and history files are encoded on the writer thread, not the main one.
+- A page that already wears a fresh site icon (kept under 7 days) isn't probed,
+  re-downloaded and redrawn again on every visit, and the PNG is written off the main
+  thread.
+- The web view's observer reads only the property that moved, instead of all seven
+  and calling all five model setters, on each of a load's ticks.
+- Progress counts as change only in steps the drawn line can show; the tab row and the
+  address bar redraw only when something drawn moved, and the reload/stop symbol and
+  the window title are touched only on change.
+- The chrome's text style and the address bar's badge image are made once, not on
+  every draw.
+- History's recency score is worked out once per visit when the file is written, not
+  inside the sort's comparator.
+
+Coding agents browse with Tap.
+
+- **A `tap` command** for agents and scripts: open a page behind yours, list its
+  controls with refs, click, fill and press on them, read its text. Tap starts in the
+  background if it isn't running, and a sleeping tab wakes where it stands to be read.
+- **Every agent knows**: Tap keeps the command in `~/.local/bin` and a skill in
+  `~/.agents/skills` (and Claude Code's), telling an agent to use Tap when a task needs
+  a browser.
+- **Settings › Let agents use Tap** is on by default; off takes the command and skill
+  away. Only scripts running as you can reach Tap's socket.
+- **A click on any tab lands in the field**: clicking any tab — the live one or one
+  behind — opens the address bar's field with its address selected; a blank tab opens
+  it empty with the cursor in it.
 
 ## 0.1.8 — 2026-11-05
 
