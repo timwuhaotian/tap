@@ -686,8 +686,8 @@ impl Strip {
         let scale = self.ivars().press_scale.get();
         if (scale - target).abs() > 0.001 {
             // Down answers at once, back up settles, as Search's `Give` has it.
-            // While the Mac saves power the sink is a step, not an ease.
-            let step = if look.light {
+            // With no motion to spare the sink lands at once rather than easing.
+            let step = if motion::reduced() || look.light {
                 1.0
             } else if target < scale {
                 0.45
@@ -756,6 +756,7 @@ impl Strip {
                 let Some(state) = rt::read(|browser| {
                     let tab = browser.tab(id)?;
                     let tabs = browser.tabs();
+                    let among = browser.is_selected(id);
                     Some(TabState {
                         has_page: !tab.is_blank() && !tab.is_internal(),
                         others: tabs.iter().any(|t| t.id != id && !t.is_pinned()),
@@ -767,10 +768,20 @@ impl Strip {
                             .and_then(|g| browser.groups().iter().position(|x| x.id == g)),
                         groups: browser.groups().iter().map(|g| g.name.clone()).collect(),
                         can_sleep: browser.awake_because(id).is_none(),
-                        picked: if browser.is_selected(id) {
-                            browser.selection_count()
+                        picked: if among { browser.selection_count() } else { 0 },
+                        picked_groups: if among && browser.selection_count() > 1 {
+                            browser
+                                .tabs()
+                                .iter()
+                                .filter(|t| browser.is_selected(t.id))
+                                .map(|t| {
+                                    t.group().and_then(|g| {
+                                        browser.groups().iter().position(|x| x.id == g)
+                                    })
+                                })
+                                .collect()
                         } else {
-                            0
+                            Vec::new()
                         },
                     })
                 })
@@ -1471,14 +1482,13 @@ impl Strip {
                 draw_item(browser, &paint, slot, item, rect);
             }
             NSGraphicsContext::restoreGraphicsState_class();
-            if inside {
-                let (plus_rect, _) = at(&Key::Plus, layout.plus);
-                if paint.spot == Spot::Plus {
-                    palette::HOVER.resolve(dark).setFill();
-                    pill(plus_rect).fill();
-                }
-                plus(plus_rect, &palette::MUTED.resolve(dark));
+            let (plus_rect, _) = at(&Key::Plus, layout.plus);
+            // The plus is always there to be found; only its wash waits for the pointer.
+            if inside && paint.spot == Spot::Plus {
+                palette::HOVER.resolve(dark).setFill();
+                pill(plus_rect).fill();
             }
+            plus(plus_rect, &palette::MUTED.resolve(dark));
         });
     }
 
@@ -1703,6 +1713,13 @@ fn draw_tab(
     } else if under && !live {
         palette::HOVER.resolve(dark).setFill();
         pill(*rect).fill();
+    } else if under && live {
+        // Over the live pill, so only a breath of hover lest it cover the live one.
+        palette::HOVER
+            .resolve(dark)
+            .colorWithAlphaComponent(0.5)
+            .setFill();
+        pill(*rect).fill();
     }
     let titled = rect.size.width >= palette::TAB_TITLED;
     // Search's `ReadingFill`: ink at 5.5% over the live pill, from its
@@ -1783,7 +1800,7 @@ fn draw_tab(
             NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
             NSSize::new(ICON, ICON),
         );
-        palette::HAIRLINE.resolve(dark).setFill();
+        palette::HOVER.resolve(dark).setFill();
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
         let letter = monogram(tab);
         let width = palette::text_width(&letter);
@@ -1855,7 +1872,7 @@ fn draw_tab(
     }
     // The load's progress: along the pill's foot, unless the address bar says it.
     if live && tab.loading() && !look.bar {
-        progress(*rect, tab.progress(), &palette::MUTED.resolve(dark));
+        progress(*rect, tab.progress(), &palette::INK.resolve(dark));
     }
 }
 

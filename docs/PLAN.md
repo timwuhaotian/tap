@@ -1135,6 +1135,37 @@ At the user's request (2026-11-04: "多选的tab支持一起关闭和拖动"), a
   (b d a c e), lifted together on the way and still picked after; ⌘W closed the three
   (b d left, d in front); one ⇧⌘T brought them back in place, a in front.
 
+### Unreleased — Chrome polish
+
+At the user's request (2026-11-05: "polish ui ux"), one polish-only pass over the
+tab row, address bar, menus, Settings rail, find bar and window chrome. No behaviour
+changes, no new features; the two noted deviations from Search's menu are deliberate
+(a count in Copy N Addresses, a Color submenu Search's groups lack).
+
+- [x] **Strip** (`strip.rs`): the plus always draws (only its hover fill gates on the
+  pointer); the press give lands at once under Reduce Motion as well as Low Power;
+  the live tab keeps a hover wash; a narrow tab's letter tile reads in a light window;
+  the load line reads on the live pill.
+- [x] **Address bar** (`address_bar.rs`, `offers.rs`): progress shows only while
+  loading and not editing, from zero with no stub; the badge menu anchors to the
+  capsule; the offer row keeps its full gap; the certificate lines stay readable to
+  VoiceOver.
+- [x] **Menus** (`tabmenu.rs`, `browser.rs`): no stray divider after Move to Group;
+  Copy N Addresses dims when no picked tab has a page (`Browser::can_copy_selected`,
+  tested); Color sits between dividers; the group rename sheet carries the tab's
+  helper line; the picked colour's tick is drawn into its swatch (AppKit hides a tick
+  beside an image).
+- [x] **Settings rail** (`settings.rs`): hidden-until-found rows tint fully when dimmed;
+  an info button carries the tooltip text for pointer and keyboard alike (tooltips stay);
+  the empty state says only handled settings are listed; find headings breathe; rail
+  icons sit on the pill rect, wide-row icons on the text.
+- [x] **Find bar** (`findbar.rs`): the count sizes itself and grows left, never under
+  the arrows; clicks pass through outside the card; previous/next dim with no matches;
+  the options button tints while a switch is on; one 26-point pitch throughout.
+- Checked: `cargo test` (tap-core 105, tap-import 31, tap-shell 56), clippy
+  `-D warnings`, nightly fmt. Not checked by eye: light/dark feel of each wash and
+  the VoiceOver pass over the badge menu.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
