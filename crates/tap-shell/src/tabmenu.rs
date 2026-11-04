@@ -7,15 +7,22 @@
 
 use std::cell::{Cell, RefCell};
 
-use objc2::{MainThreadMarker, MainThreadOnly, sel};
-use objc2_app_kit::{NSEvent, NSMenu, NSMenuItem, NSPasteboard, NSPasteboardTypeString, NSView};
-use objc2_foundation::{NSInteger, NSString};
-use tap_core::browser::{Browser, TabId};
+use block2::RcBlock;
+use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained, runtime::Bool, sel};
+use objc2_app_kit::{
+    NSBezierPath, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSImage, NSMenu,
+    NSMenuItem, NSPasteboard, NSPasteboardTypeString, NSView,
+};
+use objc2_foundation::{NSInteger, NSRect, NSSize, NSString};
+use tap_core::{
+    browser::{Browser, TabId},
+    groups::{self, COLOURS},
+};
 
 use crate::{
     dialogs,
     menu::{Command, Commands},
-    rt,
+    palette, rt,
 };
 
 thread_local! {
@@ -55,6 +62,10 @@ pub struct Entry {
     pub tag: Option<NSInteger>,
     pub enabled: bool,
     pub sub: Vec<Entry>,
+    /// Ticked: the choice in force.
+    pub checked: bool,
+    /// A group colour's dot beside the title.
+    pub swatch: Option<&'static str>,
 }
 
 fn entry(title: &str, command: Command, enabled: bool) -> Entry {
@@ -63,6 +74,8 @@ fn entry(title: &str, command: Command, enabled: bool) -> Entry {
         tag: Some(command as NSInteger),
         enabled,
         sub: Vec::new(),
+        checked: false,
+        swatch: None,
     }
 }
 
@@ -72,6 +85,8 @@ fn separator() -> Entry {
         tag: None,
         enabled: false,
         sub: Vec::new(),
+        checked: false,
+        swatch: None,
     }
 }
 
@@ -89,6 +104,8 @@ fn move_to_group(state: &TabState) -> Entry {
             tag: Some(Command::TabIntoGroup as NSInteger + place),
             enabled: state.group != usize::try_from(place).ok(),
             sub: Vec::new(),
+            checked: false,
+            swatch: None,
         });
     }
     if state.group.is_some() {
@@ -100,6 +117,8 @@ fn move_to_group(state: &TabState) -> Entry {
         tag: None,
         enabled: true,
         sub,
+        checked: false,
+        swatch: None,
     }
 }
 
@@ -136,11 +155,37 @@ pub fn tab_entries(state: &TabState) -> Vec<Entry> {
     entries
 }
 
-/// A heading's menu, Search's: rename, fold, then ungroup or close the lot.
+/// A heading's Color submenu: Chrome's nine, each with its dot, the group's ticked.
+fn colours(current: Option<&str>) -> Entry {
+    let sub = COLOURS
+        .iter()
+        .enumerate()
+        .map(|(place, colour)| Entry {
+            title: groups::colour_title(colour).to_owned(),
+            tag: Some(Command::GroupColour as NSInteger + NSInteger::try_from(place).unwrap_or(0)),
+            enabled: true,
+            sub: Vec::new(),
+            checked: current == Some(*colour),
+            swatch: Some(colour),
+        })
+        .collect();
+    Entry {
+        title: "Color".to_owned(),
+        tag: None,
+        enabled: true,
+        sub,
+        checked: false,
+        swatch: None,
+    }
+}
+
+/// A heading's menu, Search's (rename, fold, then ungroup or close the lot) with
+/// Chrome's colour choice after the name.
 #[must_use]
-pub fn group_entries(collapsed: bool) -> Vec<Entry> {
+pub fn group_entries(collapsed: bool, colour: Option<&str>) -> Vec<Entry> {
     vec![
         entry("Rename Group…", Command::GroupRename, true),
+        colours(colour),
         entry(
             if collapsed {
                 "Expand Group"
@@ -189,10 +234,32 @@ pub fn show_group(
     view: &NSView,
     place: usize,
     collapsed: bool,
+    colour: Option<&str>,
 ) {
     TARGET.set(None);
     GROUP.replace(rt::read(|browser| browser.groups().get(place).map(|g| g.id.clone())).flatten());
-    pop_up(mtm, commands, event, view, &group_entries(collapsed));
+    pop_up(
+        mtm,
+        commands,
+        event,
+        view,
+        &group_entries(collapsed, colour),
+    );
+}
+
+/// A colour's dot for its menu item, drawn as the menu shows it (light or dark).
+fn swatch(colour: &'static str) -> Retained<NSImage> {
+    let draw = RcBlock::new(move |rect: NSRect| -> Bool {
+        let dark = palette::drawing_dark();
+        palette::group_colour(Some(colour)).resolve(dark).setFill();
+        NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+            objc2_foundation::NSPoint::new(rect.origin.x + 1.0, rect.origin.y + 1.0),
+            NSSize::new(rect.size.width - 2.0, rect.size.height - 2.0),
+        ))
+        .fill();
+        Bool::YES
+    });
+    NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(12.0, 12.0), false, &draw)
 }
 
 fn build(
@@ -227,6 +294,14 @@ fn build(
         if !spec.sub.is_empty() {
             item.setSubmenu(Some(&build(mtm, commands, &spec.sub)));
         }
+        if let Some(colour) = spec.swatch {
+            item.setImage(Some(&swatch(colour)));
+        }
+        item.setState(if spec.checked {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
         item.setEnabled(spec.enabled);
         menu.addItem(&item);
     }
@@ -253,7 +328,17 @@ fn group_place() -> Option<usize> {
 /// Runs one of the tab menu's commands. Answers whether the tag was one.
 pub fn run(tag: NSInteger) -> bool {
     let target = TARGET.get();
-    if tag >= Command::TabIntoGroup as NSInteger {
+    let colour = tag - Command::GroupColour as NSInteger;
+    if let Some(colour) = usize::try_from(colour)
+        .ok()
+        .and_then(|place| COLOURS.get(place).copied())
+    {
+        if let Some(place) = group_place() {
+            rt::dispatch(move |browser| browser.set_group_colour(place, colour));
+        }
+        return true;
+    }
+    if (Command::TabIntoGroup as NSInteger..Command::GroupColour as NSInteger).contains(&tag) {
         let place = usize::try_from(tag - Command::TabIntoGroup as NSInteger).ok();
         if let Some(id) = target {
             rt::dispatch(move |browser| browser.move_to_group(id, place));
@@ -481,16 +566,33 @@ mod tests {
     #[test]
     fn a_group_can_be_renamed_folded_ungrouped_or_closed() {
         assert_eq!(
-            titles(&group_entries(false)),
+            titles(&group_entries(false, Some("red"))),
             [
                 "Rename Group…",
+                "Color",
                 "Collapse Group",
                 "",
                 "Ungroup Tabs",
                 "Close Group"
             ]
         );
-        assert_eq!(group_entries(true)[1].title, "Expand Group");
+        assert_eq!(group_entries(true, None)[2].title, "Expand Group");
+    }
+
+    #[test]
+    fn the_colour_menu_offers_chrome_s_nine_and_ticks_the_group_s() {
+        let entries = group_entries(false, Some("red"));
+        let colours = &entries[1].sub;
+        assert_eq!(colours.len(), 9);
+        assert_eq!(colours[0].title, "Blue");
+        let ticked: Vec<&str> = colours
+            .iter()
+            .filter(|e| e.checked)
+            .map(|e| e.title.as_str())
+            .collect();
+        assert_eq!(ticked, ["Red"]);
+        assert_eq!(colours[1].tag, Some(Command::GroupColour as NSInteger + 1));
+        assert!(colours.iter().all(|e| e.swatch.is_some()));
     }
 
     #[test]

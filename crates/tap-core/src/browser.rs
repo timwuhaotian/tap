@@ -775,6 +775,23 @@ impl Browser {
         self.session_changed = true;
     }
 
+    /// A group's colour, chosen from its heading's menu: one of [`groups::COLOURS`],
+    /// kept from then on.
+    pub fn set_group_colour(&mut self, place: usize, colour: &str) {
+        if !groups::COLOURS.contains(&colour) {
+            return;
+        }
+        let Some(group) = self.groups.get_mut(place) else {
+            return;
+        };
+        if group.colour.as_deref() == Some(colour) {
+            return;
+        }
+        group.colour = Some(colour.to_owned());
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
     /// Ungroup Tabs: the group goes, its tabs stay, in no group (Search's
     /// `removeTabGroup`).
     pub fn ungroup(&mut self, place: usize) {
@@ -2446,6 +2463,38 @@ mod tests {
             ],
             "its tabs stay, among the loose ones"
         );
+    }
+
+    #[test]
+    fn a_group_wears_the_colour_chosen_for_it_and_keeps_it() {
+        let mut browser = Browser::restored(grouped());
+        assert_eq!(browser.groups()[0].colour.as_deref(), Some("blue"));
+        browser.take_dirty();
+        browser.set_group_colour(0, "purple");
+        assert_eq!(browser.groups()[0].colour.as_deref(), Some("purple"));
+        assert!(browser.take_dirty().0.contains(BrowserFields::TABS));
+        let shape = browser.shape();
+        assert_eq!(
+            shape.groups.expect("groups")[0].colour.as_deref(),
+            Some("purple"),
+            "the session keeps it"
+        );
+        browser.set_group_colour(0, "beige");
+        assert_eq!(
+            browser.groups()[0].colour.as_deref(),
+            Some("purple"),
+            "only Chrome's nine"
+        );
+        // Another group may share it once chosen; new ones still get one nobody has.
+        browser.set_group_colour(1, "purple");
+        let loose = browser
+            .tabs()
+            .iter()
+            .find(|t| t.group().is_none())
+            .map(|t| t.id)
+            .expect("a loose tab");
+        let place = browser.add_group(loose).expect("a group");
+        assert_eq!(browser.groups()[place].colour.as_deref(), Some("blue"));
     }
 
     #[test]

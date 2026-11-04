@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+- **Choose a group's colour**: right-click its name, then Color, for any of the nine.
+
 ## 0.1.6 — 2026-11-04
 
 The tab row moves, groups have colours, and there's an address bar.

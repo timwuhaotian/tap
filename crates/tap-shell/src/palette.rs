@@ -141,6 +141,13 @@ fn is_dark_appearance(appearance: &NSAppearance) -> bool {
         .is_some_and(|name| &*name == dark)
 }
 
+/// Whether what is being drawn right now is drawn dark: for images that draw
+/// themselves, such as a menu's.
+#[must_use]
+pub fn drawing_dark() -> bool {
+    is_dark_appearance(&NSAppearance::currentDrawingAppearance())
+}
+
 /// Whether a view is drawn dark right now.
 #[must_use]
 pub fn is_dark(view: &NSView) -> bool {

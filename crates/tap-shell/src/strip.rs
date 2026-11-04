@@ -734,9 +734,13 @@ impl Strip {
                 );
             }
             Spot::Heading(place) => {
-                let Some(collapsed) =
-                    rt::read(|browser| browser.groups().get(place).map(|g| g.collapsed)).flatten()
-                else {
+                let Some((collapsed, colour)) = rt::read(|browser| {
+                    browser
+                        .groups()
+                        .get(place)
+                        .map(|g| (g.collapsed, g.colour.clone()))
+                })
+                .flatten() else {
                     return;
                 };
                 tabmenu::show_group(
@@ -746,6 +750,7 @@ impl Strip {
                     self.as_ref(),
                     place,
                     collapsed,
+                    colour.as_deref(),
                 );
             }
             Spot::Plus | Spot::Nothing => {}

@@ -14,6 +14,22 @@ pub const COLOURS: [&str; 9] = [
     "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange", "grey",
 ];
 
+/// A colour's name as its menu says it (Chrome's English).
+#[must_use]
+pub fn colour_title(colour: &str) -> &'static str {
+    match colour {
+        "blue" => "Blue",
+        "red" => "Red",
+        "yellow" => "Yellow",
+        "green" => "Green",
+        "pink" => "Pink",
+        "purple" => "Purple",
+        "cyan" => "Cyan",
+        "orange" => "Orange",
+        _ => "Grey",
+    }
+}
+
 /// A colour by Chrome's own number for it (`TabGroupColorId`), for its sessions.
 #[must_use]
 pub fn chrome_colour(id: u32) -> Option<&'static str> {

@@ -1067,6 +1067,21 @@ release.
   the strip's end and the live tab said "Not secure — neverssl…" again. Found on the
   way: a test run's events reach the window only while Tap is the active app.
 
+### Next patch — A group's colour, chosen
+
+At the user's request (2026-11-04: "tab group 支持手动选择颜色"), after 0.1.6.
+
+- [x] **Color in the heading's menu** (Chrome's group editor, as a submenu): the nine
+  colours, each with its dot drawn for the menu's light or dark, the group's ticked;
+  a pick is the group's from then on (`Browser::set_group_colour`, only one of
+  `groups::COLOURS`), kept in the session. Two groups may share a colour once chosen;
+  a new group is still handed one nobody has.
+- Checked: `cargo test` (tap-core 101, tap-import 31, tap-shell 54), clippy
+  `-D warnings`, nightly fmt. In a test world: a right-click on a heading (a real
+  event through the window) opened the menu with Color › Blue ticked; Purple, picked
+  from the keyboard, turned the chip and its line purple, and it was still purple
+  after a relaunch.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -1660,7 +1675,7 @@ added below this one as M1 starts.
 | TabBar.swift | 1771 | s/ui/tab_bar/* | M2→M3 | partial |
 | TabDrag.swift | 288 | c/tab_drag, s/ui/tab_drag | M3 | partial: reorder within the strip (`strip.rs`, 0.1.6); no drag out, no split bands |
 | TabGroup.swift | 32 | c/session (TabGroup), c/groups | M3 | ported |
-| TabGroups.swift | 233 | c/groups, s/strip (headings), s/tabmenu | M3 | partial: fold, rename, ungroup, close, move, reorder by drag (0.1.6); no in-place rename, no colour picker |
+| TabGroups.swift | 233 | c/groups, s/strip (headings), s/tabmenu | M3 | partial: fold, rename, ungroup, close, move, reorder by drag (0.1.6), colours chosen; no in-place rename |
 | TabOffers.swift | 146 | s/ui/tab_offers | M2 | todo |
 | TabShortcutHint.swift | 26 | s/ui/tab_shortcut_hint | M3 | todo |
 | TabSwitcher.swift | 631 | c/tab_switcher, s/ui/tab_switcher | M3 | todo |

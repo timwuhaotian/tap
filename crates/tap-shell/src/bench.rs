@@ -402,7 +402,8 @@ fn handle(request: &Value, reply: Reply) {
         }
         "group" => {
             // The group menus' commands: `new` (tab), `into` (tab, group), `out` (tab),
-            // `rename` (group, name), `ungroup` (group), `close` (group), `reopen`.
+            // `rename` (group, name), `colour` (group, name), `ungroup` (group),
+            // `close` (group), `reopen`.
             let op = text("op").unwrap_or_default();
             let number = |key: &str| {
                 request
@@ -424,6 +425,9 @@ fn handle(request: &Value, reply: Reply) {
                 ("out", Some(id), _) => rt::dispatch(move |b| b.move_to_group(id, None)),
                 ("rename", _, Some(place)) => rt::dispatch(move |b| b.rename_group(place, &name)),
                 ("ungroup", _, Some(place)) => rt::dispatch(move |b| b.ungroup(place)),
+                ("colour", _, Some(place)) => {
+                    rt::dispatch(move |b| b.set_group_colour(place, &name));
+                }
                 ("close", _, Some(place)) => rt::dispatch(move |b| b.close_group(place)),
                 ("reopen", _, _) => rt::dispatch(Browser::reopen),
                 _ => return reply.say(json!({ "error": "group needs op and its tab or group" })),
@@ -795,6 +799,14 @@ fn handle(request: &Value, reply: Reply) {
             if release {
                 sent &= mouse(NSEventType::LeftMouseUp, to);
             }
+            reply.say(json!({ "sent": sent, "row": rt::read(row).unwrap_or_default() }));
+        }
+        "rightclick" => {
+            // A right-click at `x`, `y` (the window's points from its top left): the
+            // menu it opens holds the main thread until it closes.
+            let x = request.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+            let y = request.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+            let sent = mouse(NSEventType::RightMouseDown, (x, y));
             reply.say(json!({ "sent": sent, "row": rt::read(row).unwrap_or_default() }));
         }
         "mouseup" => {

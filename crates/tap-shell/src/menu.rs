@@ -72,6 +72,8 @@ pub enum Command {
     GroupClose,
     /// Move to Group › a group: 300 and its place among the groups.
     TabIntoGroup = 300,
+    /// A heading's Color › a colour: 400 and its place in `groups::COLOURS`.
+    GroupColour = 400,
 }
 
 /// Runs a command as its menu item or button would.
