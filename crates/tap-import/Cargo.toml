@@ -10,14 +10,20 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# A Chromium browser's passwords (docs/PLAN.md §5.3): its key stretched with PBKDF2 over
+# HMAC-SHA1, each password unwrapped with AES-128-CBC. Pure Rust, testable anywhere.
+aes = "0.9"
+cbc = "0.2"
 # Deflate only, through the pure-Rust backend: a profile is a plain zip, and the other
 # methods (and their C libraries) would only make the binary bigger.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 # Other browsers' history, read from copies of their databases, against the system's
 # libsqlite3 rather than a bundled one (docs/PLAN.md §5.3).
 rusqlite = { version = "0.41", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
+sha1 = { version = "0.11", default-features = false }
 tap-core.workspace = true
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 

@@ -10,6 +10,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    fmt::Write as _,
     path::PathBuf,
 };
 
@@ -23,7 +24,7 @@ use objc2::{
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
     NSControl, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSFontWeightMedium,
-    NSFontWeightSemibold, NSImage, NSImageView, NSMenuItem, NSModalResponseOK, NSOpenPanel,
+    NSFontWeightSemibold, NSImage, NSImageAlignment, NSImageView, NSModalResponseOK, NSOpenPanel,
     NSPopUpButton, NSResponder, NSScrollView, NSSearchField, NSSegmentSwitchTracking,
     NSSegmentedControl, NSSwitch, NSTextField, NSView, NSWorkspace,
 };
@@ -45,6 +46,11 @@ const RAIL: f64 = 212.0;
 const COLUMN: f64 = 600.0;
 /// Where a row's words start, past its icon.
 const TEXT_INSET: f64 = 52.0;
+/// The rail's icon column: each icon at the left of a box this wide, at this x, and
+/// every page's name starting at `RAIL_TEXT_X` whatever its icon's width.
+const RAIL_ICON: f64 = 20.0;
+const RAIL_ICON_X: f64 = 18.0;
+const RAIL_TEXT_X: f64 = 46.0;
 const ROW_MIN: f64 = 52.0;
 const CARD: Grey = palette::Grey(0.975, 0.145);
 
@@ -61,8 +67,6 @@ enum Binding {
     Zoom,
     Merged(Merged),
     Button(&'static str),
-    /// Bring Over's pull-down: the browsers found, by name, in its order.
-    Bring(Vec<&'static str>),
     Engine,
     Custom,
     Page(Page),
@@ -461,37 +465,12 @@ fn build_rail(mtm: MainThreadMarker, state: &State) {
     let searching = !state.query.borrow().trim().is_empty();
     for block in Page::BLOCKS {
         for page in block.iter().copied().filter(|p| index::has_rows(*p)) {
-            // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
-            let button = unsafe {
-                NSButton::buttonWithTitle_image_target_action(
-                    &NSString::from_str(page.title()),
-                    &NSImage::imageWithSystemSymbolName_accessibilityDescription(
-                        &NSString::from_str(page.icon()),
-                        None,
-                    )
-                    .unwrap_or_default(),
-                    Some(&state.target),
-                    Some(sel!(changed:)),
-                    mtm,
-                )
-            };
-            button.setBordered(false);
-            button.setAlignment(objc2_app_kit::NSTextAlignment::Left);
-            button.setImagePosition(objc2_app_kit::NSCellImagePosition::ImageLeading);
-            button.setTag(bind(state, Binding::Page(page)));
             let chosen = !searching && page == state.page.get();
-            let face = font(13.0, if chosen { semibold() } else { medium() });
-            button.setFont(Some(&face));
             let tint = if chosen {
                 ink.clone()
             } else {
                 palette::MUTED.dynamic()
             };
-            button.setContentTintColor(Some(&tint));
-            button.setFrame(NSRect::new(
-                NSPoint::new(16.0, y),
-                NSSize::new(RAIL - 32.0, 26.0),
-            ));
             if chosen {
                 let wash = Pill::new(
                     mtm,
@@ -499,6 +478,41 @@ fn build_rail(mtm: MainThreadMarker, state: &State) {
                 );
                 state.rail.addSubview(&wash);
             }
+            // Every icon's left edge on one line and every name starting at the same
+            // place: a button's leading image pushed each name over by its own icon's
+            // width, so a key's name sat left of a keyboard's.
+            let icon = symbol(mtm, page.icon(), RAIL_ICON);
+            icon.setImageAlignment(NSImageAlignment::AlignLeft);
+            icon.setContentTintColor(Some(&tint));
+            icon.setFrameOrigin(NSPoint::new(RAIL_ICON_X, y + (26.0 - RAIL_ICON) / 2.0));
+            state.rail.addSubview(&icon);
+            let face = if chosen { semibold() } else { medium() };
+            let name = label(mtm, page.title(), 13.0, face, &tint);
+            name.sizeToFit();
+            let height = name.frame().size.height;
+            name.setFrame(NSRect::new(
+                NSPoint::new(RAIL_TEXT_X, y + (26.0 - height) / 2.0),
+                NSSize::new(RAIL - RAIL_TEXT_X - 16.0, height),
+            ));
+            state.rail.addSubview(&name);
+            // The click: a transparent button over the whole row, its title there for
+            // VoiceOver and never drawn.
+            // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
+            let button = unsafe {
+                NSButton::buttonWithTitle_target_action(
+                    &NSString::from_str(page.title()),
+                    Some(&state.target),
+                    Some(sel!(changed:)),
+                    mtm,
+                )
+            };
+            button.setBordered(false);
+            button.setTransparent(true);
+            button.setTag(bind(state, Binding::Page(page)));
+            button.setFrame(NSRect::new(
+                NSPoint::new(8.0, y - 1.0),
+                NSSize::new(RAIL - 16.0, 28.0),
+            ));
             state.rail.addSubview(&button);
             y += 28.0;
         }
@@ -826,10 +840,27 @@ fn detail_of(item: &Item, kept: &prefs::Kept) -> String {
         }
         "general.import" => match bring::listed(&bring::found()) {
             Some(found) => format!(
-                "Open tabs and their groups, history and bookmarks from {found} on this Mac, or from a profile file"
+                "Passwords, bookmarks, history and open tabs from {found} on this Mac, or from a file"
             ),
-            None => "No other browser with something to bring is on this Mac; a Tap or Search profile file comes in here".to_owned(),
+            None => "No other browser with something to bring is on this Mac; a passwords CSV or a Tap or Search profile file comes in here".to_owned(),
         },
+        "passwords.open" => {
+            let kept = crate::vault::all();
+            let search = kept.iter().filter(|k| k.search).count();
+            let ours = kept.len() - search;
+            let mut said = match ours {
+                0 => "None kept by Tap yet".to_owned(),
+                1 => "1 kept by Tap in the macOS keychain".to_owned(),
+                n => format!("{n} kept by Tap in the macOS keychain"),
+            };
+            if search > 0 {
+                let _ = write!(
+                    said,
+                    "; {search} of Search's come as you pick them under a sign-in box"
+                );
+            }
+            said
+        }
         "general.default" if is_default_browser() => {
             "Tap opens the links other apps send".to_owned()
         }
@@ -1016,9 +1047,7 @@ fn make_control(
             let holder = NSView::new(mtm);
             let mut x = 0.0;
             for (action, title) in actions {
-                let button: Retained<NSControl> = if *action == "import" {
-                    bring_over(mtm, state, title)
-                } else {
+                let button: Retained<NSControl> = {
                     // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
                     let button = unsafe {
                         NSButton::buttonWithTitle_target_action(
@@ -1061,33 +1090,6 @@ fn make_control(
         }
         Control::Keywords | Control::Nothing => return None,
     })
-}
-
-/// Bring Over: a pull-down of the browsers found on this Mac, each brought over when
-/// picked, then a profile file.
-fn bring_over(mtm: MainThreadMarker, state: &State, title: &str) -> Retained<NSControl> {
-    let popup =
-        NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, true);
-    // A pull-down's first item is its face.
-    popup.addItemWithTitle(&NSString::from_str(title));
-    let found: Vec<&'static str> = bring::found()
-        .into_iter()
-        .map(tap_import::Source::name)
-        .collect();
-    for name in &found {
-        popup.addItemWithTitle(&NSString::from_str(&format!("From {name}")));
-    }
-    if let Some(menu) = popup.menu().filter(|_| !found.is_empty()) {
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-    }
-    popup.addItemWithTitle(&NSString::from_str("From a Profile File…"));
-    // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
-    unsafe {
-        popup.setTarget(Some(&state.target));
-        popup.setAction(Some(sel!(changed:)));
-    }
-    popup.setTag(bind(state, Binding::Bring(found)));
-    Retained::into_super(Retained::into_super(popup))
 }
 
 /// A control moved: its setting written as Search writes it, then whatever acts on it
@@ -1192,16 +1194,6 @@ fn act(control: &NSControl) {
             press(mtm, action);
             return;
         }
-        Binding::Bring(found) => {
-            // Past the face: a browser, or (past the separator, when there are some) a file.
-            match selected(control).checked_sub(1) {
-                Some(at) if at < found.len() => bring::offer(found[at]),
-                Some(_) => profile::choose_and_import(),
-                None => {}
-            }
-            later(rebuild);
-            return;
-        }
     }
     prefs::apply(mtm);
     // The bench socket follows its switch at once.
@@ -1214,7 +1206,8 @@ fn act(control: &NSControl) {
 /// A button: something done now.
 fn press(mtm: MainThreadMarker, action: &str) {
     match action {
-        "import" => profile::choose_and_import(),
+        // Search's ImportPanel: which browser, which profile, and what of it.
+        "import" => bring::open(),
         "export" => profile::export(),
         "update.check" => update::check_now(),
         "feedback" => send_feedback(),
@@ -1338,21 +1331,22 @@ fn send_feedback() {
     NSWorkspace::sharedWorkspace().openURL(&url);
 }
 
-/// Where Apple's passwords live, newest first: the Passwords app, or Keychain Access
-/// on a Mac too old for it.
-const PASSWORD_APPS: [&str; 2] = [
-    "/System/Applications/Passwords.app",
+/// Where Tap's passwords can be seen until Tap has a page of its own: Keychain Access,
+/// which lists the login keychain's items (search for "Tap"), wherever this macOS keeps
+/// it; Apple's Passwords app, which shows only iCloud's, on a Mac without it.
+const PASSWORD_APPS: [&str; 3] = [
+    "/System/Library/CoreServices/Applications/Keychain Access.app",
     "/System/Applications/Utilities/Keychain Access.app",
+    "/System/Applications/Passwords.app",
 ];
 
 fn passwords_app(exists: impl Fn(&str) -> bool) -> Option<&'static str> {
     PASSWORD_APPS.iter().copied().find(|app| exists(app))
 }
 
-/// Search's Open… leads to its own passwords page; Tap keeps no passwords of its own
-/// yet (Offer to save / Fill in sign-ins aren't live), so there is no such page to
-/// lead to. Apple's app is the nearest true thing: it shows this Mac's keychain and
-/// iCloud passwords behind Touch ID — not a list of Tap's, of which there are none.
+/// Search's Open… leads to its own passwords page. Tap keeps passwords now (`vault`)
+/// but has no such page yet, so this opens Keychain Access, where Tap's are listed
+/// under its name and shown with your Mac's password.
 fn open_passwords() {
     let Some(app) = passwords_app(|path| std::path::Path::new(path).exists()) else {
         return;
@@ -1464,14 +1458,18 @@ mod tests {
     }
 
     #[test]
-    fn the_passwords_app_is_preferred_and_keychain_access_is_the_fallback() {
+    fn keychain_access_is_preferred_and_the_passwords_app_is_the_fallback() {
         assert_eq!(
             passwords_app(|_| true),
-            Some("/System/Applications/Passwords.app")
+            Some("/System/Library/CoreServices/Applications/Keychain Access.app")
         );
         assert_eq!(
-            passwords_app(|app| app.contains("Keychain")),
+            passwords_app(|app| app.starts_with("/System/Applications/")),
             Some("/System/Applications/Utilities/Keychain Access.app")
+        );
+        assert_eq!(
+            passwords_app(|app| app.contains("Passwords")),
+            Some("/System/Applications/Passwords.app")
         );
         assert_eq!(passwords_app(|_| false), None);
     }

@@ -36,7 +36,7 @@ use tap_core::{
     identity,
 };
 
-use crate::{dialogs, downloads, icons, oslog, page_find, rt, sleep, store, window};
+use crate::{dialogs, downloads, forms, icons, oslog, page_find, rt, signin, sleep, store, window};
 
 #[path = "shield.rs"]
 mod shield;
@@ -504,6 +504,8 @@ fn configuration(mtm: MainThreadMarker) -> Retained<WKWebViewConfiguration> {
         configuration
             .preferences()
             .setElementFullscreenEnabled(true);
+        // The sign-in script's ear, on the controller every page shares.
+        forms::install(mtm, &configuration.userContentController());
         configuration
     }
 }
@@ -618,6 +620,17 @@ fn sync_scripts(
         if autoscroll {
             controller.addUserScript(&user_script(mtm, AUTOSCROLL_SCRIPT, false, false));
         }
+        // Sign-ins, always: Search's script at the document's end, in Tap's world, the
+        // main frame only (Tab.swift).
+        controller.addUserScript(
+            &WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+                WKUserScript::alloc(mtm),
+                &NSString::from_str(forms::SCRIPT),
+                WKUserScriptInjectionTime::AtDocumentEnd,
+                true,
+                &world(mtm),
+            ),
+        );
     }
 }
 
@@ -847,6 +860,43 @@ pub fn evaluate_in_world(
     }
 }
 
+/// Runs a function body in Tap's own world with `arguments` as its named strings: a
+/// value never spliced into the source, so a password with a quote in it is just a
+/// password. The answer comes back as JSON.
+pub fn call_in_world(
+    web: &WKWebView,
+    body: &str,
+    arguments: &[(&str, &str)],
+    then: impl Fn(Option<Value>) + 'static,
+) {
+    let body = format!("return JSON.stringify(await (async () => ({body}))());");
+    let keys: Vec<Retained<NSString>> = arguments.iter().map(|a| NSString::from_str(a.0)).collect();
+    let values: Vec<Retained<NSString>> =
+        arguments.iter().map(|a| NSString::from_str(a.1)).collect();
+    let keys: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
+    let values: Vec<&AnyObject> = values.iter().map(AsRef::as_ref).collect();
+    let arguments: Retained<NSDictionary<NSString, AnyObject>> =
+        NSDictionary::from_slices(&keys, &values);
+    let block = RcBlock::new(move |value: *mut AnyObject, _error: *mut NSError| {
+        // SAFETY: WebKit hands a valid object or null, for the call's length.
+        let text = unsafe { value.as_ref() }
+            .and_then(|v| v.downcast_ref::<NSString>())
+            .map(ToString::to_string);
+        then(text.and_then(|t| serde_json::from_str(&t).ok()));
+    });
+    // SAFETY: a live web view, a script body, its arguments, and a block that outlives
+    // the call.
+    unsafe {
+        web.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+            &NSString::from_str(&body),
+            Some(&arguments),
+            None,
+            &world(MainThreadMarker::from(web)),
+            Some(&block),
+        );
+    }
+}
+
 /// Lets the tab's page go (sleep): the view, its observers and its delegates.
 pub fn discard_page(tab: TabId) {
     if let Some(mtm) = MainThreadMarker::new() {
@@ -877,7 +927,7 @@ pub fn process_id(web: &WKWebView) -> i32 {
     }
 }
 
-fn tab_of(web: &WKWebView) -> Option<TabId> {
+pub(crate) fn tab_of(web: &WKWebView) -> Option<TabId> {
     WEBS.with_borrow(|webs| {
         webs.iter()
             .find(|(_, w)| ptr::eq(Retained::as_ptr(w), web))
@@ -887,6 +937,8 @@ fn tab_of(web: &WKWebView) -> Option<TabId> {
 
 fn discard(mtm: MainThreadMarker, tab: TabId) {
     dialogs::drop_held(tab);
+    forms::forget_tab(tab);
+    signin::lower_now(tab);
     let Some(web) = WEBS.with_borrow_mut(|webs| webs.remove(&tab)) else {
         return;
     };
@@ -1077,6 +1129,7 @@ define_class!(
             if let Some(tab) = tab_of(web) {
                 rt::dispatch(move |browser| browser.page_finished(tab));
                 icons::fetch(tab, web);
+                forms::page_finished(tab);
             }
         }
 

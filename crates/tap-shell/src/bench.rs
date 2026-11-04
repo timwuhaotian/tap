@@ -396,28 +396,81 @@ fn handle(request: &Value, reply: Reply) {
             }
         }
         "bring" => {
-            // Bring things over: with `from`, that browser brought in at once, unasked, or
-            // with `menu`, as Bring Over's pull-down does it (read off the main thread,
-            // said, then brought in); without, the browsers found, as the pull-down lists
-            // them.
+            // Bring things over: with `from`, that browser brought in at once, unasked
+            // (`passwords`, `bookmarks`, `history`, `tabs`, `settings` false to leave one
+            // out); with `sheet`, Search's sheet opened, or `sheet: "Chrome"` its Bring
+            // them in pressed for that browser, or `sheet: false` closed; without either,
+            // the browsers found and the sheet as it shows.
+            if let Some(sheet) = request.get("sheet") {
+                match sheet {
+                    Value::Bool(true) => bring::open(),
+                    Value::Bool(false) => bring::bench_close(),
+                    Value::String(name) => bring::bench_bring(name),
+                    _ => {}
+                }
+                return reply.say(json!({ "sheet": bring::snapshot() }));
+            }
             let Some(from) = text("from") else {
                 let found: Vec<&str> = bring::found()
                     .into_iter()
                     .map(tap_import::Source::name)
                     .collect();
-                return reply.say(json!({ "found": found }));
+                return reply.say(json!({ "found": found, "sheet": bring::snapshot() }));
             };
-            if request.get("menu").and_then(Value::as_bool) == Some(true) {
-                bring::offer(&from);
-                return reply.say(json!({ "offered": from }));
-            }
-            match bring::take(&from) {
-                Ok(taken) => reply.say(json!({
-                    "said": taken.said, "tabs": taken.tabs, "groups": taken.groups, "places": taken.places,
-                    "bookmarks": taken.bookmarks, "settings": taken.settings,
+            let wanted = |key: &str| request.get(key).and_then(Value::as_bool) != Some(false);
+            let wants = bring::Wants {
+                passwords: wanted("passwords"),
+                bookmarks: wanted("bookmarks"),
+                history: wanted("history"),
+                tabs: wanted("tabs"),
+                settings: wanted("settings"),
+            };
+            match bring::take(&from, wants) {
+                Ok(said) => reply.say(json!({
+                    "said": said.iter().map(|(ok, text)| json!({"ok": ok, "text": text})).collect::<Vec<_>>(),
                 })),
                 Err(why) => reply.say(json!({ "error": why })),
             }
+        }
+        "signin" => {
+            // Sign-ins: the accounts hanging under a box and the offer to keep one; with
+            // `pick`, a row of the list clicked; with `answer` ("save", "never", "later"),
+            // the offer's button pressed; with `kept`, what Tap's drawer (and Search's,
+            // when on) holds for that host, without secrets; with `seed`, a made-up
+            // Search item in the test world's own Search drawer.
+            if crate::vault::search_label() == "Search" && request.get("seed").is_some() {
+                return reply.say(json!({ "error": "seed only works on a test run" }));
+            }
+            if let Some(Value::Object(seed)) = request.get("seed") {
+                let get = |k: &str| seed.get(k).and_then(Value::as_str).unwrap_or_default();
+                let ok = crate::keychain::save(
+                    crate::vault::search_drawer(&crate::vault::search_label()),
+                    get("host"),
+                    get("user"),
+                    get("password"),
+                    None,
+                    seed.get("clear").and_then(Value::as_bool).unwrap_or(false),
+                );
+                return reply.say(json!({ "seeded": ok }));
+            }
+            if let Some(row) = request.get("pick").and_then(Value::as_u64) {
+                crate::signin::bench_pick(usize::try_from(row).unwrap_or(usize::MAX));
+            }
+            if let Some(answer) = text("answer") {
+                crate::signin::bench_answer(&answer);
+            }
+            if let Some(host) = text("kept") {
+                let kept: Vec<Value> = crate::vault::kept_for(&host)
+                    .into_iter()
+                    .map(|k| json!({"host": k.host, "user": k.user, "search": k.search, "clear": k.clear}))
+                    .collect();
+                return reply.say(json!({ "kept": kept }));
+            }
+            if let Some(host) = text("forget") {
+                let user = text("user").unwrap_or_default();
+                return reply.say(json!({ "forgot": crate::vault::forget(&host, &user) }));
+            }
+            reply.say(crate::signin::snapshot());
         }
         "settings" => {
             // Settings as it shows them; with `set`, a setting changed first, as its

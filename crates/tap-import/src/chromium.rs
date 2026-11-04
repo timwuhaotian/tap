@@ -1,15 +1,22 @@
 //! What a Chromium browser on this Mac holds (Search's `Chromium` in `Import.swift`):
 //! Chrome, Arc, Brave, Edge, Dia and the rest keep their profiles the same way, one
-//! folder each under `~/Library/Application Support`, and Tap reads three things from the
-//! profile used last: its open tabs and tab groups (the session file, [`crate::snss`],
-//! Search #841), its history (the `History` database) and its bookmarks (one JSON file).
-//! What it reads comes out as a [`profile::Incoming`], so it is merged exactly as a
-//! profile file is.
+//! folder each under `~/Library/Application Support`, and Tap reads from the profile used
+//! last, one you pick, or all of them ([`Pick`]): the open tabs and tab groups (the
+//! session file, [`crate::snss`], Search #841), the history (the `History` database), the
+//! bookmarks (one JSON file) and the passwords (`Login Data`). What it reads comes out as
+//! a [`profile::Incoming`], so it is merged exactly as a profile file is; the passwords
+//! come out as [`passwords::Login`]s for the keychain.
+//!
+//! Every Chromium browser keeps its passwords the same way: a SQLite file, each password
+//! encrypted with a key the browser keeps in the macOS keychain under "<Name> Safe
+//! Storage". macOS asks you before handing that key to anyone else, which is the one
+//! thing here you have to say yes to, and the shell's to ask. After that it is
+//! arithmetic: the key is stretched the way Chromium stretches it, and each password is
+//! unwrapped. Counting them needs no key.
 //!
 //! Nothing in the other browser changes. Its databases are copied before they are read:
 //! it is usually running, and reading its live file underneath it is how you get a lock
-//! error. A link inside its folder can't lead a read out of it. Passwords stay behind:
-//! Tap fills none yet, and reading them means macOS asking for the browser's key.
+//! error. A link inside its folder can't lead a read out of it.
 
 use std::{
     collections::HashMap,
@@ -24,82 +31,116 @@ use tap_core::{
     session::{Entry, Shape, TabGroup},
 };
 
-use crate::{profile::Incoming, snss};
+use crate::{
+    passwords::{self, Login},
+    profile::Incoming,
+    snss,
+};
 
 /// A browser this reads, by its folder under `~/Library/Application Support`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Browser {
     pub name: &'static str,
     folder: &'static str,
+    /// Where its passwords' key is in the keychain: the generic password's service and
+    /// account, which macOS asks you about before handing it over. None for a browser
+    /// whose passwords Search can't read; its other things still come.
+    key: Option<(&'static str, &'static str)>,
 }
 
-/// Search's list, in Search's order. Chrome's other channels keep their own data.
+/// Search's list, in Search's order. Chrome's other channels keep their own data, and
+/// share Chrome's key.
 pub const KNOWN: &[Browser] = &[
     Browser {
         name: "Dia",
         folder: "Dia/User Data",
+        key: Some(("Dia Safe Storage", "Dia")),
     },
     Browser {
         name: "Chrome",
         folder: "Google/Chrome",
+        key: Some(("Chrome Safe Storage", "Chrome")),
     },
     Browser {
         name: "ego lite",
         folder: "Citro Labs/ego lite",
+        key: None,
     },
     Browser {
         name: "Arc",
         folder: "Arc/User Data",
+        key: Some(("Arc Safe Storage", "Arc")),
     },
     Browser {
         name: "Brave",
         folder: "BraveSoftware/Brave-Browser",
+        key: Some(("Brave Safe Storage", "Brave")),
     },
     Browser {
         name: "Edge",
         folder: "Microsoft Edge",
+        key: Some(("Microsoft Edge Safe Storage", "Microsoft Edge")),
     },
     Browser {
         name: "Vivaldi",
         folder: "Vivaldi",
+        key: Some(("Vivaldi Safe Storage", "Vivaldi")),
     },
     Browser {
         name: "Chromium",
         folder: "Chromium",
+        key: Some(("Chromium Safe Storage", "Chromium")),
     },
     Browser {
         name: "Chrome Beta",
         folder: "Google/Chrome Beta",
+        key: Some(("Chrome Safe Storage", "Chrome")),
     },
     Browser {
         name: "Chrome Dev",
         folder: "Google/Chrome Dev",
+        key: Some(("Chrome Safe Storage", "Chrome")),
     },
     Browser {
         name: "Chrome Canary",
         folder: "Google/Chrome Canary",
+        key: Some(("Chrome Safe Storage", "Chrome")),
     },
     // Opera keeps its one profile in its own folder, not in one inside it.
     Browser {
         name: "Opera",
         folder: "com.operasoftware.Opera",
+        key: Some(("Opera Safe Storage", "Opera")),
     },
     Browser {
         name: "Opera GX",
         folder: "com.operasoftware.OperaGX",
+        key: Some(("Opera Safe Storage", "Opera")),
     },
     Browser {
         name: "Helium",
         folder: "net.imput.helium",
+        key: Some(("Helium Storage Key", "Helium")),
     },
     Browser {
         name: "Comet",
         folder: "Comet",
+        key: Some(("Comet Safe Storage", "Comet")),
     },
 ];
 
 /// The files that make a folder a profile with something to bring.
-const HOLDS: &[&str] = &["Bookmarks", "History", "Sessions", "Current Session"];
+const HOLDS: &[&str] = &[
+    "Bookmarks",
+    "History",
+    "Sessions",
+    "Current Session",
+    "Login Data",
+];
+/// A profile's passwords: its own, and, beside them, those Chrome saves for the Google
+/// account it is signed in to without sync — same shape, same key. Read alone, the first
+/// can be nearly empty.
+const LOGINS: &[&str] = &["Login Data", "Login Data For Account"];
 /// The most of the history brought: what it takes to finish an address on the first day.
 const PLACES: i64 = 3000;
 /// The most a JSON or session file read may be.
@@ -114,6 +155,35 @@ impl Browser {
     pub fn root(&self, base: &Path) -> PathBuf {
         base.join(self.folder)
     }
+
+    /// The keychain item holding its passwords' key: (service, account). None for a
+    /// browser whose passwords can't be read here.
+    #[must_use]
+    pub fn safe_storage(&self) -> Option<(&'static str, &'static str)> {
+        self.key
+    }
+}
+
+/// One of a browser's profiles, as a picker shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Profile {
+    /// The folder's name ("Default", "Profile 1"), which is what the readers go by.
+    pub folder: String,
+    /// What the browser calls it ("Work", "Person 1"), or the folder's own name when it
+    /// says nothing; the browser's own name for Opera's, which is the browser's folder.
+    pub name: String,
+}
+
+/// Which of a browser's profiles to read (Search's `profile: String?`, with the usual one
+/// made explicit).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pick<'a> {
+    /// The one used last ([`profile_list`]'s second half).
+    Usual,
+    /// The one in this folder.
+    One(&'a str),
+    /// Every profile, as Search's "All profiles".
+    All,
 }
 
 /// What one browser's profile has to bring.
@@ -237,24 +307,130 @@ fn usual(root: &Path, profiles: &[PathBuf], last: &[String]) -> Option<PathBuf> 
     profiles.iter().max_by_key(|p| touched(p)).cloned()
 }
 
-/// What `browser` has to bring from its usual profile, or nothing when it has no profile
-/// here. `now` stands in for a visit Chromium kept no time for.
+fn folder_name(folder: &Path) -> String {
+    folder
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// What the browser calls the profile in `folder`.
+fn profile_name(
+    browser: &Browser,
+    root: &Path,
+    names: &HashMap<String, String>,
+    folder: &Path,
+) -> String {
+    let id = folder_name(folder);
+    names.get(&id).cloned().unwrap_or_else(|| {
+        if folder == root {
+            browser.name.to_owned()
+        } else {
+            id
+        }
+    })
+}
+
+/// Every profile `browser` has here, by the name it gives each, in the order a person
+/// would count them ("Profile 2" before "Profile 10"), and the folder of the one used
+/// last, which is the one brought unless another is picked.
 #[must_use]
-pub fn read(browser: &Browser, base: &Path, now: f64) -> Option<Found> {
+pub fn profile_list(browser: &Browser, base: &Path) -> (Vec<Profile>, Option<String>) {
+    let Ok(root) = browser.root(base).canonicalize() else {
+        return (Vec::new(), None);
+    };
+    let found = profiles(&root);
+    let (names, last) = local_state(&root);
+    let usual = usual(&root, &found, &last).map(|p| folder_name(&p));
+    let mut out: Vec<Profile> = found
+        .iter()
+        .map(|folder| Profile {
+            folder: folder_name(folder),
+            name: profile_name(browser, &root, &names, folder),
+        })
+        .collect();
+    out.sort_by(|a, b| natural(&a.folder, &b.folder));
+    (out, usual)
+}
+
+/// Text in the order Finder sorts it: runs of digits by their number, the rest without
+/// regard to case.
+fn natural(a: &str, b: &str) -> std::cmp::Ordering {
+    fn runs(text: &str) -> Vec<(bool, String)> {
+        let mut out: Vec<(bool, String)> = Vec::new();
+        for c in text.chars() {
+            let digit = c.is_ascii_digit();
+            match out.last_mut() {
+                Some((was, run)) if *was == digit => run.push(c),
+                _ => out.push((digit, c.to_string())),
+            }
+        }
+        out
+    }
+    let (ra, rb) = (runs(a), runs(b));
+    for ((da, ta), (db, tb)) in ra.iter().zip(&rb) {
+        let order = if *da && *db {
+            let (na, nb) = (ta.trim_start_matches('0'), tb.trim_start_matches('0'));
+            na.len().cmp(&nb.len()).then_with(|| na.cmp(nb))
+        } else {
+            ta.to_lowercase().cmp(&tb.to_lowercase())
+        };
+        if order.is_ne() {
+            return order;
+        }
+    }
+    ra.len().cmp(&rb.len()).then_with(|| a.cmp(b))
+}
+
+/// The profile folders `pick` names under `root`, or nothing when it names none here.
+fn chosen(root: &Path, found: &[PathBuf], last: &[String], pick: Pick) -> Option<Vec<PathBuf>> {
+    let folders = match pick {
+        Pick::Usual => vec![usual(root, found, last)?],
+        Pick::One(name) => found
+            .iter()
+            .filter(|p| p.file_name().is_some_and(|n| n == name))
+            .cloned()
+            .collect(),
+        Pick::All => found.to_vec(),
+    };
+    (!folders.is_empty()).then_some(folders)
+}
+
+/// What `browser` has to bring from the profile `pick` names, or from all of them, or
+/// nothing when it has no such profile here. `now` stands in for a visit Chromium kept no
+/// time for. With every profile, their open tabs and history come together, and each
+/// one's bookmarks in turn, all in the one folder of the browser's name (as Search's
+/// "All profiles" does).
+#[must_use]
+pub fn read(browser: &Browser, base: &Path, now: f64, pick: Pick) -> Option<Found> {
     let root = browser.root(base).canonicalize().ok()?;
     let found = profiles(&root);
     let (names, last) = local_state(&root);
-    let folder = usual(&root, &found, &last)?;
-    let profile = (found.len() > 1).then(|| {
-        let id = folder
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        names.get(&id).cloned().unwrap_or(id)
-    });
-    let session = snss::read(&session_data(&root, &folder).unwrap_or_default());
-    let places = places(&root, &folder, now);
-    let bookmarks = bookmarks(&root, &folder, browser.name);
+    let folders = chosen(&root, &found, &last, pick)?;
+    let profile = match (pick, folders.as_slice()) {
+        (Pick::All, _) | (_, []) => None,
+        (_, [folder, ..]) => {
+            (found.len() > 1).then(|| profile_name(browser, &root, &names, folder))
+        }
+    };
+    let mut session = snss::Snapshot::default();
+    for folder in &folders {
+        let read = snss::read(&session_data(&root, folder).unwrap_or_default());
+        session.windows.extend(read.windows);
+        for (token, group) in read.groups {
+            session.groups.entry(token).or_insert(group);
+        }
+    }
+    let mut places: Vec<Value> = folders
+        .iter()
+        .flat_map(|folder| places(&root, folder, now))
+        .collect();
+    if folders.len() > 1 {
+        let last = |v: &Value| v["last"].as_f64().unwrap_or_default();
+        places.sort_by(|a, b| last(b).total_cmp(&last(a)));
+        places.truncate(usize::try_from(PLACES).unwrap_or(usize::MAX));
+    }
+    let bookmarks = bookmarks(&root, &folders, browser.name);
     Some(Found {
         incoming: Incoming {
             sessions: (session.tabs() > 0)
@@ -344,10 +520,7 @@ fn places(root: &Path, folder: &Path, now: f64) -> Vec<Value> {
         return Vec::new();
     };
     let rows = || -> rusqlite::Result<Vec<Value>> {
-        let db = rusqlite::Connection::open_with_flags(
-            &copy.file,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        let db = open(&copy.file)?;
         let mut statement = db.prepare(
             "SELECT url, title, visit_count, last_visit_time FROM urls \
              WHERE hidden = 0 AND visit_count > 0 ORDER BY last_visit_time DESC LIMIT ?1",
@@ -417,16 +590,23 @@ impl Drop for Copy {
 }
 
 /// The bookmarks, in a folder of the browser's name (as Search keeps another browser's
-/// apart): the bar first, then anything filed elsewhere. The folder's identity is the
-/// browser's, so bringing them again adds no second one.
-fn bookmarks(root: &Path, folder: &Path, browser: &str) -> Option<Value> {
-    let top: Value = serde_json::from_slice(&read_capped(root, &folder.join("Bookmarks"))?).ok()?;
-    let roots = &top["roots"];
-    let mut children = nodes(&roots["bookmark_bar"]["children"]);
-    for (key, name) in [("other", "Other"), ("synced", "Mobile")] {
-        let kids = nodes(&roots[key]["children"]);
-        if !kids.is_empty() {
-            children.push(json!({ "id": fnd::uuid(), "title": name, "children": kids }));
+/// apart): each profile's bar first, then anything it filed elsewhere. The folder's
+/// identity is the browser's, so bringing them again adds no second one.
+fn bookmarks(root: &Path, folders: &[PathBuf], browser: &str) -> Option<Value> {
+    let mut children = Vec::new();
+    for folder in folders {
+        let Some(top) = read_capped(root, &folder.join("Bookmarks"))
+            .and_then(|d| serde_json::from_slice::<Value>(&d).ok())
+        else {
+            continue;
+        };
+        let roots = &top["roots"];
+        children.extend(nodes(&roots["bookmark_bar"]["children"]));
+        for (key, name) in [("other", "Other"), ("synced", "Mobile")] {
+            let kids = nodes(&roots[key]["children"]);
+            if !kids.is_empty() {
+                children.push(json!({ "id": fnd::uuid(), "title": name, "children": kids }));
+            }
         }
     }
     (!children.is_empty())
@@ -457,6 +637,190 @@ fn nodes(raw: &Value) -> Vec<Value> {
             }
         })
         .collect()
+}
+
+/// What a browser's passwords files hold, once its key has unwrapped them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Passwords {
+    pub logins: Vec<Login>,
+    /// Sites the other browser was told never to offer to save for.
+    pub never: Vec<String>,
+    /// Passwords left behind for having no site to go with (an app's, say).
+    pub skipped: usize,
+    /// Passwords that were there but didn't unwrap with the key the keychain handed over:
+    /// said, not passed over in silence, so a bring-in that brought nothing says why.
+    pub undecrypted: usize,
+}
+
+/// The passwords files of the profiles `pick` names, inside the browser's folder.
+fn login_files(browser: &Browser, base: &Path, pick: Pick) -> Vec<PathBuf> {
+    if browser.key.is_none() {
+        return Vec::new();
+    }
+    let Ok(root) = browser.root(base).canonicalize() else {
+        return Vec::new();
+    };
+    let found = profiles(&root);
+    let (_, last) = local_state(&root);
+    chosen(&root, &found, &last, pick)
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|folder| LOGINS.iter().map(move |name| folder.join(name)))
+        .filter_map(|path| file(&root, &path))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+/// How many passwords there are to bring, read from the files alone: rows with something
+/// in them that aren't a site marked never. No key is asked for and nothing is unwrapped,
+/// so it never makes macOS ask.
+#[must_use]
+pub fn password_count(browser: &Browser, base: &Path, pick: Pick) -> usize {
+    login_files(browser, base, pick)
+        .iter()
+        .filter_map(|path| {
+            let copy = Copy::of(path)?;
+            let db = open(&copy.file).ok()?;
+            db.query_row(
+                "SELECT COUNT(*) FROM logins WHERE blacklisted_by_user = 0 \
+                 AND length(password_value) > 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+        })
+        .map(|n| usize::try_from(n).unwrap_or_default())
+        .sum()
+}
+
+/// The passwords of the profiles `pick` names, unwrapped with `passphrase`, the key the
+/// keychain gave for [`Browser::safe_storage`]. Nothing when no passwords file could be
+/// read at all. A site's account comes once, however many files hold it.
+#[must_use]
+pub fn passwords(
+    browser: &Browser,
+    base: &Path,
+    passphrase: &str,
+    pick: Pick,
+) -> Option<Passwords> {
+    let key = stretch(passphrase);
+    let mut out = Passwords::default();
+    let mut seen = std::collections::HashSet::new();
+    let mut read_any = false;
+    for path in login_files(browser, base, pick) {
+        let Some(rows) = Copy::of(&path).and_then(|copy| logins(&copy.file).ok()) else {
+            continue;
+        };
+        read_any = true;
+        for row in rows {
+            let host = passwords::host_of(&row.origin);
+            if host.is_empty() {
+                if !row.never && !row.blob.is_empty() {
+                    out.skipped += 1;
+                }
+                continue;
+            }
+            if row.never {
+                out.never.push(host);
+                continue;
+            }
+            let Some(password) = key.as_ref().and_then(|key| unwrap(&row.blob, key)) else {
+                if !row.blob.is_empty() {
+                    out.undecrypted += 1;
+                }
+                continue;
+            };
+            if password.is_empty() {
+                continue;
+            }
+            let login = Login {
+                clear: row.origin.to_lowercase().starts_with("http://"),
+                host,
+                user: row.user,
+                password,
+                used: row.used,
+            };
+            if seen.insert(login.id()) {
+                out.logins.push(login);
+            }
+        }
+    }
+    read_any.then_some(out)
+}
+
+/// Chromium's own recipe, unchanged for a decade: PBKDF2 over HMAC-SHA1, the salt
+/// "saltysalt", 1003 rounds, sixteen bytes out. No passphrase, no key: nothing unwraps.
+fn stretch(passphrase: &str) -> Option<[u8; 16]> {
+    if passphrase.is_empty() {
+        return None;
+    }
+    Some(pbkdf2::pbkdf2_hmac_array::<sha1::Sha1, 16>(
+        passphrase.as_bytes(),
+        b"saltysalt",
+        1003,
+    ))
+}
+
+/// The sixteen spaces Chromium uses as every password's IV.
+const IV: [u8; 16] = [b' '; 16];
+
+/// "v10" and then AES-128-CBC. Encrypted, as every Chromium browser on the Mac has done
+/// since 2014, or not taken at all: a profile's files can be written by anything running
+/// as you, and a password lying there in the clear is one only such a program would have
+/// put, to have Tap keep it.
+fn unwrap(blob: &[u8], key: &[u8; 16]) -> Option<String> {
+    use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
+    let body = blob.strip_prefix(b"v10")?;
+    let mut buf = body.to_vec();
+    let plain = cbc::Decryptor::<aes::Aes128>::new_from_slices(key, &IV)
+        .ok()?
+        .decrypt_padded::<Pkcs7>(&mut buf)
+        .ok()?;
+    if let Ok(text) = std::str::from_utf8(plain) {
+        return Some(text.to_owned());
+    }
+    // Newer builds put a hash of the site before the password. Past it, the password is
+    // the same as ever.
+    let past = plain.get(32..).filter(|_| plain.len() > 32)?;
+    std::str::from_utf8(past).ok().map(str::to_owned)
+}
+
+/// One row of a passwords file, still wrapped.
+struct Row {
+    origin: String,
+    user: String,
+    blob: Vec<u8>,
+    never: bool,
+    used: Option<f64>,
+}
+
+fn open(path: &Path) -> rusqlite::Result<rusqlite::Connection> {
+    rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+}
+
+/// Every row of a copy of a passwords file.
+fn logins(path: &Path) -> rusqlite::Result<Vec<Row>> {
+    let db = open(path)?;
+    let mut statement = db.prepare(
+        "SELECT origin_url, username_value, password_value, blacklisted_by_user, \
+         date_last_used FROM logins",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let stamp = row.get::<_, Option<i64>>(4)?.unwrap_or_default();
+        Ok(Row {
+            origin: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            user: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            blob: row.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default(),
+            never: row.get::<_, Option<i64>>(3)?.unwrap_or_default() != 0,
+            // Microseconds since 1601, Chromium's idea of a date.
+            #[allow(clippy::cast_precision_loss)] // microseconds: exact to well past 2200
+            used: (stamp > 0).then(|| stamp as f64 / 1_000_000.0 - CHROMIUM_EPOCH),
+        })
+    })?;
+    Ok(rows.filter_map(Result::ok).collect())
 }
 
 /// A folder identity of the browser's own, the same every time: FNV-1a over its name,
@@ -538,7 +902,7 @@ mod tests {
         std::fs::create_dir_all(here.0.join("Arc/User Data/NativeMessagingHosts"))
             .unwrap_or_default();
         assert_eq!(profiles(&KNOWN[3].root(&here.0)), Vec::<PathBuf>::new());
-        assert!(read(&KNOWN[3], &here.0, 0.0).is_none());
+        assert!(read(&KNOWN[3], &here.0, 0.0, Pick::Usual).is_none());
     }
 
     #[test]
@@ -592,7 +956,7 @@ mod tests {
             .collect();
         assert_eq!(names, ["Default", "Profile 1"]);
 
-        let found = read(chrome(), &here.0, 1.0).expect("Chrome is here");
+        let found = read(chrome(), &here.0, 1.0, Pick::Usual).expect("Chrome is here");
         assert_eq!(found.profile.as_deref(), Some("Work"));
         let incoming = &found.incoming;
         assert_eq!(incoming.sessions.len(), 1);
@@ -638,7 +1002,7 @@ mod tests {
                 navigation(1, 0, "https://v.example/", "V"),
             ]),
         );
-        let found = read(&KNOWN[6], &here.0, 0.0).expect("Vivaldi is here");
+        let found = read(&KNOWN[6], &here.0, 0.0, Pick::Usual).expect("Vivaldi is here");
         assert_eq!(found.profile.as_deref(), Some("Profile 2"));
         assert_eq!(found.incoming.sessions[0].tabs[0].url, "https://v.example/");
     }
@@ -657,7 +1021,7 @@ mod tests {
         here.write("Chromium/Default/Sessions/Session_200", &one);
         std::thread::sleep(std::time::Duration::from_millis(20));
         here.write("Chromium/Default/Sessions/Session_100", &two);
-        let found = read(&KNOWN[7], &here.0, 0.0).expect("Chromium is here");
+        let found = read(&KNOWN[7], &here.0, 0.0, Pick::Usual).expect("Chromium is here");
         assert_eq!(
             found.incoming.sessions[0].tabs[0].url,
             "https://new.example/"
@@ -672,8 +1036,272 @@ mod tests {
             here.0.join("outside/Session_9"),
             here.0.join("com.operasoftware.Opera/Sessions/Session_9"),
         );
-        let opera = read(&KNOWN[11], &here.0, 0.0).expect("Opera is here");
+        let opera = read(&KNOWN[11], &here.0, 0.0, Pick::Usual).expect("Opera is here");
         assert_eq!(opera.incoming.sessions.len(), 0);
         assert_eq!(opera.profile, None);
+    }
+
+    /// A passwords file as Chromium writes one, with the columns read here.
+    fn login_data(path: &Path, rows: &[(&str, &str, &[u8], bool, i64)]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap_or_default();
+        }
+        let Ok(db) = rusqlite::Connection::open(path) else {
+            return;
+        };
+        let _ = db.execute_batch(
+            "CREATE TABLE logins (origin_url VARCHAR NOT NULL, action_url VARCHAR, \
+             username_value VARCHAR, password_value BLOB, blacklisted_by_user INTEGER NOT NULL, \
+             date_last_used INTEGER NOT NULL DEFAULT 0)",
+        );
+        for (origin, user, blob, never, used) in rows {
+            let _ = db.execute(
+                "INSERT INTO logins (origin_url, username_value, password_value, \
+                 blacklisted_by_user, date_last_used) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![origin, user, blob, i64::from(*never), used],
+            );
+        }
+    }
+
+    /// A password wrapped as Chromium wraps it, under `passphrase`.
+    fn wrap(passphrase: &str, plain: &[u8]) -> Vec<u8> {
+        use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
+        let key = stretch(passphrase).expect("a key");
+        let mut buf = plain.to_vec();
+        buf.resize(plain.len() + 16, 0);
+        let sealed = cbc::Encryptor::<aes::Aes128>::new_from_slices(&key, &IV)
+            .expect("sixteen bytes each")
+            .encrypt_padded::<Pkcs7>(&mut buf, plain.len())
+            .expect("room for the padding")
+            .to_vec();
+        [b"v10".as_slice(), &sealed].concat()
+    }
+
+    #[test]
+    fn the_key_is_stretched_as_chromium_stretches_it() {
+        // Python's hashlib.pbkdf2_hmac("sha1", b"peanuts", b"saltysalt", 1003, 16): the
+        // same recipe from another implementation. ("peanuts" is Chromium's passphrase
+        // on Linux, where it takes one round.)
+        assert_eq!(
+            stretch("peanuts"),
+            Some([
+                217, 160, 157, 73, 155, 78, 27, 116, 97, 242, 142, 103, 151, 44, 109, 189
+            ])
+        );
+        assert_eq!(stretch(""), None);
+    }
+
+    #[test]
+    fn passwords_unwrap_with_the_key_and_are_said_when_they_do_not() {
+        let here = Fixture::new("passwords");
+        let secret = "s3cret-passphrase";
+        let root = "Google/Chrome";
+        here.write(
+            &format!("{root}/Local State"),
+            br#"{"profile":{"last_used":"Default"}}"#,
+        );
+        // A hash of the site, as newer builds put before the password: not text.
+        let hashed = [[0xE9u8; 32].as_slice(), b"after-the-hash"].concat();
+        // 2024-01-01 in Chromium's microseconds since 1601.
+        let used = 13_348_540_800_000_000;
+        login_data(
+            &here.0.join(format!("{root}/Default/Login Data")),
+            &[
+                (
+                    "https://www.example.com/login",
+                    "alice",
+                    &wrap(secret, b"one"),
+                    false,
+                    used,
+                ),
+                (
+                    "http://intranet.example/",
+                    "bob",
+                    &wrap(secret, &hashed),
+                    false,
+                    0,
+                ),
+                (
+                    "https://example.com/other",
+                    "alice",
+                    &wrap(secret, b"again"),
+                    false,
+                    0,
+                ),
+                ("https://plain.example/", "carol", b"in the clear", false, 0),
+                ("https://never.example/", "", b"", true, 0),
+                (
+                    "android://hash@com.vendor.app/",
+                    "dan",
+                    &wrap(secret, b"app"),
+                    false,
+                    0,
+                ),
+                ("https://empty.example/", "erin", b"", false, 0),
+            ],
+        );
+        login_data(
+            &here
+                .0
+                .join(format!("{root}/Default/Login Data For Account")),
+            &[(
+                "https://account.example/",
+                "frank",
+                &wrap(secret, b"synced"),
+                false,
+                0,
+            )],
+        );
+
+        assert_eq!(password_count(chrome(), &here.0, Pick::Usual), 6);
+        let found = passwords(chrome(), &here.0, secret, Pick::Usual).expect("readable");
+        let got: Vec<(&str, &str, &str, bool)> = found
+            .logins
+            .iter()
+            .map(|l| {
+                (
+                    l.host.as_str(),
+                    l.user.as_str(),
+                    l.password.as_str(),
+                    l.clear,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("example.com", "alice", "one", false),
+                ("intranet.example", "bob", "after-the-hash", true),
+                ("account.example", "frank", "synced", false),
+            ]
+        );
+        // 2024-01-01 is 1,704,067,200 seconds after 1970.
+        assert!((found.logins[0].used.unwrap_or_default() - 1_704_067_200.0).abs() < 1.0);
+        assert_eq!(found.logins[1].used, None);
+        assert_eq!(found.never, ["never.example"]);
+        assert_eq!((found.skipped, found.undecrypted), (1, 1));
+
+        // The wrong key unwraps nothing, and says so for every one.
+        let wrong = passwords(chrome(), &here.0, "not it", Pick::Usual).expect("readable");
+        assert_eq!(wrong.logins, Vec::<Login>::new());
+        assert_eq!((wrong.skipped, wrong.undecrypted), (1, 5));
+        let none = passwords(chrome(), &here.0, "", Pick::Usual).expect("readable");
+        assert_eq!((none.logins.len(), none.undecrypted), (0, 5));
+    }
+
+    #[test]
+    fn no_passwords_file_or_no_key_to_read_it_with_brings_none() {
+        let here = Fixture::new("no-passwords");
+        let secret = "s3cret-passphrase";
+        here.write("Arc/User Data/Default/Bookmarks", br#"{"roots":{}}"#);
+        assert!(passwords(&KNOWN[3], &here.0, secret, Pick::Usual).is_none());
+        here.write("Citro Labs/ego lite/Default/Bookmarks", br#"{"roots":{}}"#);
+        login_data(
+            &here.0.join("Citro Labs/ego lite/Default/Login Data"),
+            &[("https://e.example/", "x", &wrap(secret, b"y"), false, 0)],
+        );
+        assert_eq!(KNOWN[2].safe_storage(), None);
+        assert_eq!(
+            chrome().safe_storage(),
+            Some(("Chrome Safe Storage", "Chrome"))
+        );
+        assert_eq!(password_count(&KNOWN[2], &here.0, Pick::Usual), 0);
+        assert!(passwords(&KNOWN[2], &here.0, secret, Pick::Usual).is_none());
+    }
+
+    #[test]
+    fn a_profile_is_picked_by_its_folder_and_all_of_them_come_together() {
+        let here = Fixture::new("picks");
+        let root = "BraveSoftware/Brave-Browser";
+        let brave = &KNOWN[4];
+        here.write(
+            &format!("{root}/Local State"),
+            br#"{"profile":{"last_used":"Profile 2","info_cache":{"Default":{"name":"Home"},"Profile 2":{"name":"Work"}}}}"#,
+        );
+        for (folder, url) in [
+            ("Default", "https://home.example/"),
+            ("Profile 2", "https://work.example/"),
+            ("Profile 10", "https://ten.example/"),
+        ] {
+            here.write(
+                &format!("{root}/{folder}/Current Session"),
+                &session(&[frame(0, &raw(&[1, 1])), navigation(1, 0, url, folder)]),
+            );
+            here.write(
+                &format!("{root}/{folder}/Bookmarks"),
+                format!(
+                    r#"{{"roots":{{"bookmark_bar":{{"children":[{{"type":"url","name":"{folder}","url":"{url}"}}]}}}}}}"#
+                )
+                .as_bytes(),
+            );
+        }
+        login_data(
+            &here.0.join(format!("{root}/Profile 10/Login Data")),
+            &[("https://ten.example/", "t", &wrap("k", b"p"), false, 0)],
+        );
+
+        let (list, usual) = profile_list(brave, &here.0);
+        let got: Vec<(&str, &str)> = list
+            .iter()
+            .map(|p| (p.folder.as_str(), p.name.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Default", "Home"),
+                ("Profile 2", "Work"),
+                ("Profile 10", "Profile 10")
+            ]
+        );
+        assert_eq!(usual.as_deref(), Some("Profile 2"));
+
+        let tabs = |pick| -> Vec<String> {
+            read(brave, &here.0, 0.0, pick)
+                .map(|f| {
+                    f.incoming.sessions[0]
+                        .tabs
+                        .iter()
+                        .map(|t| t.url.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(tabs(Pick::Usual), ["https://work.example/"]);
+        assert_eq!(tabs(Pick::One("Default")), ["https://home.example/"]);
+        assert_eq!(
+            tabs(Pick::All),
+            [
+                "https://home.example/",
+                "https://ten.example/",
+                "https://work.example/"
+            ]
+        );
+        assert!(read(brave, &here.0, 0.0, Pick::One("Nobody")).is_none());
+        let one = read(brave, &here.0, 0.0, Pick::One("Profile 10")).expect("there");
+        assert_eq!(one.profile.as_deref(), Some("Profile 10"));
+        let all = read(brave, &here.0, 0.0, Pick::All).expect("there");
+        assert_eq!(all.profile, None);
+        let marks = all.incoming.bookmarks[0]["children"]
+            .as_array()
+            .map(|kids| {
+                kids.iter()
+                    .filter_map(|k| k["title"].as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert_eq!(marks, ["Default", "Profile 10", "Profile 2"]);
+
+        assert_eq!(password_count(brave, &here.0, Pick::Usual), 0);
+        assert_eq!(password_count(brave, &here.0, Pick::All), 1);
+        assert_eq!(password_count(brave, &here.0, Pick::One("Profile 10")), 1);
+        let all = passwords(brave, &here.0, "k", Pick::All).expect("readable");
+        assert_eq!(all.logins[0].password, "p");
+    }
+
+    #[test]
+    fn profiles_count_as_a_person_would() {
+        let mut names = vec!["Profile 10", "Default", "profile 2", "Profile 1"];
+        names.sort_by(|a, b| natural(a, b));
+        assert_eq!(names, ["Default", "Profile 1", "profile 2", "Profile 10"]);
     }
 }

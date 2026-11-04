@@ -7,6 +7,36 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.5 — 2026-11-04
+
+Passwords come over, and Tap fills them in.
+
+- **Bring things over is Search's sheet now** (Settings › General › Bring Over):
+  every browser found on this Mac with what it holds counted, the profile to bring
+  (the one used last, any other, or all of them), and a switch each for passwords,
+  bookmarks, history, and open tabs with their groups. Then Bring them in, and what
+  came, line by line.
+- **Passwords from Chrome, Arc, Brave, Edge, Dia and the other Chromium browsers**:
+  macOS asks once for the browser's keychain key, and every saved password comes into
+  the macOS keychain under Tap's name, with the sites it was told never to save.
+- **Passwords from Search** come as you use them: Search keeps each one as its own
+  keychain item, which macOS hands to another app only after asking, one by one. So
+  they're offered under sign-in boxes straight away, and the first time you pick one
+  macOS asks for it once; from then on it's Tap's.
+- **A passwords CSV** (Chrome, Google Password Manager and others export one) comes in
+  through the sheet's File….
+- **Filling in sign-ins**: click a sign-in box and the accounts kept for the site hang
+  from it; a click fills the name and password in, as typing would. A sign-in that asks
+  for the name first gets the name, and its password page the right account first.
+- **Saving**: after a sign-in that took, a bar offers to save the password, or update
+  it when it changed, or never ask on that site. Settings › Passwords switches both
+  on and off.
+- **Right-click a tab** for Reload, Duplicate, Copy Address, Copy as Markdown Link,
+  Close Tabs to the Right, Close Other Tabs, Close and Reopen Closed Tab; right-click a
+  group's heading to collapse or expand it.
+- Settings' page list lines up: every icon in one column, every name starting at the
+  same place.
+
 ## 0.1.4 — 2026-11-04
 
 Bring things over finds the other browsers on this Mac by itself.

@@ -1,12 +1,14 @@
 //! What Tap brings in from elsewhere and sends out (docs/PLAN.md §4, §7): a whole profile
 //! as one offline file (Search #845), and what the other browsers on this Mac hold:
-//! Search's own profile, and a Chromium browser's open tabs (Search #841), history and
-//! bookmarks. No AppKit, no WebKit: everything here runs under plain `cargo test`.
+//! Search's own profile, and a Chromium browser's open tabs (Search #841), history,
+//! bookmarks and passwords, and a passwords CSV another browser exported. No AppKit, no
+//! WebKit, no keychain: everything here runs under plain `cargo test`.
 
 #![deny(unsafe_code)]
 
 pub mod chromium;
 pub mod from_search;
+pub mod passwords;
 pub mod profile;
 pub mod snss;
 

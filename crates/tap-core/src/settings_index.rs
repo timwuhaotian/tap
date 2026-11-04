@@ -444,9 +444,9 @@ pub fn items() -> &'static [Item] {
                 .words(&["default browser"])
                 .control(Control::Buttons(&[("default", "Make default")])),
             Item::new("general.import", "browser", "square.and.arrow.down.on.square", "Bring things over",
-                "Open tabs and their groups, history and bookmarks from another browser on this Mac, or from a profile file")
-                .more("Search, Chrome, Arc, Brave, Edge, Dia and the other Chromium browsers are found on their own, and nothing in them changes. Export writes an offline file you can AirDrop to your other Mac; open it there to bring it all in. Passwords and cookies are never carried.")
-                .words(&["import", "export", "profile", "chrome", "safari", "arc", "brave", "edge", "search", "migrate", "airdrop"])
+                "Passwords, bookmarks, history and open tabs from another browser on this Mac, or from a file")
+                .more("Search, Chrome, Arc, Brave, Edge, Dia and the other Chromium browsers are found on their own, and nothing in them changes; macOS asks once for a browser's key before its passwords come. Export writes an offline file you can AirDrop to your other Mac; open it there to bring it all in. Passwords and cookies are never carried in it.")
+                .words(&["import", "export", "profile", "chrome", "safari", "arc", "brave", "edge", "search", "migrate", "airdrop", "passwords", "csv"])
                 .control(Control::Buttons(&[("import", "Bring Over"), ("export", "Export Tap Profile…")])),
             Item::new("quit.confirm", "browser", "power", "Confirm before quitting",
                 "Ask before ⌘Q or Quit Tap closes the browser")
@@ -645,7 +645,7 @@ pub fn items() -> &'static [Item] {
 
             // Passwords
             Item::new("passwords.open", "passwords", "key.viewfinder", "Your passwords",
-                "In the macOS keychain, shown with Touch ID")
+                "In the macOS keychain, under Tap's name")
                 .words(&["keychain"]).control(Control::Buttons(&[("passwords", "Open…")])),
             Item::new("passwords.save", "passwords", "square.and.arrow.down", "Offer to save passwords",
                 "Asked once per site, never again for a site you refuse")
@@ -764,7 +764,7 @@ pub fn items() -> &'static [Item] {
 
 /// The rows Tap acts on today, the only ones Settings shows. Every other row's value is
 /// kept under its keys, and travels in a profile, until the feature behind it lands.
-const LIVE: [&str; 53] = [
+const LIVE: [&str; 55] = [
     "general.default",
     "general.import",
     "quit.confirm",
@@ -801,6 +801,8 @@ const LIVE: [&str; 53] = [
     "commandbar",
     "start.fresh",
     "passwords.open",
+    "passwords.save",
+    "passwords.fill",
     "shield",
     "sites.keep",
     "privacy.clickIDs",

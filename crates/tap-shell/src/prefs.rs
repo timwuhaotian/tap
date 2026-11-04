@@ -179,8 +179,12 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
     Some(data.to_vec())
 }
 
-/// A property-list object as JSON, or `None` for one JSON can't carry.
-fn to_json(object: &AnyObject) -> Option<Value> {
+/// A property-list object as JSON, or `None` for one JSON can't carry. A script
+/// message's `null` arrives as `NSNull`, which no property list holds: it is JSON's null.
+pub(crate) fn to_json(object: &AnyObject) -> Option<Value> {
+    if object.downcast_ref::<objc2_foundation::NSNull>().is_some() {
+        return Some(Value::Null);
+    }
     if let Some(number) = object.downcast_ref::<NSNumber>() {
         // SAFETY: NSNumber always answers with a valid C string.
         let kind = unsafe { std::ffi::CStr::from_ptr(number.objCType().as_ptr()) }.to_bytes();

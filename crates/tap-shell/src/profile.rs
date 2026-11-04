@@ -380,7 +380,7 @@ pub fn open_file(path: &Path) {
     }
 }
 
-fn take_and_tell(path: &Path) {
+pub(crate) fn take_and_tell(path: &Path) {
     match take(path) {
         Ok(taken) => tell("Brought in", &taken.said),
         Err(why) => tell("Couldn't bring that in", &why),

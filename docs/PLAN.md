@@ -461,8 +461,12 @@ without a file, since 0.1.4: `from_search::read`, §8 "0.1.4"). If
   extension IDs (reinstalled).
 - **Can't come over:**
   - cookies and sign-ins: WebKit keeps them per bundle id.
-  - passwords without prompts: Search's keychain items are tied to its signature. An
-    opt-in path reads them with one macOS prompt per item, with a clear warning.
+  - passwords all at once: each is the Search release's own keychain item, and macOS
+    hands one to another app only after asking, per item (569 on this Mac). Since
+    0.1.5 they come **on first use** instead (decided 2026-11-04, §8 "0.1.5"): names
+    are readable without asking, so Search's accounts hang under sign-in boxes at
+    once, and the first pick of one asks macOS for that one and copies it into Tap's
+    drawer. A bulk path (one prompt per item) is not built.
 
 ## 8. Milestones (in dependency order)
 
@@ -921,6 +925,65 @@ over finds the browsers on this Mac by itself and brings one over, as Search's
   reach the window), and a real Chrome profile (none on this Mac: only Chrome for
   Testing's crash folder), which M6 still asks for.
 
+### 0.1.5 — Passwords: brought over, filled in, saved
+
+At the user's request (2026-11-04: "所有的登陆名/密码等，好像没办法从search/chrome迁移进来？
+bring things over应该也包括这些吧（自动填充）", then "brings things over / 密钥迁移 功能请你直接
+照抄 ../search 的"): the core of M5's Forms and Vault and M6's password import,
+brought forward as a patch release.
+
+- [x] **Bring things over is Search's `ImportPanel`** (`bring.rs`, a sheet on the
+  window, opened by Settings' Bring Over): the browsers found, each counted off the
+  main thread from its files alone (no key asked, nothing decrypted); the profile
+  picker ("Most recent: X", each profile, All profiles; `chromium::Pick`); a switch
+  each for Passwords, Bookmarks, History, Tabs & tab groups (and Settings, for
+  Search); Bring them in; the said lines; File… for a passwords CSV or a profile file.
+- [x] **Chromium passwords** (`tap_import::chromium::passwords`, from `Import.swift`):
+  `Login Data` and `Login Data For Account`, copied before reading; PBKDF2-SHA1
+  ("saltysalt", 1003 rounds), AES-128-CBC with sixteen spaces, `v10` only, the 32-byte
+  site hash skipped when present; never-sites kept. The key comes from the keychain
+  (`<Name> Safe Storage`), one macOS question; a test world's browser keeps it in a
+  `Safe Storage` file beside its profiles, Search's rule.
+- [x] **The vault** (`keychain.rs`, `vault.rs`, from `Vault.swift`): internet
+  passwords under the label `Tap` (`Tap (<world>)` on a test run), Search's
+  dictionaries one to one, through Security.framework directly (a deviation from
+  §5.3's `security-framework`: the calls are four, and the dictionaries are Foundation
+  ones bridged). **Tap's items carry a security domain** (their label): the keychain
+  knows an internet password by server, account, protocol, kind, port, path and
+  security domain, never by label, so without it saving an account Search also keeps
+  failed as a duplicate (found in the test world, `errSecDuplicateItem`). Registrable
+  domains use CFNetwork's `_CFHostIsDomainTopLevel`, as Search's `Registrable.swift`.
+- [x] **Search's passwords on first use** (§7): Bring things over from Search turns
+  on `passwords.fromSearch`; its drawer's accounts are listed beside Tap's (names
+  only); a pick reads the secret off the main thread (macOS asks once) and copies it
+  into Tap's drawer.
+- [x] **Forms** (`forms.js` is Search's script word for word but for its names;
+  `forms.rs`, `signin.rs`): the accounts hang under the box (five at most, newest
+  first, the name the first step sent first; only plain-http ones on a plain-http
+  page; a half second before a click counts), a pick fills through the field's own
+  setter with the page's scheme and host checked when the script runs, and a sign-in
+  that took is offered a place: Save / Update, Not now, Never here, in a bar at the
+  bottom. `passwords.save` and `passwords.fill` are live (55 of 81).
+- [x] **Settings' rail lines up** (the user's screenshot, 2026-11-04): each page's
+  icon sits at the left of a fixed column and its name starts at one x, rather than a
+  button's leading image pushing each name over by its own icon's width.
+- Deviations: no Passwords page yet (Open… opens Keychain Access, where Tap's are
+  listed), no LocalAuthentication, no Apple Passwords, no passkeys; the list takes no
+  arrow keys; private tabs don't exist yet, so nothing checks for one.
+- Checked: `cargo test` (tap-core 86, tap-import 31, tap-shell 39), clippy
+  `-D warnings`, nightly fmt. In a test world, through the bench and screenshots,
+  with a made-up Chrome (an encrypted `Login Data`: two localhost accounts, one
+  github.com, one never-site) and a local sign-in page: the sheet counted "1 bookmark
+  · 3 passwords"; Bring them in said "3 passwords" and the bookmark; the email box
+  hung alice and bob; a pick filled `alice@example.com | Tr0ub4dor&3`; a new sign-in
+  was offered and saved; the same password again offered nothing; a changed one
+  offered Update; Never here stopped the offers; a seeded Search item was listed
+  "from Search", filled, and moved into Tap's drawer; after a pick the list came back
+  on the next visit and went on blur. Found and fixed on the way: a script message's
+  `null` (NSNull) dropped the whole message; the save check read the keychain on the
+  main thread (now off it). Not checked: a real Chrome (none on this Mac) and the
+  macOS prompt for a real Search item.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -1363,6 +1426,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | At the user's request ("为什么settings里面的大部分选项都没办法真实的使用，修复优化"), Settings shows only the rows Tap acts on, replacing 0.1.1's dimmed rows, and twelve more rows are made live (§8 "0.1.2"). The rest come back as their features land; their values are kept and travel meanwhile. |
 | 2026-11-04 | At the user's request ("全部完成后，发布0.1.0版本"), 0.1.0 is released once M2 is done, rather than waiting for full parity at 1.0: browsing, the field, history, page questions, downloads, find, sleeping tabs, session, site icons, links from other apps and #849. `releases/` is committed from 0.1.0; the README says what isn't in yet. Full parity stays the bar for 1.0. Not in 0.1.0 and needed before people rely on it: the updater (M8 in the plan, ported from Kil). |
 | 2026-11-04 | At the user's request ("Settings 大部分不能用的功能帮我全部实现", then a patch release), 0.1.3 makes 26 more Settings rows live (53 of 81, §8 "0.1.3"). The rows behind whole milestones (sidebar column, Spaces/profiles/pins, the passwords vault, extensions) stay hidden until those land; reduced forms are marked where they are (dusk, passwords.open, downloads.button, search.suggest). |
+| 2026-11-04 | At the user's request ("所有的登陆名/密码等…bring things over应该也包括这些吧（自动填充）", then "照抄 ../search 的"), 0.1.5 brings forward passwords: Search's ImportPanel sheet with Chromium passwords (one macOS question per browser), the vault with a security domain of its own, Search's form script, the account list and the save bar (§8 "0.1.5"). Search's own passwords come on first use, not all at once: macOS asks per item for another app's items, and Search keeps 569 here (§7). `aes`, `cbc`, `pbkdf2`, `sha1` join `tap-import`, as §5.3 planned; the keychain is reached directly rather than through `security-framework`. |
 | 2026-11-04 | At the user's request ("tap bring things over 理论上应该是能自动侦测到本地的chrome/search 等类似的profil数据的，但目前没有"), 0.1.4 brings forward the core of M6: Bring things over finds Search and the Chromium browsers on this Mac and brings one's open tabs and groups (#841), history and bookmarks through the profile merge (§8 "0.1.4"). `rusqlite` against the system's libsqlite3 joins `tap-import`, as §5.3 planned. |
 
 ## Appendix A — Parity tracker
@@ -1434,17 +1498,17 @@ added below this one as M1 starts.
 | Find.swift | 135 | s/ui/find_bar | M2 | ported |
 | Float.swift | 1367 | w/float, a/float | M5 | todo |
 | Fold.swift | 554 | s/ui/fold | M3 | todo |
-| Forms.swift | 544 | a/forms, w/relays/form | M5 | todo |
+| Forms.swift | 544 | a/forms, w/relays/form | M5 | partial (0.1.5: `forms.js`, `forms.rs`, `signin.rs`; no passkeys path) |
 | FrameRate.swift | 156 | sys/power, w/frame_rate | M5 | todo |
 | FullScreenEscape.swift | 396 | s/ui/full_screen_escape | M5 | todo |
 | Hidden.swift | 87 | s/ui/hidden | M5 | todo |
 | History.swift | 639 | c/history | M2 | partial |
 | Icons.swift | 859 | c/icons_index, w/icons, a | M2 | partial |
 | ImageMenu.swift | 290 | w/image_menu, a | M5 | todo |
-| Import.swift | 1576 | i/{found,chromium,safari,firefox} | M6 | partial (0.1.4: found, Chromium history and bookmarks; passwords, icons, Mozilla to come) |
+| Import.swift | 1576 | i/{found,chromium,safari,firefox} | M6 | partial (0.1.4: found, Chromium history and bookmarks; 0.1.5: Chromium passwords, profiles; icons, Mozilla to come) |
 | ImportArc.swift | 289 | i/arc | M6 | todo |
 | ImportFile.swift | 398 | i/file; #845 part: i/profile | M6 | partial |
-| ImportPanel.swift | 572 | s/bring, s/settings (Bring Over) | M6 | partial (0.1.4: found, picked, said, brought; no profile picker or choices) |
+| ImportPanel.swift | 572 | s/bring, s/settings (Bring Over) | M6 | partial (0.1.5: the sheet, profile picker, choices, said lines, File…; no records, Arc, extensions or folder chooser) |
 | ImportRecord.swift | 60 | i/records | M6 | todo |
 | ImportSession.swift | 367 | i/snss (#841) | M1/M6 | tested (0.1.4, with `SessionImportTests`) |
 | Inspector.swift | 59 | w/inspector | M2 | todo |
@@ -1479,7 +1543,7 @@ added below this one as M1 starts.
 | Reader.swift | 594 | a/reader, c/reader, s/ui/reader_look | M5 | todo |
 | Recall.swift | 482 | s/ui/history_page | M3 | todo |
 | RecordingIndicator.swift | 217 | s/ui/recording_indicator | M5 | todo |
-| Registrable.swift | 25 | c/registrable | M1 | todo |
+| Registrable.swift | 25 | c/registrable | M1 | done (0.1.5, in `vault.rs`) |
 | Scripting.swift | 80 | s/app/scripting | M8 | todo |
 | SearchProfile.swift (#845 branch) | 350 | i/profile, i/from_search, s/profile (#845) | M6 | partial |
 | Session.swift | 195 | c/session | M1/M2 | partial |
@@ -1518,7 +1582,7 @@ added below this one as M1 starts.
 | Translate.swift | 1076 | — (Swift-only Translation API) | — | dropped |
 | Trim.swift | 61 | sys/trim | M2 | todo |
 | Updater.swift | 605 | s/update, s/update_window (Kil's design, §12) | M8 | fixed-deviation |
-| Vault.swift | 408 | sys/keychain, w/vault, i/csv | M5 | todo |
+| Vault.swift | 408 | sys/keychain, w/vault, i/csv | M5 | partial (0.1.5: `keychain.rs`, `vault.rs`, `passwords::csv`; no LocalAuthentication) |
 | Welcome.swift | 460 | s/ui/welcome | M3 | todo |
 | WhatsNew.swift | 513 | c/whats_new, s/ui/whats_new | M3 | todo |
 | Windows.swift | 504 | c/windows, s/app/windows | M1/M4 | todo |

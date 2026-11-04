@@ -49,7 +49,7 @@ use crate::{
     offers::{self, Offers},
     palette,
     prefs::Kept,
-    rt, settings,
+    rt, settings, signin,
     strip::Strip,
     web,
 };
@@ -391,6 +391,10 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
             || *views.shown.borrow() != view.active
         {
             show_page(views, view);
+        }
+        // The accounts under a sign-in box belong to the tab they were hung from.
+        if dirty.intersects(BrowserFields::ACTIVE | BrowserFields::TABS) {
+            signin::tab_changed();
         }
         // What the tab asked while it was behind another is put to you now.
         if dirty.contains(BrowserFields::ACTIVE)
@@ -1398,6 +1402,12 @@ pub fn first_responder() -> String {
 }
 
 /// The one window, for a sheet or a picker to hang from.
+/// The stage the page is on, for what hangs over a page: the accounts under a sign-in
+/// box, the offer to keep a password.
+pub fn stage() -> Option<Retained<NSView>> {
+    with_views(|views| Retained::into_super(views.stage.clone()))
+}
+
 pub fn main_window() -> Option<Retained<NSWindow>> {
     with_views(|views| views.window.clone())
 }
