@@ -4,14 +4,13 @@
 //! looks in it instead, and says only found or not.
 
 use block2::RcBlock;
-use objc2::{MainThreadMarker, MainThreadOnly, Message, rc::Retained, runtime::AnyObject};
+use objc2::{MainThreadMarker, MainThreadOnly, Message, runtime::AnyObject};
 use objc2_foundation::{NSDictionary, NSError, NSNumber, NSString};
-use objc2_web_kit::{WKContentWorld, WKFindConfiguration, WKFindResult, WKWebView};
+use objc2_web_kit::{WKFindConfiguration, WKFindResult, WKWebView};
 use serde_json::Value;
 use tap_core::{
     browser::TabId,
     find::{Answer, Ask},
-    identity,
 };
 
 use crate::{rt, web};
@@ -20,26 +19,6 @@ use crate::{rt, web};
 const SCRIPT: &str = include_str!("../../../assets/js/page-find.js");
 /// Matches measured at a time; Safari stops counting at the same number.
 const LIMIT: i64 = 1000;
-
-/// Tap's own content world: the page can't see into it, so it can't read the word looked
-/// for or the list the count comes from, or swap the functions the search uses.
-///
-/// Kept for the app's life, as Search keeps its `Web.world`: WebKit lets a world go with
-/// the last object naming it, and the next call got a fresh one, with none of the find's
-/// state in it. Every Next then started again from the first match.
-fn world(mtm: MainThreadMarker) -> Retained<WKContentWorld> {
-    thread_local! {
-        static WORLD: std::cell::OnceCell<Retained<WKContentWorld>> = const { std::cell::OnceCell::new() };
-    }
-    WORLD.with(|world| {
-        world
-            .get_or_init(|| {
-                // SAFETY: a world named once and shared by every page.
-                unsafe { WKContentWorld::worldWithName(&NSString::from_str(identity::NAME), mtm) }
-            })
-            .clone()
-    })
-}
 
 /// Asks the tab's page; its answer goes back to the model.
 pub fn ask(ask: &Ask) {
@@ -96,33 +75,6 @@ pub fn ask(ask: &Ask) {
             rt::dispatch(move |browser| browser.find_answered(&question, answer));
         },
     );
-}
-
-/// Evaluates an expression in Tap's own content world, for the bench: what the page can't
-/// see, the find's state among it.
-pub fn evaluate_in_world(
-    web: &WKWebView,
-    expression: &str,
-    then: impl Fn(Option<Value>) + 'static,
-) {
-    let body = format!("return JSON.stringify(await (async () => ({expression}))());");
-    let block = RcBlock::new(move |value: *mut AnyObject, _error: *mut NSError| {
-        // SAFETY: WebKit hands a valid object or null, for the call's length.
-        let text = unsafe { value.as_ref() }
-            .and_then(|v| v.downcast_ref::<NSString>())
-            .map(ToString::to_string);
-        then(text.and_then(|t| serde_json::from_str(&t).ok()));
-    });
-    // SAFETY: a live web view, a script body, and a block that outlives the call.
-    unsafe {
-        web.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
-            &NSString::from_str(&body),
-            None,
-            None,
-            &world(MainThreadMarker::from(web)),
-            Some(&block),
-        );
-    }
 }
 
 /// Takes the highlights off the tab's page and gives back its own selection.
@@ -183,7 +135,7 @@ fn run(
             &NSString::from_str(&body),
             Some(&arguments),
             None,
-            &world(MainThreadMarker::from(web)),
+            &web::world(MainThreadMarker::from(web)),
             Some(&block),
         );
     }

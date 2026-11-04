@@ -599,7 +599,17 @@ BookmarksFile, Registrable.
   private), with WebKit's private reason ("crash"):
   `/usr/bin/log show --predicate 'subsystem == "com.timwuhaotian.tap"'` (plain `log`
   is a zsh builtin).
-- [ ] Still to come for M2: sleeping tabs, icons.
+- [x] Sleeping tabs (2026-11-04), from `Sleep.swift`: a tab left alone half an hour
+  (Search's `tabs.sleep.pace`, `sleep.after` in seconds for the bench) gives its page
+  back and keeps its `interactionState`, so it wakes on the same page with Back and its
+  scroll; memory pressure shrinks the wait to five minutes, or none when critical.
+  Never the tab on screen, one loading, the opener of the page on screen (model), or
+  one playing sound, on a call, downloading, with a question waiting, or holding
+  something typed (shell). `touched` is kept in the session. Checked through the
+  bench (`sleep` answers why a tab stays awake): asleep with no process left, woken at
+  scroll 2400 with Back. Not yet: the picture while a page wakes, pins and spaces,
+  sites kept awake, and Search's own typed check (an interim one until forms, M5).
+- [ ] Still to come for M2: icons.
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
 - Address parsing, engines, keywords, site search, history suggestions; the omnibox
   with inline completion (IME-safe, finding 3.5)

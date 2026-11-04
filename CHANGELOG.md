@@ -26,6 +26,10 @@ Info.plist.
   waits until you go to that tab.
 - **A tab behind whose page went away** is loaded again when you come back to it, rather
   than in the background.
+- **Tabs you aren't using sleep.** A tab left alone for half an hour gives its page back
+  and comes back on the same page, with Back and its scroll, when you return to it;
+  sooner when macOS is short of memory. Never one on screen, loading, playing sound, on
+  a call, downloading, waiting on a question or holding something typed.
 - **Find on page.** ⌘F puts a small bar in the page's corner: what you type is found as
   you type it, every match painted and the current one in orange, with "3 of 17" as
   the page counts it. Return and ⌘G go to the next match, ⇧Return and ⇧⌘G to the one

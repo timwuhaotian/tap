@@ -16,6 +16,7 @@ mod oslog;
 mod page_find;
 mod palette;
 mod rt;
+mod sleep;
 mod store;
 mod strip;
 mod web;
@@ -45,6 +46,7 @@ pub fn run() {
     rt::install(browser);
     window::open(mtm, &commands);
     bench::start();
+    sleep::start(mtm);
     // A window that opens on a new tab opens with the keys in its field.
     rt::dispatch(|browser| {
         if browser.active_tab().is_some_and(Tab::is_blank) && browser.editing().is_none() {

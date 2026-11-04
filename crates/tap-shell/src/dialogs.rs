@@ -96,6 +96,11 @@ fn ask(tab: Option<TabId>, show: impl FnOnce() + 'static, dismiss: impl FnOnce()
     }
 }
 
+/// Whether the tab has a question waiting to be put to you.
+pub fn waiting(tab: TabId) -> bool {
+    HELD.with_borrow(|held| held.get(&tab).is_some_and(|q| !q.is_empty()))
+}
+
 /// The tab came to the front: what it asked meanwhile is shown now, in order.
 pub fn present_held(tab: TabId) {
     let waiting = HELD

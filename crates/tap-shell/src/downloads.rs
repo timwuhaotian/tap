@@ -20,14 +20,17 @@ use objc2_foundation::{
     NSData, NSDistributedNotificationCenter, NSError, NSString, NSURL, NSURLResponse,
 };
 use objc2_web_kit::{WKDownload, WKDownloadDelegate};
-use tap_core::{fetching, identity};
+use tap_core::{browser::TabId, fetching, identity};
 
 use crate::store;
+
+/// A download going: the download, where it is written, and the tab it came from.
+type Going = (Retained<WKDownload>, Option<PathBuf>, Option<TabId>);
 
 thread_local! {
     /// Every download going: WebKit holds them weakly, so they are kept here until they
     /// end, with where each is being written.
-    static GOING: RefCell<Vec<(Retained<WKDownload>, Option<PathBuf>)>> = const { RefCell::new(Vec::new()) };
+    static GOING: RefCell<Vec<Going>> = const { RefCell::new(Vec::new()) };
     /// Finished files, newest last (bench `downloads`).
     static DONE: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     static DELEGATE: RefCell<Option<Retained<DownloadDelegate>>> = const { RefCell::new(None) };
@@ -54,20 +57,25 @@ pub fn done() -> Vec<String> {
     DONE.with_borrow(|done| done.iter().map(|p| p.display().to_string()).collect())
 }
 
+/// Whether the tab is still sending a download to disk: it stays awake until it is done.
+pub fn sending(tab: TabId) -> bool {
+    GOING.with_borrow(|going| going.iter().any(|(_, _, from)| *from == Some(tab)))
+}
+
 /// How many are still going.
 pub fn going() -> usize {
     GOING.with_borrow(Vec::len)
 }
 
 /// WebKit turned a navigation into a download: it is heard from, and kept, until it ends.
-pub fn keep(mtm: MainThreadMarker, download: &WKDownload) {
+pub fn keep(mtm: MainThreadMarker, download: &WKDownload, tab: Option<TabId>) {
     let delegate = DELEGATE.with_borrow_mut(|slot| {
         slot.get_or_insert_with(|| DownloadDelegate::new(mtm))
             .clone()
     });
     // SAFETY: the delegate lives for the app's life in `DELEGATE`, longer than any download.
     unsafe { download.setDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
-    GOING.with_borrow_mut(|going| going.push((download.retain(), None)));
+    GOING.with_borrow_mut(|going| going.push((download.retain(), None, tab)));
 }
 
 fn same(a: &WKDownload, b: &WKDownload) -> bool {
@@ -77,7 +85,7 @@ fn same(a: &WKDownload, b: &WKDownload) -> bool {
 /// The download is over, one way or the other: let it go, and answer where it went.
 fn release(download: &WKDownload) -> Option<PathBuf> {
     GOING.with_borrow_mut(|going| {
-        let index = going.iter().position(|(d, _)| same(d, download))?;
+        let index = going.iter().position(|(d, _, _)| same(d, download))?;
         going.remove(index).1
     })
 }
@@ -101,7 +109,7 @@ define_class!(
         ) {
             let file = fetching::free(&fetching::file_name(&suggested.to_string()), &folder());
             GOING.with_borrow_mut(|going| {
-                if let Some(entry) = going.iter_mut().find(|(d, _)| same(d, download)) {
+                if let Some(entry) = going.iter_mut().find(|(d, _, _)| same(d, download)) {
                     entry.1 = Some(file.clone());
                 }
             });

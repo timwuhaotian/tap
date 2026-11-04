@@ -88,6 +88,9 @@ pub enum Effect {
         tab: TabId,
         generation: u64,
     },
+    /// The tab has been left alone long enough: if nothing the page is doing keeps it,
+    /// it gives its page back (`slept`).
+    Sleep(TabId),
 }
 
 /// What was done about a page whose process ended, as the log says it.
@@ -138,6 +141,10 @@ pub struct Tab {
     committed: bool,
     /// The tab whose page opened this one.
     opener: Option<TabId>,
+    /// When you last left the tab, in seconds since 2001 (`history::now`): how long it
+    /// has gone without being looked at. Kept in the session (`touched`), so the night
+    /// Tap was quit counts.
+    touched: f64,
     entry: session::Entry,
     dirty: TabFields,
 }
@@ -159,6 +166,7 @@ impl Tab {
             stale: false,
             committed: false,
             opener: None,
+            touched: history::now(),
             entry: session::Entry::default(),
             dirty: TabFields::all(),
         }
@@ -229,6 +237,7 @@ impl Tab {
         session::Entry {
             url: self.url.clone(),
             title: self.title.clone(),
+            touched: Some(self.touched),
             ..self.entry.clone()
         }
     }
@@ -329,6 +338,8 @@ impl Browser {
             let mut tab = Tab::new(id);
             tab.url.clone_from(&entry.url);
             tab.title.clone_from(&entry.title);
+            // Sessions written before tabs kept it start counting at launch.
+            tab.touched = entry.touched.unwrap_or(tab.touched);
             tab.entry = entry;
             browser.tabs.push(tab);
         }
@@ -457,6 +468,11 @@ impl Browser {
             return;
         }
         if self.active != Some(id) {
+            // The tab you leave starts its count now.
+            let left = self.active;
+            if let Some(left) = left.and_then(|l| self.tab_mut(l)) {
+                left.touched = history::now();
+            }
             self.active = Some(id);
             self.dirty.insert(BrowserFields::ACTIVE);
             self.session_changed = true;
@@ -998,6 +1014,61 @@ impl Browser {
         }
     }
 
+    // MARK: sleep
+
+    /// Why a tab has to stay awake, as far as the window can tell, or `None` when nothing
+    /// here keeps it (Search's `Browser.awake(because:)`). What only the page knows
+    /// (sound, a call, a download, a question, something typed) the shell asks.
+    #[must_use]
+    pub fn awake_because(&self, id: TabId) -> Option<&'static str> {
+        let Some(tab) = self.tab(id) else {
+            return Some("no such tab");
+        };
+        if self.active == Some(id) {
+            return Some("on screen");
+        }
+        if tab.is_blank() {
+            return Some("blank");
+        }
+        if !tab.awake || tab.stale {
+            return Some("already asleep");
+        }
+        if tab.loading {
+            return Some("still loading");
+        }
+        // A sign-in window hands its answer back to the page that opened it.
+        if self.active_tab().and_then(|t| t.opener) == Some(id) {
+            return Some("the page on screen came from it");
+        }
+        None
+    }
+
+    /// Every tab left alone `wait` seconds or more that nothing here keeps awake, the one
+    /// left longest first: each is asked to sleep (Search's `sleepIdle`).
+    pub fn sleep_idle(&mut self, now: f64, wait: f64) {
+        let mut idle: Vec<(f64, TabId)> = self
+            .tabs
+            .iter()
+            .filter(|t| now - t.touched >= wait && self.awake_because(t.id).is_none())
+            .map(|t| (t.touched, t.id))
+            .collect();
+        idle.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.effects
+            .extend(idle.into_iter().map(|(_, id)| Effect::Sleep(id)));
+    }
+
+    /// The tab gave its page back: it wakes, where it was, the next time it is shown.
+    pub fn slept(&mut self, id: TabId) {
+        if self.awake_because(id).is_some() {
+            return;
+        }
+        if let Some(tab) = self.tab_mut(id) {
+            tab.awake = false;
+            tab.loading = false;
+            tab.dirty.insert(TabFields::AWAKE | TabFields::LOADING);
+        }
+    }
+
     /// A page finished loading in the tab: a visit, kept in history.
     pub fn page_finished(&mut self, id: TabId) {
         if self.find.open()
@@ -1479,6 +1550,68 @@ mod tests {
                 .take_effects()
                 .iter()
                 .any(|e| matches!(e, Effect::ClearFind { tab, .. } if *tab == b))
+        );
+    }
+
+    #[test]
+    fn tabs_left_alone_long_enough_sleep_and_wake_where_they_were() {
+        let mut browser = with_pages(&[
+            "https://a.example",
+            "https://b.example",
+            "https://c.example",
+        ]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        for id in &ids {
+            browser.page_loading(*id, false, 1.0);
+        }
+        browser.select(ids[2]);
+        browser.take_effects();
+        let later = history::now() + 31.0 * 60.0;
+        browser.sleep_idle(later, 30.0 * 60.0);
+        let asked: Vec<Effect> = browser
+            .take_effects()
+            .into_iter()
+            .filter(|e| matches!(e, Effect::Sleep(_)))
+            .collect();
+        // B was never looked at; A was left just now, when C came to the front.
+        assert_eq!(
+            asked,
+            vec![Effect::Sleep(ids[1]), Effect::Sleep(ids[0])],
+            "left longest first, not the one on screen"
+        );
+        assert_eq!(browser.awake_because(ids[2]), Some("on screen"));
+
+        browser.slept(ids[0]);
+        assert!(!browser.tab(ids[0]).is_some_and(Tab::awake));
+        browser.select(ids[0]);
+        assert!(
+            browser.take_effects().contains(&Effect::Load {
+                tab: ids[0],
+                url: "https://a.example".into()
+            }),
+            "woken where it was"
+        );
+
+        browser.sleep_idle(history::now() + 60.0, 30.0 * 60.0);
+        assert!(
+            !browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Sleep(_))),
+            "a tab just left counts from now"
+        );
+    }
+
+    #[test]
+    fn a_page_opened_from_the_one_on_screen_keeps_its_opener_awake() {
+        let mut browser = with_pages(&["https://mail.example"]);
+        let opener = browser.tabs()[0].id;
+        browser.page_loading(opener, false, 1.0);
+        let signin = browser.adopt(Some(opener), true);
+        assert_eq!(browser.active(), Some(signin));
+        assert_eq!(
+            browser.awake_because(opener),
+            Some("the page on screen came from it")
         );
     }
 }

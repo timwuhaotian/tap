@@ -4,7 +4,7 @@
 
 use std::{cell::RefCell, collections::HashMap, ffi::c_void, ptr, time::Instant};
 
-use block2::DynBlock;
+use block2::{DynBlock, RcBlock};
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -20,18 +20,21 @@ use objc2_foundation::{
 #[allow(deprecated)]
 use objc2_web_kit::WKProcessPool;
 use objc2_web_kit::{
-    WKDownload, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
-    WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy, WKNavigationType,
-    WKOpenPanelParameters, WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWindowFeatures,
+    WKContentWorld, WKDownload, WKFrameInfo, WKNavigation, WKNavigationAction,
+    WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationResponse,
+    WKNavigationResponsePolicy, WKNavigationType, WKOpenPanelParameters, WKUIDelegate, WKWebView,
+    WKWebViewConfiguration, WKWindowFeatures,
 };
+use serde_json::Value;
 use tap_core::{
     browser::{Effect, TabId},
     crash::PageEnd,
     fetching,
     fnd::Url,
+    identity,
 };
 
-use crate::{dialogs, downloads, oslog, page_find, rt, store, window};
+use crate::{dialogs, downloads, oslog, page_find, rt, sleep, store, window};
 
 /// What the observer watches on every web view; each change re-reads the lot.
 const OBSERVED: [&str; 6] = [
@@ -159,6 +162,60 @@ pub fn existing(tab: TabId) -> Option<Retained<WKWebView>> {
     WEBS.with_borrow(|webs| webs.get(&tab).cloned())
 }
 
+/// Tap's own content world: the page can't see into it, so it can't read the word looked
+/// for or the list the count comes from, or swap the functions the search uses.
+///
+/// Kept for the app's life, as Search keeps its `Web.world`: WebKit lets a world go with
+/// the last object naming it, and the next call got a fresh one, with none of the find's
+/// state in it. Every Next then started again from the first match.
+pub fn world(mtm: MainThreadMarker) -> Retained<WKContentWorld> {
+    thread_local! {
+        static WORLD: std::cell::OnceCell<Retained<WKContentWorld>> = const { std::cell::OnceCell::new() };
+    }
+    WORLD.with(|world| {
+        world
+            .get_or_init(|| {
+                // SAFETY: a world named once and shared by every page.
+                unsafe { WKContentWorld::worldWithName(&NSString::from_str(identity::NAME), mtm) }
+            })
+            .clone()
+    })
+}
+
+/// Evaluates an expression in Tap's own content world, where the page can't see it: for
+/// sleep's look at what is typed, and for the bench.
+pub fn evaluate_in_world(
+    web: &WKWebView,
+    expression: &str,
+    then: impl Fn(Option<Value>) + 'static,
+) {
+    let body = format!("return JSON.stringify(await (async () => ({expression}))());");
+    let block = RcBlock::new(move |value: *mut AnyObject, _error: *mut NSError| {
+        // SAFETY: WebKit hands a valid object or null, for the call's length.
+        let text = unsafe { value.as_ref() }
+            .and_then(|v| v.downcast_ref::<NSString>())
+            .map(ToString::to_string);
+        then(text.and_then(|t| serde_json::from_str(&t).ok()));
+    });
+    // SAFETY: a live web view, a script body, and a block that outlives the call.
+    unsafe {
+        web.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+            &NSString::from_str(&body),
+            None,
+            None,
+            &world(MainThreadMarker::from(web)),
+            Some(&block),
+        );
+    }
+}
+
+/// Lets the tab's page go (sleep): the view, its observers and its delegates.
+pub fn discard_page(tab: TabId) {
+    if let Some(mtm) = MainThreadMarker::new() {
+        discard(mtm, tab);
+    }
+}
+
 /// The page's WebContent process, through WebKit's private `_webProcessIdentifier`; 0
 /// when this WebKit doesn't say.
 pub fn process_id(web: &WKWebView) -> i32 {
@@ -209,7 +266,17 @@ pub fn perform(effect: Effect) {
         return;
     };
     match effect {
-        Effect::Load { tab, url } => load(&web_view(mtm, tab), &url),
+        Effect::Load { tab, url } => {
+            let page = web_view(mtm, tab);
+            // A tab that slept has its own history to go back to: the page, its back
+            // list and its scroll position, in one. A file starts from its address, as
+            // its history comes back without the folder it may read.
+            match sleep::take_memory(tab).filter(|_| !url.starts_with("file:")) {
+                // SAFETY: the state WebKit gave this tab's view as it slept.
+                Some(state) => unsafe { page.setInteractionState(Some(&state)) },
+                None => load(&page, &url),
+            }
+        }
         Effect::Reload(tab) => {
             // SAFETY: plain call on a live web view.
             let _ = existing(tab).map(|web| unsafe { web.reload() });
@@ -226,7 +293,11 @@ pub fn perform(effect: Effect) {
             // SAFETY: plain call on a live web view.
             let _ = existing(tab).map(|web| unsafe { web.stopLoading() });
         }
-        Effect::Discard(tab) => discard(mtm, tab),
+        Effect::Discard(tab) => {
+            sleep::take_memory(tab);
+            discard(mtm, tab);
+        }
+        Effect::Sleep(tab) => sleep::try_sleep(tab, |_| {}),
         Effect::FocusPage(tab) => window::focus_page(existing(tab).as_deref()),
         Effect::Save(shape) => store::save_session(&shape),
         Effect::SaveHistory(data) => store::save_history(data),
@@ -537,7 +608,7 @@ fn decide_response(response: &WKNavigationResponse) -> WKNavigationResponsePolic
 /// The navigation became a download: it is kept until it ends, and a tab opened for it
 /// alone goes.
 fn became_download(web: &WKWebView, download: &WKDownload) {
-    downloads::keep(MainThreadMarker::from(web), download);
+    downloads::keep(MainThreadMarker::from(web), download, tab_of(web));
     if let Some(tab) = tab_of(web) {
         rt::dispatch(move |browser| browser.drop_empty(tab));
     }

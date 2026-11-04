@@ -41,7 +41,7 @@ use tap_core::{
 use crate::{
     dialogs, downloads,
     menu::{self, Command},
-    page_find, rt, store, web, window,
+    rt, sleep, store, web, window,
 };
 
 /// The longest request line read: a line that never ends is not a request.
@@ -287,7 +287,7 @@ fn handle(request: &Value, reply: Reply) {
                     return reply.say(json!({ "error": "the tab has no page" }));
                 };
                 let reply = std::cell::RefCell::new(Some(reply));
-                page_find::evaluate_in_world(&web, &js, move |value| {
+                web::evaluate_in_world(&web, &js, move |value| {
                     if let Some(reply) = reply.borrow_mut().take() {
                         reply.say(json!({ "value": value }));
                     }
@@ -324,6 +324,17 @@ fn handle(request: &Value, reply: Reply) {
             // SAFETY: a standard text command sent to the field editor.
             unsafe { editor.doCommandBySelector(command) };
             reply.say(json!({ "field": window::field_text() }));
+        }
+        "sleep" => {
+            // Now rather than after half an hour, but past every other check a tab has to
+            // clear: the answer says which one kept it awake.
+            let Some(id) = tab_id(request) else {
+                return reply.say(json!({ "error": "no such tab" }));
+            };
+            sleep::try_sleep(id, move |said| {
+                let asleep = rt::read(|b| b.tab(id).is_some_and(|t| !t.awake())).unwrap_or(false);
+                reply.say(json!({ "said": said, "asleep": asleep }));
+            });
         }
         "crash" => {
             // The tab's page process, killed as the system's memory killer kills it: the
