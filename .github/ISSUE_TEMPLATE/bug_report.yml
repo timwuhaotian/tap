@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in Tap doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open https://...
+        2. Click ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: site
+    attributes:
+      label: Site
+      description: The address where it happens, if it's one site. Leave out anything private.
+  - type: input
+    id: search
+    attributes:
+      label: Does Search do the same?
+      description: Tap ports Search. If you have Search, does the same steps there work?
+      placeholder: Works in Search / same in Search / don't have Search
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 27.0
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Tap build
+      description: When you downloaded the DMG, or the commit you built from (`git rev-parse --short HEAD`).
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Tap's crash log is `~/Library/Application Support/Tap/crash.log`. For its system log, run
+        `log show --last 1h --predicate 'subsystem == "com.timwuhaotian.tap"'`.
+      render: text
