@@ -2095,9 +2095,9 @@ impl Browser {
             TabFields::LOADING,
         );
         if (tab.progress - progress).abs() >= Self::PROGRESS_STEP {
-            tab.progress = progress;
             tab.dirty.insert(TabFields::PROGRESS);
         }
+        tab.progress = progress;
     }
 
     /// What WebKit says of the page's connection: whether every resource on it came
@@ -3067,6 +3067,19 @@ mod tests {
         assert!(
             tabs.iter()
                 .any(|(_, fields)| fields.contains(TabFields::PROGRESS))
+        );
+    }
+
+    #[test]
+    fn a_progress_step_too_small_to_draw_still_moves_the_value() {
+        let mut browser = with_pages(&["https://a.com"]);
+        let id = browser.active().expect("a tab");
+        browser.page_loading(id, true, 1.0 - 1.0 / 256.0);
+        browser.page_loading(id, false, 1.0);
+        assert_eq!(
+            browser.tab(id).map(Tab::progress),
+            Some(1.0),
+            "the last tick lands even when it moves less than the drawn line"
         );
     }
 
