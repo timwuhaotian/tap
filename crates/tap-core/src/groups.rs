@@ -176,7 +176,9 @@ pub fn drop_target(x: f64, groups: &[GroupSpans<'_>], carried: &[TabId]) -> Opti
             .filter(|(id, _)| !carried.contains(id))
             .copied()
             .collect();
-        let end = members.last().map_or(spans.heading.1, |(_, (_, right))| *right);
+        let end = members
+            .last()
+            .map_or(spans.heading.1, |(_, (_, right))| *right);
         if x < spans.heading.0 || x >= end {
             return None;
         }
@@ -330,10 +332,26 @@ mod tests {
                 after,
             })
         };
-        assert_eq!(drop(120.0, &[]), a(None, false), "the heading: the group's end");
-        assert_eq!(drop(180.0, &[]), a(Some(1), false), "left of a tab's middle");
-        assert_eq!(drop(220.0, &[]), a(Some(2), false), "past it: before the next");
-        assert_eq!(drop(330.0, &[]), a(Some(2), true), "past the last: after it");
+        assert_eq!(
+            drop(120.0, &[]),
+            a(None, false),
+            "the heading: the group's end"
+        );
+        assert_eq!(
+            drop(180.0, &[]),
+            a(Some(1), false),
+            "left of a tab's middle"
+        );
+        assert_eq!(
+            drop(220.0, &[]),
+            a(Some(2), false),
+            "past it: before the next"
+        );
+        assert_eq!(
+            drop(330.0, &[]),
+            a(Some(2), true),
+            "past the last: after it"
+        );
         assert_eq!(drop(99.0, &[]), None, "before the group");
         assert_eq!(drop(355.0, &[]), None, "between groups");
         assert_eq!(drop(600.0, &[]), None, "past every group");

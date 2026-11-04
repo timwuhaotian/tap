@@ -2903,13 +2903,16 @@ mod tests {
             ],
             "before the tab it was let go on"
         );
-        assert_eq!(browser.tab(loose).and_then(Tab::group), Some(first.as_str()));
+        assert_eq!(
+            browser.tab(loose).and_then(Tab::group),
+            Some(first.as_str())
+        );
         assert!(!browser.groups()[0].collapsed, "the group it joins opens");
         // Two carried together, after a member: both join, in their order.
         browser.drop_into_group(
             &[loose, gone],
             &GroupDrop {
-                group: second.clone(),
+                group: second,
                 member: Some(b1),
                 after: true,
             },
@@ -2956,7 +2959,11 @@ mod tests {
                 after: false,
             },
         );
-        assert_eq!(urls(&browser).join(" "), before, "nowhere to go: nothing moves");
+        assert_eq!(
+            urls(&browser).join(" "),
+            before,
+            "nowhere to go: nothing moves"
+        );
     }
 
     #[test]
