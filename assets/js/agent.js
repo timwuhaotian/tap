@@ -99,6 +99,9 @@ const element = verb === "press" && !ref
 if (!element || !element.isConnected) {
     return { error: `no control ${ref} on this page now: take a snapshot again` };
 }
+if (verb === "click" && (element.disabled || element.getAttribute("aria-disabled") === "true")) {
+    return { error: `${ref} is disabled` };
+}
 if (ref) element.scrollIntoView({ block: "center", inline: "center" });
 
 if (verb === "click") {
