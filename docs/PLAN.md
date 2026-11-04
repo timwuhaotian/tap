@@ -108,8 +108,10 @@ of Tap from the start:
    - Releases are arm64 only, so the missing x86_64 std doesn't matter.
 
    Plain `xcrun --show-sdk-version` fails; `--sdk macosx` gives 26.5.
-7. **The reference build is a local `parity-pin` branch** in Search (`main` + #845 +
-   #849), built to `build/Search.app`. The installed `/Applications/Search.app` (1.0.8,
+7. **The reference build is Search's `main` on the user's fork** (`timwuhaotian/Search`:
+   upstream `3279d28` + #841 + #845 with its `spaces.json` fix + #849, pushed
+   2026-11-04 as `6d6effd`; it replaces the local `parity-pin` branch), built to
+   `build/Search.app`. The installed `/Applications/Search.app` (1.0.8,
    8.95 MB arm64) does not have the PRs.
 8. **Python tests leak Search's JS names and literals.** Examples:
    - `"world": "search"` in four tests
