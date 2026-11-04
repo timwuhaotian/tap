@@ -1844,7 +1844,7 @@ define_class!(
         fn command(
             &self,
             _control: &objc2_app_kit::NSControl,
-            _text: &NSTextView,
+            editor: &NSTextView,
             selector: Sel,
         ) -> Bool {
             if selector == sel!(insertNewline:) {
@@ -1863,6 +1863,17 @@ define_class!(
             if selector == sel!(insertTab:) {
                 // Tab takes the grey ending; with none, Tab does what Tab does.
                 let took = rt::update(Browser::accept_ending).unwrap_or(false);
+                rt::settle();
+                return Bool::new(took);
+            }
+            if selector == sel!(moveRight:) {
+                // → takes it too, from the end of the text; elsewhere it moves the caret.
+                let range = editor.selectedRange();
+                let length = editor.string().length();
+                let took = rt::update(move |browser| {
+                    browser.accept_ending_on_right((range.location, range.length), length)
+                })
+                .unwrap_or(false);
                 rt::settle();
                 return Bool::new(took);
             }

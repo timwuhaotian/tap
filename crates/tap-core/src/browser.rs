@@ -1645,6 +1645,14 @@ impl Browser {
         true
     }
 
+    /// → takes the grey ending as Tab does, but only from the end of what is typed with
+    /// nothing selected (Chrome's and Safari's rule); anywhere else → moves the caret.
+    /// `selection` is the field's selected range and `length` its text's, in the field's
+    /// own units. Answers whether the ending was taken.
+    pub fn accept_ending_on_right(&mut self, selection: (usize, usize), length: usize) -> bool {
+        right_takes_ending(selection, length) && self.accept_ending()
+    }
+
     /// Esc, or a click away: the field closes and nothing is opened.
     pub fn cancel_editing(&mut self) {
         if self.editing.take().is_some() {
@@ -2315,6 +2323,13 @@ fn unique(groups: Vec<TabGroup>) -> Vec<TabGroup> {
         }
     }
     seen
+}
+
+/// Whether → stands at the end of the field's text with nothing selected, where it
+/// takes the grey ending rather than moving the caret.
+#[must_use]
+pub fn right_takes_ending((location, selected): (usize, usize), length: usize) -> bool {
+    selected == 0 && location == length
 }
 
 #[cfg(test)]
@@ -3558,6 +3573,30 @@ mod tests {
         );
         assert!(browser.take_dirty().0.contains(BrowserFields::RETYPED));
         assert!(!browser.accept_ending(), "nothing left to take");
+    }
+
+    #[test]
+    fn right_arrow_takes_the_ending_only_from_the_end() {
+        // "ex" typed: the caret at its end, nothing picked.
+        assert!(right_takes_ending((2, 0), 2));
+        // The caret inside the text, or a selection: → moves the caret as ever.
+        assert!(!right_takes_ending((1, 0), 2));
+        assert!(!right_takes_ending((0, 2), 2));
+        assert!(!right_takes_ending((1, 1), 2));
+        let mut browser = visited(&[("https://example.com/", "Example")]);
+        browser.begin_editing(false);
+        browser.set_typed("ex", false);
+        assert!(browser.accept_ending_on_right((2, 0), 2));
+        assert_eq!(
+            browser.editing().map(|e| e.typed.as_str()),
+            Some("example.com")
+        );
+        browser.set_typed("ex", false);
+        assert!(
+            !browser.accept_ending_on_right((1, 0), 2),
+            "mid-text: no take"
+        );
+        assert_eq!(browser.editing().map(|e| e.typed.as_str()), Some("ex"));
     }
 
     #[test]
