@@ -30,6 +30,11 @@ impl Curve {
         response: 0.30,
         damping: 0.86,
     };
+    /// Search's `glide`, for what moves between two places: the live tab's pill.
+    pub const GLIDE: Curve = Curve::Spring {
+        response: 0.34,
+        damping: 0.82,
+    };
     /// While the Mac saves power: short and damped all the way. Search's is a 0.16 s
     /// ease-out; one family of curve keeps one integrator.
     pub const LIGHT: Curve = Curve::Spring {
@@ -41,12 +46,22 @@ impl Curve {
     /// while it saves power and Settings says so.
     #[must_use]
     pub fn settle_now() -> Curve {
+        Curve::SETTLE.now()
+    }
+
+    /// `glide` as the Mac wants it now, as `settle_now`.
+    #[must_use]
+    pub fn glide_now() -> Curve {
+        Curve::GLIDE.now()
+    }
+
+    fn now(self) -> Curve {
         if reduced() {
             Curve::Instant
         } else if light() {
             Curve::LIGHT
         } else {
-            Curve::SETTLE
+            self
         }
     }
 }
@@ -121,6 +136,51 @@ impl Spring {
     /// Close enough, and slow enough, that the next frame wouldn't show a difference.
     fn settled(&self, near: f64) -> bool {
         (self.value - self.target).abs() < near && self.velocity.abs() < near * 10.0
+    }
+}
+
+/// A way from one place to another, 0 to 1 on a spring: where in between to draw
+/// something that travels between two slots that may themselves be moving (Search's
+/// `matchedGeometryEffect`, for the live tab's pill).
+#[derive(Clone, Copy, Debug)]
+pub struct Glide {
+    spring: Spring,
+    curve: Curve,
+}
+
+impl Default for Glide {
+    fn default() -> Self {
+        Glide {
+            spring: Spring::at(1.0),
+            curve: Curve::GLIDE,
+        }
+    }
+}
+
+impl Glide {
+    /// Off again from the start, on `curve`.
+    pub fn restart(&mut self, curve: Curve) {
+        self.curve = curve;
+        self.spring = Spring::from(0.0, 1.0);
+        if curve == Curve::Instant {
+            self.spring.rest();
+        }
+    }
+
+    /// `dt` seconds on. Answers whether it is still on its way.
+    pub fn step(&mut self, dt: f64) -> bool {
+        if self.spring.settled(0.002) {
+            self.spring.rest();
+            return false;
+        }
+        self.spring.step(self.curve, dt);
+        true
+    }
+
+    /// How far along: 0 at the start, 1 there (a little past, as a spring does).
+    #[must_use]
+    pub fn progress(&self) -> f64 {
+        self.spring.value
     }
 }
 
@@ -411,6 +471,30 @@ mod tests {
         run(&mut flock, 1.0);
         let end = flock.place(&"t1").expect("t1");
         assert!((end.x - 100.0).abs() < 0.2 && (end.alpha - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_glide_goes_from_nought_to_one_and_stops() {
+        let mut glide = Glide::default();
+        assert!(
+            (glide.progress() - 1.0).abs() < f64::EPSILON,
+            "at rest, there"
+        );
+        glide.restart(Curve::GLIDE);
+        assert!(glide.progress().abs() < f64::EPSILON);
+        assert!(glide.step(1.0 / 60.0));
+        let early = glide.progress();
+        assert!(early > 0.0 && early < 1.0);
+        for _ in 0..90 {
+            glide.step(1.0 / 60.0);
+        }
+        assert!(!glide.step(1.0 / 60.0), "settled");
+        assert!((glide.progress() - 1.0).abs() < f64::EPSILON);
+        glide.restart(Curve::Instant);
+        assert!(
+            (glide.progress() - 1.0).abs() < f64::EPSILON,
+            "no motion: there at once"
+        );
     }
 
     #[test]

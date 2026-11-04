@@ -342,6 +342,7 @@ fn handle(request: &Value, reply: Reply) {
             out["lights"] = json!(window::lights());
             out["addressBar"] = address_bar::describe();
             out["window"] = json!(window::number());
+            out["selected"] = json!(rt::read(Browser::selection_count));
             out["fieldText"] = json!(window::field_text());
             out["firstResponder"] = json!(window::first_responder());
             out["asked"] = json!(dialogs::asked());
@@ -809,6 +810,28 @@ fn handle(request: &Value, reply: Reply) {
             let sent = mouse(NSEventType::RightMouseDown, (x, y));
             reply.say(json!({ "sent": sent, "row": rt::read(row).unwrap_or_default() }));
         }
+        "click" => {
+            // A click at `x`, `y` with `modifiers` held ("command", "shift").
+            let x = request.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+            let y = request.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+            let mut flags = NSEventModifierFlags::empty();
+            for held in request
+                .get("modifiers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                flags |= match held {
+                    "command" => NSEventModifierFlags::Command,
+                    "shift" => NSEventModifierFlags::Shift,
+                    _ => NSEventModifierFlags::empty(),
+                };
+            }
+            let sent = mouse_with(NSEventType::LeftMouseDown, (x, y), flags)
+                && mouse_with(NSEventType::LeftMouseUp, (x, y), flags);
+            reply.say(json!({ "sent": sent, "selected": rt::read(Browser::selection_count) }));
+        }
         "mouseup" => {
             let x = request.get("x").and_then(Value::as_f64).unwrap_or(0.0);
             let y = request.get("y").and_then(Value::as_f64).unwrap_or(0.0);
@@ -975,7 +998,12 @@ fn field(request: &Value, reply: Reply) {
 }
 
 /// A mouse event through the window, at a point in its points from its top left.
-fn mouse(kind: NSEventType, (x, y): (f64, f64)) -> bool {
+fn mouse(kind: NSEventType, at: (f64, f64)) -> bool {
+    mouse_with(kind, at, NSEventModifierFlags::empty())
+}
+
+/// As `mouse`, with keys held.
+fn mouse_with(kind: NSEventType, (x, y): (f64, f64), flags: NSEventModifierFlags) -> bool {
     let Some(window) = window::main_window() else {
         return false;
     };
@@ -983,7 +1011,7 @@ fn mouse(kind: NSEventType, (x, y): (f64, f64)) -> bool {
     let Some(event) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
         kind,
         NSPoint::new(x, height - y),
-        NSEventModifierFlags::empty(),
+        flags,
         objc2_foundation::NSProcessInfo::processInfo().systemUptime(),
         window.windowNumber(),
         None,

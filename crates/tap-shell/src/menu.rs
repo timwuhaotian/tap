@@ -70,6 +70,8 @@ pub enum Command {
     GroupRename,
     GroupUngroup,
     GroupClose,
+    /// Copy N Addresses: the picked tabs', one to a line.
+    TabCopySelected,
     /// Move to Group › a group: 300 and its place among the groups.
     TabIntoGroup = 300,
     /// A heading's Color › a colour: 400 and its place in `groups::COLOURS`.

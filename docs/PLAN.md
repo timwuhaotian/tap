@@ -1067,9 +1067,12 @@ release.
   the strip's end and the live tab said "Not secure — neverssl…" again. Found on the
   way: a test run's events reach the window only while Tap is the active app.
 
-### Next patch — A group's colour, chosen
+### 0.1.7 — A group's colour chosen, the live tab glides, tabs picked together
 
-At the user's request (2026-11-04: "tab group 支持手动选择颜色"), after 0.1.6.
+At the user's requests after 0.1.6 (2026-11-04: "tab group 支持手动选择颜色"; "因为我们有了
+独立的地址栏，所以tab点击后就不用拓宽展示url了，就保持原样即可，加个active效果就够了，push changes for
+patch release"; "tabs要支持多选（click+shift+click)…cmd+click+click 多选不相邻的tab 选择后…cmd+c
+…把所有圈选的tab的url作为list粘贴到粘贴板").
 
 - [x] **Color in the heading's menu** (Chrome's group editor, as a submenu): the nine
   colours, each with its dot drawn for the menu's light or dark, the group's ticked;
@@ -1081,6 +1084,31 @@ At the user's request (2026-11-04: "tab group 支持手动选择颜色"), after 
   event through the window) opened the menu with Color › Blue ticked; Purple, picked
   from the keyboard, turned the chip and its line purple, and it was still purple
   after a relaunch.
+- [x] **The live tab stays as it is** with the address bar up: no field widening it
+  and no address in place of its title (0.1.6 already, rechecked: a click on the live
+  tab does nothing, ⌘T's and ⌘L's field opens in the bar). A widening seen after the
+  update is a Tap started before it: an update installs when Tap quits.
+- [x] **The live tab's pill glides** from the tab that was live to the one picked
+  (Search's `matchedGeometryEffect("live")` on `glide`, 0.34/0.82, `motion::Glide`),
+  riding on both tabs where they are drawn, so it stays on them while the row moves;
+  and it sits lifted, a soft shadow in a light window and a faint edge in a dark one.
+  Under the pointer the live tab keeps it rather than the hover grey.
+- [x] **Tabs picked together** (Search's `extendTabSelection`, `selectedTabIDs`,
+  `copySelectedTabLinks`): ⌘-click toggles a tab (the live one joins as a selection
+  starts), ⇧-click picks the run the row shows from the last tab clicked, ⌘⇧ adds a
+  run; picked tabs wear the accent lightly. While any are picked the row takes the keys
+  (`acceptsFirstResponder`), so **⌘C copies their addresses, one to a line, in the
+  row's order** (Tap's addition: Search copies them only from the menu) and Esc lets
+  them go; a plain click, or the keys going elsewhere, lets them go too. Right-clicked
+  among them, the tab's menu ends with Copy N Addresses. Not yet: closing or moving
+  the picked tabs together.
+- Checked: `cargo test` (tap-core 102, tap-import 31, tap-shell 56), clippy
+  `-D warnings`, nightly fmt. In a test world with real mouse events: the pill caught
+  between two tabs 60 ms after a switch and on the new one by 0.9 s, lifted in a light
+  window; two ⌘-clicks picked three tabs and gave the row the keys, ⌘C (through the
+  Edit menu) put their three addresses on the pasteboard one to a line, a ⇧-click
+  picked the run from the last clicked, and a plain click let them go and gave the page
+  the keys back.
 
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window

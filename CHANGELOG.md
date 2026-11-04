@@ -7,7 +7,16 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.7 — 2026-11-04
+
+Pick tabs together, choose a group's colour, and the tab you're on glides.
+
+- **Pick several tabs**: ⌘-click tabs one by one, or ⇧-click for a run of them; then
+  **⌘C copies their addresses**, one to a line, ready to paste. Esc or a plain click
+  lets them go. Right-click one of them for Copy N Addresses too.
 - **Choose a group's colour**: right-click its name, then Color, for any of the nine.
+- **The tab you're on** sits on a lifted pill that glides to the next tab you pick.
+  With the address bar up, the tab itself stays as it is when clicked.
 
 ## 0.1.6 — 2026-11-04
 

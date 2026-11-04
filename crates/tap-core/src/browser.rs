@@ -64,6 +64,8 @@ bitflags! {
         const FIND = 1 << 7;
         /// ⌘F again: the find field takes the keys, its word selected.
         const FIND_FOCUS = 1 << 8;
+        /// Tabs picked with ⌘ or ⇧, or let go of.
+        const SELECTION = 1 << 9;
     }
 }
 
@@ -400,6 +402,10 @@ pub struct Browser {
     /// The batch the closes under way belong to (Close Group's), and the last one made.
     batch: Option<u64>,
     batches: u64,
+    /// Tabs picked with ⌘-click and ⇧-click (Search's `selectedTabIDs`), and the one a
+    /// ⇧ run starts from (`selectionAnchor`).
+    selected: Vec<TabId>,
+    anchor: Option<TabId>,
     /// Groups closed whole, with their place: a tab of one brought back brings it back.
     closed_groups: Vec<(TabGroup, usize)>,
     link_run: Option<LinkRun>,
@@ -440,6 +446,8 @@ impl Browser {
             batch: None,
             batches: 0,
             closed_groups: Vec::new(),
+            selected: Vec::new(),
+            anchor: None,
             link_run: None,
             refusals: 0,
             effects: Vec::new(),
@@ -1628,6 +1636,93 @@ impl Browser {
     // MARK: the page
 
     /// Gives the live page the keyboard: once the window exists, for a restored tab.
+    /// The tabs the row shows, left to right: a folded group's are not among them.
+    fn shown_tabs(&self) -> Vec<TabId> {
+        self.row()
+            .iter()
+            .filter_map(|item| match item {
+                Item::Tab(index) => Some(self.tabs[*index].id),
+                Item::Heading(_) => None,
+            })
+            .collect()
+    }
+
+    /// ⌘-click toggles one tab; ⇧-click picks the run the row shows from the last tab
+    /// clicked (or the live one, as a selection starts), and ⌘⇧ adds that run (Search's
+    /// `extendTabSelection`).
+    pub fn extend_selection(&mut self, id: TabId, shift: bool, command: bool) {
+        let shown = self.shown_tabs();
+        let Some(end) = shown.iter().position(|t| *t == id) else {
+            return;
+        };
+        if shift {
+            let from = self.anchor.or(self.active).unwrap_or(id);
+            let start = shown.iter().position(|t| *t == from).unwrap_or(end);
+            let run = &shown[start.min(end)..=start.max(end)];
+            if !command {
+                self.selected.clear();
+            }
+            for tab in run {
+                if !self.selected.contains(tab) {
+                    self.selected.push(*tab);
+                }
+            }
+            self.anchor = Some(shown[start]);
+        } else if command {
+            if self.selected.is_empty()
+                && let Some(active) = self.active
+                && shown.contains(&active)
+            {
+                self.selected.push(active);
+            }
+            match self.selected.iter().position(|t| *t == id) {
+                Some(at) => {
+                    self.selected.remove(at);
+                }
+                None => self.selected.push(id),
+            }
+            self.anchor = Some(id);
+        } else {
+            return;
+        }
+        self.dirty.insert(BrowserFields::SELECTION);
+    }
+
+    /// The picked tabs let go of: a plain click, Esc, the row losing the keys.
+    pub fn clear_selection(&mut self) {
+        if !self.selected.is_empty() || self.anchor.is_some() {
+            self.selected.clear();
+            self.anchor = None;
+            self.dirty.insert(BrowserFields::SELECTION);
+        }
+    }
+
+    /// Whether the tab is among the picked ones.
+    #[must_use]
+    pub fn is_selected(&self, id: TabId) -> bool {
+        self.selected.contains(&id) && self.tab(id).is_some()
+    }
+
+    /// How many tabs are picked (closed ones not counted).
+    #[must_use]
+    pub fn selection_count(&self) -> usize {
+        self.selected
+            .iter()
+            .filter(|id| self.tab(**id).is_some())
+            .count()
+    }
+
+    /// The picked tabs' addresses in the row's order, pages only (Search's
+    /// `selectedTabLinks`): what ⌘C and Copy Addresses copy, one to a line.
+    #[must_use]
+    pub fn selected_links(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter(|t| self.selected.contains(&t.id) && !t.is_blank() && !t.is_internal())
+            .map(|t| t.url.clone())
+            .collect()
+    }
+
     pub fn focus_page(&mut self) {
         if self.editing.is_none()
             && let Some(id) = self.active
@@ -2495,6 +2590,43 @@ mod tests {
             .expect("a loose tab");
         let place = browser.add_group(loose).expect("a group");
         assert_eq!(browser.groups()[place].colour.as_deref(), Some("blue"));
+    }
+
+    #[test]
+    fn command_picks_tabs_one_by_one_and_shift_picks_a_run() {
+        let mut browser = with_pages(&[
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+        ]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[0]);
+        // ⌘-click: the live tab and the clicked one.
+        browser.extend_selection(ids[2], false, true);
+        assert_eq!(browser.selection_count(), 2);
+        assert!(browser.is_selected(ids[0]) && browser.is_selected(ids[2]));
+        assert!(browser.take_dirty().0.contains(BrowserFields::SELECTION));
+        // ⌘-click again lets it go.
+        browser.extend_selection(ids[2], false, true);
+        assert_eq!(browser.selection_count(), 1);
+        // ⇧-click: the run from the last clicked (c) to d.
+        browser.extend_selection(ids[2], false, true);
+        browser.extend_selection(ids[3], true, false);
+        assert_eq!(
+            browser.selected_links(),
+            ["https://c.com", "https://d.com"],
+            "the run only, in the row's order"
+        );
+        // ⌘⇧ adds a run to what is picked.
+        browser.extend_selection(ids[0], true, true);
+        assert_eq!(browser.selection_count(), 4);
+        // A closed tab isn't counted, and a plain click lets the rest go.
+        browser.close(ids[1]);
+        assert_eq!(browser.selection_count(), 3);
+        browser.clear_selection();
+        assert_eq!(browser.selection_count(), 0);
+        assert_eq!(browser.selected_links(), Vec::<String>::new());
     }
 
     #[test]

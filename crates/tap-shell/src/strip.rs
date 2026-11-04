@@ -20,7 +20,10 @@ use std::{
 use block2::RcBlock;
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class,
-    msg_send, rc::Retained, runtime::NSObject, sel,
+    msg_send,
+    rc::Retained,
+    runtime::{AnyObject, NSObject},
+    sel,
 };
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSEventModifierFlags,
@@ -40,7 +43,7 @@ use tap_core::{
 use crate::{
     downloads, icons,
     menu::Commands,
-    motion::{self, Aim, Curve, Flock},
+    motion::{self, Aim, Curve, Flock, Glide},
     palette, prefs, rt,
     tabmenu::{self, TabState},
     web,
@@ -492,6 +495,9 @@ pub struct Ivars {
     /// Frames while something moves, paused when nothing does.
     link: RefCell<Option<Retained<CADisplayLink>>>,
     last_frame: Cell<Option<Instant>>,
+    /// The live tab's pill on its way from the tab that was live (Search's
+    /// `matchedGeometryEffect("live")` on `glide`): from, to, and how far along.
+    live: RefCell<(Option<TabId>, Option<TabId>, Glide)>,
 }
 
 define_class!(
@@ -564,6 +570,41 @@ define_class!(
             self.release();
         }
 
+        /// The row takes the keys only while tabs are picked, so ⌘C and Esc are
+        /// theirs; any other time a click on a tab leaves the keys where they were.
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            rt::read(|browser| browser.selection_count() > 0).unwrap_or(false)
+        }
+
+        /// The keys went elsewhere (the page, the field): the picked tabs are let
+        /// go, so ⌘C copies whatever the keys are on now.
+        #[unsafe(method(resignFirstResponder))]
+        fn resign_first_responder(&self) -> bool {
+            rt::dispatch(Browser::clear_selection);
+            true
+        }
+
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            // Esc lets the picked tabs go and gives the page the keys back.
+            if event.keyCode() == 53 {
+                rt::dispatch(|browser| {
+                    browser.clear_selection();
+                    browser.focus_page();
+                });
+                return;
+            }
+            // SAFETY: the superclass's own, passing the key on up the chain.
+            let _: () = unsafe { msg_send![super(self), keyDown: event] };
+        }
+
+        /// ⌘C while tabs are picked: their addresses, one to a line.
+        #[unsafe(method(copy:))]
+        fn copy(&self, _sender: Option<&AnyObject>) {
+            tabmenu::copy_selected();
+        }
+
         #[unsafe(method(rightMouseDown:))]
         fn right_mouse_down(&self, event: &NSEvent) {
             self.context_menu(event);
@@ -607,6 +648,7 @@ impl Strip {
             click: RefCell::new(None),
             link: RefCell::new(None),
             last_frame: Cell::new(None),
+            live: RefCell::new((None, None, Glide::default())),
         });
         // SAFETY: NSView's designated initialiser.
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
@@ -719,6 +761,11 @@ impl Strip {
                             .and_then(|g| browser.groups().iter().position(|x| x.id == g)),
                         groups: browser.groups().iter().map(|g| g.name.clone()).collect(),
                         can_sleep: browser.awake_because(id).is_none(),
+                        picked: if browser.is_selected(id) {
+                            browser.selection_count()
+                        } else {
+                            0
+                        },
                     })
                 })
                 .flatten() else {
@@ -810,6 +857,30 @@ impl Strip {
     fn press(&self, event: &NSEvent) {
         let spot = self.spot_at(event);
         let x = self.convertPoint_fromView(event.locationInWindow(), None).x;
+        // ⌘-click and ⇧-click pick tabs rather than going to one (Search's
+        // `extendTabSelection`); the row takes the keys while any are picked.
+        let flags = event.modifierFlags();
+        let (shift, command) = (
+            flags.contains(NSEventModifierFlags::Shift),
+            flags.contains(NSEventModifierFlags::Command),
+        );
+        if (shift || command)
+            && let Spot::Tab(index) = spot
+        {
+            let Some(id) = tab_at(index) else { return };
+            rt::dispatch(move |browser| {
+                browser.extend_selection(id, shift, command);
+                if browser.selection_count() == 0 {
+                    browser.focus_page();
+                }
+            });
+            if rt::read(|browser| browser.selection_count() > 0).unwrap_or(false)
+                && let Some(window) = self.window()
+            {
+                window.makeFirstResponder(Some(self));
+            }
+            return;
+        }
         // A tab (or its cross) goes down under the press; the tick sinks it if
         // Settings says tabs give, and `mouseUp:` lets it back up.
         if let Spot::Tab(index) | Spot::Close(index) = spot {
@@ -830,6 +901,14 @@ impl Strip {
                 // Any other tab is picked at once, as it goes into the hand; the live
                 // one becomes the field on release, unless the address bar holds the
                 // field, or the press became a carry.
+                // A plain click lets any picked tabs go, and the page has the keys.
+                let picked = rt::read(|browser| browser.selection_count() > 0).unwrap_or(false);
+                if picked {
+                    rt::dispatch(|browser| {
+                        browser.clear_selection();
+                        browser.focus_page();
+                    });
+                }
                 if live {
                     if !self.look_now().bar {
                         self.ivars().click.replace(Some(Click::Edit));
@@ -1012,6 +1091,8 @@ impl Strip {
             .map_or(1.0 / 60.0, |then| now.duration_since(then).as_secs_f64())
             .min(1.0 / 15.0);
         let moving = self.ivars().flock.borrow_mut().step(dt);
+        let gliding = self.ivars().live.borrow_mut().2.step(dt);
+        let moving = moving || gliding;
         self.setNeedsDisplay(true);
         if !moving && !self.carrying() {
             if let Some(link) = self.ivars().link.borrow().as_ref() {
@@ -1126,9 +1207,58 @@ impl Strip {
         if *self.ivars().shown.borrow() != keys {
             self.ivars().shown.replace(keys);
         }
-        if moved {
+        // Another tab is live: the pill sets off from the one that was.
+        let active = browser.active();
+        let switched = {
+            let mut live = self.ivars().live.borrow_mut();
+            if live.1 == active {
+                false
+            } else {
+                let from = live.1.take();
+                *live = (from, active, live.2);
+                if from.is_some() {
+                    live.2.restart(Curve::glide_now());
+                }
+                from.is_some()
+            }
+        };
+        if moved || switched {
             self.animate();
         }
+    }
+
+    /// The live tab's pill where it is this frame: between the tab it left and the
+    /// one it is going to, each where it is drawn now, so it stays on them while they
+    /// move too.
+    fn live_pill(
+        &self,
+        browser: &Browser,
+        row: &[Item],
+        layout: &Layout,
+        at: &dyn Fn(&Key, NSRect) -> (NSRect, f64),
+    ) -> Option<NSRect> {
+        let (from, to, glide) = *self.ivars().live.borrow();
+        let drawn = |id: TabId| {
+            row.iter()
+                .zip(&layout.tabs)
+                .find(
+                    |(item, _)| matches!(item, Item::Tab(index) if browser.tabs()[*index].id == id),
+                )
+                .map(|(_, rect)| at(&Key::Tab(id), *rect).0)
+        };
+        let target = drawn(to?)?;
+        let Some(start) = from.and_then(drawn) else {
+            return Some(target);
+        };
+        let t = glide.progress();
+        let lerp = |a: f64, b: f64| a + (b - a) * t;
+        Some(NSRect::new(
+            NSPoint::new(lerp(start.origin.x, target.origin.x), target.origin.y),
+            NSSize::new(
+                lerp(start.size.width, target.size.width),
+                target.size.height,
+            ),
+        ))
     }
 
     /// The carried slot (or group) where the hand has it.
@@ -1236,6 +1366,10 @@ impl Strip {
                 faded(place.alpha, || self.draw_gone(browser, key, rect, &paint));
             }
             draw_group_lines(browser, &row, &layout, &at, dark);
+            // The live tab's pill, under every tab, gliding when another is picked.
+            if let Some(rect) = self.live_pill(browser, &row, &layout, &at) {
+                live_pill(rect, dark);
+            }
             let mut faces = self.ivars().faces.borrow_mut();
             for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
                 let key = key_of(browser, item);
@@ -1435,6 +1569,29 @@ fn draw_heading(name: &str, colour: Option<&str>, rect: NSRect, under: bool, dar
     palette::draw_text(name, text, &palette::on_group(dark));
 }
 
+/// The live tab's pill: Search's wash, lifted a little off the row so the tab you
+/// are on reads as the one in front — a soft shadow in a light window, a faint
+/// edge in a dark one, where a shadow wouldn't show.
+fn live_pill(rect: NSRect, dark: bool) {
+    let path = pill(rect);
+    NSGraphicsContext::saveGraphicsState_class();
+    if !dark {
+        let shadow = NSShadow::new();
+        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.10)));
+        shadow.setShadowBlurRadius(3.0);
+        shadow.setShadowOffset(NSSize::new(0.0, -1.0));
+        shadow.set();
+    }
+    palette::WASH.resolve(dark).setFill();
+    path.fill();
+    NSGraphicsContext::restoreGraphicsState_class();
+    if dark {
+        NSColor::colorWithWhite_alpha(1.0, 0.07).setStroke();
+        path.setLineWidth(1.0);
+        path.stroke();
+    }
+}
+
 /// A heading's chip: a little shorter than a tab's pill.
 fn chip(rect: NSRect) -> Retained<NSBezierPath> {
     NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
@@ -1471,9 +1628,17 @@ fn draw_tab(
     } else {
         rect
     };
-    if live || under {
-        let grey = if live { palette::WASH } else { palette::HOVER };
-        grey.resolve(dark).setFill();
+    // The live tab's own pill is drawn once for the row (`live_pill`), so it can
+    // glide; a tab under the pointer gets its own.
+    // A picked tab wears the accent, lightly; one under the pointer its own grey.
+    let picked = !gone && browser.is_selected(tab.id);
+    if picked {
+        NSColor::controlAccentColor()
+            .colorWithAlphaComponent(if dark { 0.32 } else { 0.18 })
+            .setFill();
+        pill(*rect).fill();
+    } else if under && !live {
+        palette::HOVER.resolve(dark).setFill();
         pill(*rect).fill();
     }
     let titled = rect.size.width >= palette::TAB_TITLED;
@@ -1583,7 +1748,11 @@ fn draw_tab(
             NSPoint::new(rect.origin.x + left, rect.origin.y + 7.0),
             NSSize::new((rect.size.width - left - right).max(0.0), 17.0),
         );
-        let ink = if live { palette::INK } else { palette::MUTED };
+        let ink = if live || picked {
+            palette::INK
+        } else {
+            palette::MUTED
+        };
         // The tab you're on says where its page is instead of its title,
         // and the title comes back under the pointer (Search's
         // `TitleAtRest`): the two swap in the same rect. Not with the address

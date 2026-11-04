@@ -36,7 +36,9 @@ with its own name and icon, and with fixes of its own.
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
   the load's progress. Settings can hide it.
 - **Tab groups** in colours of their own: a group's name heads its tabs on a chip of
-  its colour (right-click it to choose another), and a click folds it away or opens it. Drag a tab to reorder it, or a
+  its colour (right-click it to choose another), and a click folds it away or opens it.
+- **Pick several tabs** with ⌘-click or ⇧-click, and ⌘C copies their addresses, one to
+  a line. Drag a tab to reorder it, or a
   group by its name; everything in the row glides where it goes.
 - **Right-click a tab** to move it into a group (or a new one), rename it, reload,
   duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones

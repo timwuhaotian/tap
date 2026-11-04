@@ -53,6 +53,8 @@ pub struct TabState {
     pub groups: Vec<String>,
     /// Nothing keeps it awake: Put to Sleep can let its page go.
     pub can_sleep: bool,
+    /// How many tabs are picked, when it is one of them.
+    pub picked: usize,
 }
 
 /// One line of the menu: a command, a submenu, or a separator when it has neither.
@@ -152,6 +154,13 @@ pub fn tab_entries(state: &TabState) -> Vec<Entry> {
         ),
         entry("Reopen Closed Tab", Command::TabReopen, state.can_reopen),
     ]);
+    // Right-clicked among picked tabs: all their addresses (Search's Copy Addresses).
+    if state.picked > 1 {
+        entries.push(separator());
+        let mut copy = entry("", Command::TabCopySelected, true);
+        copy.title = format!("Copy {} Addresses", state.picked);
+        entries.push(copy);
+    }
     entries
 }
 
@@ -370,6 +379,7 @@ pub fn run(tag: NSInteger) -> bool {
             }
         }
         t if t == Command::TabCopyAddress as NSInteger => copy(false),
+        t if t == Command::TabCopySelected as NSInteger => copy_selected(),
         t if t == Command::TabCopyMarkdown as NSInteger => copy(true),
         t if t == Command::TabNewGroup as NSInteger => {
             let Some(id) = target else { return true };
@@ -449,6 +459,20 @@ fn rename_group(place: usize) {
     });
 }
 
+/// The picked tabs' addresses on the pasteboard, one to a line, in the row's order
+/// (Search's `copySelectedTabLinks`). Nothing picked with a page, nothing copied.
+pub fn copy_selected() {
+    let links = rt::read(Browser::selected_links).unwrap_or_default();
+    if links.is_empty() {
+        return;
+    }
+    let board = NSPasteboard::generalPasteboard();
+    board.clearContents();
+    // SAFETY: the system's own pasteboard type constant, valid for the app's life.
+    let kind = unsafe { NSPasteboardTypeString };
+    board.setString_forType(&NSString::from_str(&links.join("\n")), kind);
+}
+
 fn copy(markdown: bool) {
     let Some(id) = TARGET.get() else { return };
     let Some(text) = rt::read(|browser| {
@@ -486,6 +510,7 @@ mod tests {
             group: Some(1),
             groups: vec!["Work".to_owned(), "Reading".to_owned()],
             can_sleep: true,
+            picked: 0,
         }
     }
 
@@ -514,6 +539,20 @@ mod tests {
                 "Reopen Closed Tab",
             ]
         );
+    }
+
+    #[test]
+    fn among_picked_tabs_the_menu_copies_all_their_addresses() {
+        let picked = TabState {
+            picked: 3,
+            ..state()
+        };
+        let entries = tab_entries(&picked);
+        assert_eq!(
+            entries.last().map(|e| e.title.as_str()),
+            Some("Copy 3 Addresses")
+        );
+        assert!(!titles(&tab_entries(&state())).contains(&"Copy 3 Addresses"));
     }
 
     #[test]
@@ -554,6 +593,7 @@ mod tests {
             group: None,
             groups: Vec::new(),
             can_sleep: false,
+            picked: 0,
         });
         let on: Vec<&str> = entries
             .iter()
