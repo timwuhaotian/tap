@@ -86,6 +86,12 @@ with its own name and icon, and with fixes of its own.
   titled with the site that asks.
 - **It can be your browser.** Choose Tap under System Settings › Desktop & Dock ›
   Default web browser; links from other apps open in it, and so do HTML files.
+- **Coding agents browse with it.** Tap puts a `tap` command in `~/.local/bin` and a
+  skill where Claude Code, Codex, Gemini and opencode look, so an agent on this Mac
+  reaches for Tap when a task needs a browser: `tap open`, `tap snapshot` (the page's
+  controls, each with a ref), `tap click`, `tap fill`, `tap press`, `tap text`. Its tabs
+  open behind yours, with your sign-ins. Settings › Let agents use Tap turns it off and
+  takes the command and skill away.
 - **A page that keeps crashing stops reloading itself** and says so
   ([#849](https://github.com/driceroland/Search/pull/849)).
 - **Nothing phones home.** No account, no sync, no telemetry. The only requests Tap

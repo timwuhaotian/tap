@@ -1144,26 +1144,42 @@ learn to through a skill Tap installs. Tap is WebKit, so CDP tools (Chrome DevTo
 Playwright, agent-browser) can't drive it; the bench is already the way in, so this is a
 client and a few verbs on it, not a server. Delivered as a PR at the user's request.
 
-- [ ] **`tap`, the CLI** (`tap-app/src/cli.rs`): the app's own binary, a client when it
+- [x] **`tap`, the CLI** (`tap-app/src/cli.rs`): the app's own binary, a client when it
   has arguments and the app when it has none, so there is no second binary to bundle
   and sign. Text out for agents, `--json` for the bench's answer. Starts Tap in the
   background (`open -g -b`) when nothing listens and waits for the socket. Every verb
   but `open` names its tab: an agent never acts on the tab in front by accident.
   Verbs: `tabs`, `open`, `go`, `close`, `select`, `wait`, `text`, `snapshot`, `click`,
   `fill`, `press`, `eval`. Pure std and `serde_json`; the world (`TAP_PROBE`) as the app.
-- [ ] **`snapshot` and `act`** (`bench.rs`, `assets/js/agent.js`): the page's visible
+- [x] **`snapshot` and `act`** (`bench.rs`, `assets/js/agent.js`): the page's visible
   controls as numbered refs (`[e3] button "Sign in"`), and click, fill or press on one.
   Run in Tap's content world through `call_in_world`, so the page sees neither the
   refs nor the ref text, and the DOM isn't marked. Clicks and keys are dispatched
   events, not the window's: an agent's tab stays behind yours.
-- [ ] **On by default** (`settings_index.rs`): the `bench` row reads "Let agents use
+- [x] **On by default** (`settings_index.rs`): the `bench` row reads "Let agents use
   Tap" and defaults on (`fixed-deviation`: Search's is off and behind a keychain
   mark). The guard stays the same-uid check on a 0600 socket.
-- [ ] **Installed by Tap** (`tap-shell/src/agents.rs`): at launch and when the switch
+- [x] **Installed by Tap** (`tap-shell/src/agents.rs`): at launch and when the switch
   moves, in real runs from inside the app: `~/.local/bin/tap` → the app's binary,
   `~/.agents/skills/tap/SKILL.md` (`assets/agent/SKILL.md`, rewritten when it
   changes), `~/.claude/skills/tap` → that folder. Never replaces what isn't Tap's; off
   takes away only Tap's.
+- [x] **A page read wakes a sleeping tab where it stands** (`Browser::wake`, now public;
+  bench `with_page`): a session's tabs come back asleep, and an agent reading one of
+  yours shouldn't have to bring it to the front first. `snapshot`, `act`, `text` and
+  `eval` wait up to 15 s for it to load.
+- Checked: `cargo test` (tap-app 5, tap-core 106, tap-import 31, tap-shell 61), clippy
+  `-D warnings`, nightly fmt; the installer's ownership rules against a home of its own
+  (a foreign command, skill and Claude link left alone on and off; a moved app
+  repointed; a changed skill rewritten), and seen failing with the skill's mark check
+  broken. In a test world, driven by the built `tap` itself against a local page: open
+  (behind the tab in front), snapshot (the hidden button left out, the password shown
+  as dots), fill with 世界, a checkbox clicked, a list's option picked, Enter in the
+  field submitting its form (`Sent hello 世界 / true / b`), a link followed to the next
+  page, a stale ref refused with exit 1, and a restored, sleeping tab read without
+  leaving the tab in front. Not checked here, the user's Tap being open on the same
+  data: the real run's launch (on by default, the install from `/Applications`) and
+  `tap` starting Tap; both on the release's install.
 - Not in: screenshots (a background tab's WKWebView has nothing drawn to snapshot), a
   mark on agents' tabs, handing a tab back for a sign-in, MCP (a `tap mcp` verb on
   the same client, if an agent without a shell needs one).
