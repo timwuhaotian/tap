@@ -68,9 +68,10 @@ pub fn refresh() {
 fn command_is_tap_s(path: &Path) -> bool {
     fs::read_link(path).is_ok_and(|target| {
         target.ends_with("Contents/MacOS/tap")
-            && target
-                .ancestors()
-                .any(|a| a.extension().is_some_and(|e| e == "app"))
+            && target.ancestors().any(|a| {
+                a.extension().is_some_and(|e| e == "app")
+                    && a.file_name().is_some_and(|name| name == "Tap.app")
+            })
     })
 }
 
@@ -245,6 +246,23 @@ mod tests {
                 Some(home.join("elsewhere"))
             );
         }
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_same_named_binary_in_another_app_is_not_tap_s() {
+        let home = home("otherapp", true);
+        let places = Places::under(&home);
+        let foreign = home.join("Other.app/Contents/MacOS/tap");
+        fs::create_dir_all(foreign.parent().unwrap_or(&home)).unwrap_or_default();
+        fs::write(&foreign, "").unwrap_or_default();
+        fs::create_dir_all(places.command.parent().unwrap_or(&home)).unwrap_or_default();
+        symlink(&foreign, &places.command).unwrap_or_default();
+
+        install(&places, &app(&home, "Applications"));
+        assert_eq!(fs::read_link(&places.command).ok(), Some(foreign.clone()));
+        remove(&places);
+        assert_eq!(fs::read_link(&places.command).ok(), Some(foreign));
         let _ = fs::remove_dir_all(home);
     }
 
