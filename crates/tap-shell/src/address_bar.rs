@@ -370,11 +370,7 @@ impl AddressBar {
             return;
         };
         let capsule = capsule(bounds.size.width);
-        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-            capsule,
-            palette::RADIUS,
-            palette::RADIUS,
-        );
+        let path = palette::pill_path(capsule);
         if shown.editing {
             palette::GROUND.resolve(dark).setFill();
             path.fill();
@@ -384,6 +380,7 @@ impl AddressBar {
         } else {
             palette::WASH.resolve(dark).setFill();
             path.fill();
+            palette::stroke_hairline(&path, dark);
         }
         let (symbol, warns) = badge(shown.security);
         let tint = if warns {

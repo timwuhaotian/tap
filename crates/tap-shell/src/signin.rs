@@ -16,8 +16,8 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor, NSControlSize, NSEvent,
-    NSResponder, NSShadow, NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSControlSize, NSEvent, NSResponder,
+    NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_web_kit::WKWebView;
@@ -509,27 +509,17 @@ impl Card {
         else {
             return;
         };
-        let shadow = NSShadow::new();
-        shadow.setShadowBlurRadius(14.0);
-        shadow.setShadowOffset(NSSize::new(0.0, -3.0));
-        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
-            0.0,
-            if dark { 0.5 } else { 0.16 },
-        )));
-        shadow.set();
-        palette::GROUND.resolve(dark).setFill();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.card(), 12.0, 12.0).fill();
-        NSShadow::new().set();
+        palette::shadowed(&palette::float_shadow(dark), || {
+            palette::GROUND.resolve(dark).setFill();
+            palette::card_path(self.card()).fill();
+        });
         for (row, kept) in logins.iter().enumerate() {
             let rect = self.row_rect(row);
             if hover == Some(row) {
                 palette::WASH.resolve(dark).setFill();
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                    rect,
-                    palette::RADIUS,
-                    palette::RADIUS,
-                )
-                .fill();
+                let plate = palette::pill_path(rect);
+                plate.fill();
+                palette::stroke_hairline(&plate, dark);
             }
             let left = rect.origin.x + 12.0;
             let width = rect.size.width - 24.0;
@@ -844,21 +834,12 @@ define_class!(
                     bounds.size.height - 2.0 * BAR_SHADOW,
                 ),
             );
-            let shadow = NSShadow::new();
-            shadow.setShadowBlurRadius(16.0);
-            shadow.setShadowOffset(NSSize::new(0.0, -4.0));
-            shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
-                0.0,
-                if dark { 0.45 } else { 0.12 },
-            )));
-            shadow.set();
             let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 20.0, 20.0);
-            palette::GROUND.resolve(dark).setFill();
-            path.fill();
-            NSShadow::new().set();
-            palette::HAIRLINE.resolve(dark).setStroke();
-            path.setLineWidth(1.0);
-            path.stroke();
+            palette::shadowed(&palette::shadow(16.0, -4.0, 0.12, 0.45, dark), || {
+                palette::GROUND.resolve(dark).setFill();
+                path.fill();
+            });
+            palette::stroke_hairline(&path, dark);
         }
     }
 );

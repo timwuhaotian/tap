@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+Chrome refinement, no behaviour change.
+
+- **One card, one pill, one shadow**: every floating card and pill now shares
+  `palette`'s radius, hairline and shadow instead of each drawing its own.
+- **The live tab reads as a plate**: a hairline edge in both themes, and the
+  hovered and picked tabs wear one too.
+
 Chrome polish, no behaviour changes: the tab row's plus always shows, presses land at
 once under Reduce Motion, the live tab keeps a hover wash, narrow-tab letters and the
 load line read better; address-bar progress shows only while loading; tab-menu

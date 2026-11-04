@@ -1226,12 +1226,10 @@ define_class!(
                 NSPoint::new(0.5, 0.5),
                 NSSize::new(bounds.size.width - 1.0, bounds.size.height - 1.0),
             );
-            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset, 10.0, 10.0);
+            let path = palette::card_path(inset);
             palette::GROUND.resolve(dark).setFill();
             path.fill();
-            palette::HAIRLINE.resolve(dark).setStroke();
-            path.setLineWidth(1.0);
-            path.stroke();
+            palette::stroke_hairline(&path, dark);
         }
     }
 );

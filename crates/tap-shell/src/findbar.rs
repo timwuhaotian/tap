@@ -15,7 +15,7 @@ use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
     NSControlStateValueOff, NSControlStateValueOn, NSControlTextEditingDelegate,
     NSEventModifierFlags, NSFocusRingType, NSFont, NSFontWeightMedium, NSImage, NSMenu, NSMenuItem,
-    NSResponder, NSShadow, NSTextAlignment, NSTextField, NSTextFieldDelegate, NSTextView, NSView,
+    NSResponder, NSTextAlignment, NSTextField, NSTextFieldDelegate, NSTextView, NSView,
 };
 use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString};
 use tap_core::browser::Browser;
@@ -297,17 +297,11 @@ define_class!(
             let dark = palette::is_dark(self);
             let card = NSRect::new(NSPoint::new(SHADOW, SHADOW), NSSize::new(WIDTH, HEIGHT));
             let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, HEIGHT / 2.0, HEIGHT / 2.0);
-            let shadow = NSShadow::new();
-            shadow.setShadowBlurRadius(10.0);
-            shadow.setShadowOffset(NSSize::new(0.0, -2.0));
-            shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, if dark { 0.45 } else { 0.12 })));
-            shadow.set();
-            palette::GROUND.resolve(dark).setFill();
-            path.fill();
-            NSShadow::new().set();
-            palette::HAIRLINE.resolve(dark).setStroke();
-            path.setLineWidth(1.0);
-            path.stroke();
+            palette::shadowed(&palette::shadow(10.0, -2.0, 0.12, 0.45, dark), || {
+                palette::GROUND.resolve(dark).setFill();
+                path.fill();
+            });
+            palette::stroke_hairline(&path, dark);
         }
 
         /// Only the card takes clicks; its shadow's room lets them through.
