@@ -124,6 +124,17 @@ fn move_to_group(state: &TabState) -> Entry {
     }
 }
 
+/// Close Tab, or Close N Tabs when it is one of several picked (Search's).
+fn close_entry(state: &TabState) -> Entry {
+    if state.picked > 1 {
+        let mut close = entry("", Command::TabCloseSelected, true);
+        close.title = format!("Close {} Tabs", state.picked);
+        close
+    } else {
+        entry("Close Tab", Command::TabClose, true)
+    }
+}
+
 /// The tab's menu, top to bottom, in Search's order where Tap has the operation at
 /// all (Reload Tab is Tap's addition, first as in other browsers).
 #[must_use]
@@ -145,7 +156,7 @@ pub fn tab_entries(state: &TabState) -> Vec<Entry> {
         ),
         entry("Put to Sleep", Command::TabSleep, state.can_sleep),
         separator(),
-        entry("Close Tab", Command::TabClose, true),
+        close_entry(state),
         entry("Close Other Tabs", Command::TabCloseOthers, state.others),
         entry(
             "Close Tabs to the Right",
@@ -358,28 +369,9 @@ pub fn run(tag: NSInteger) -> bool {
         t if t == Command::TabReopen as NSInteger => {
             rt::dispatch(Browser::reopen);
         }
-        t if t == Command::TabGroupToggle as NSInteger => {
-            if let Some(place) = group_place() {
-                rt::dispatch(move |browser| browser.toggle_group(place));
-            }
-        }
-        t if t == Command::GroupUngroup as NSInteger => {
-            if let Some(place) = group_place() {
-                rt::dispatch(move |browser| browser.ungroup(place));
-            }
-        }
-        t if t == Command::GroupClose as NSInteger => {
-            if let Some(place) = group_place() {
-                rt::dispatch(move |browser| browser.close_group(place));
-            }
-        }
-        t if t == Command::GroupRename as NSInteger => {
-            if let Some(place) = group_place() {
-                rename_group(place);
-            }
-        }
         t if t == Command::TabCopyAddress as NSInteger => copy(false),
         t if t == Command::TabCopySelected as NSInteger => copy_selected(),
+        t if t == Command::TabCloseSelected as NSInteger => rt::dispatch(Browser::close_selected),
         t if t == Command::TabCopyMarkdown as NSInteger => copy(true),
         t if t == Command::TabNewGroup as NSInteger => {
             let Some(id) = target else { return true };
@@ -433,6 +425,34 @@ pub fn run(tag: NSInteger) -> bool {
         t if t == Command::TabCloseRight as NSInteger => {
             let Some(id) = target else { return true };
             rt::dispatch(move |browser| browser.close_right(id));
+        }
+        _ => return run_group(tag),
+    }
+    true
+}
+
+/// The heading menu's commands, on the group it was opened for.
+fn run_group(tag: NSInteger) -> bool {
+    match tag {
+        t if t == Command::TabGroupToggle as NSInteger => {
+            if let Some(place) = group_place() {
+                rt::dispatch(move |browser| browser.toggle_group(place));
+            }
+        }
+        t if t == Command::GroupUngroup as NSInteger => {
+            if let Some(place) = group_place() {
+                rt::dispatch(move |browser| browser.ungroup(place));
+            }
+        }
+        t if t == Command::GroupClose as NSInteger => {
+            if let Some(place) = group_place() {
+                rt::dispatch(move |browser| browser.close_group(place));
+            }
+        }
+        t if t == Command::GroupRename as NSInteger => {
+            if let Some(place) = group_place() {
+                rename_group(place);
+            }
         }
         _ => return false,
     }
@@ -552,6 +572,8 @@ mod tests {
             entries.last().map(|e| e.title.as_str()),
             Some("Copy 3 Addresses")
         );
+        assert!(titles(&entries).contains(&"Close 3 Tabs"));
+        assert!(!titles(&entries).contains(&"Close Tab"));
         assert!(!titles(&tab_entries(&state())).contains(&"Copy 3 Addresses"));
     }
 

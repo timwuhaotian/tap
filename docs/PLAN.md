@@ -1110,6 +1110,31 @@ patch release"; "tabs要支持多选（click+shift+click)…cmd+click+click 多�
   picked the run from the last clicked, and a plain click let them go and gave the page
   the keys back.
 
+### Next patch — Picked tabs close and move together
+
+At the user's request (2026-11-04: "多选的tab支持一起关闭和拖动"), after 0.1.7.
+
+- [x] **Closing** (Search's `closeFront` and `closePickedTabs`): ⌘W closes the picked
+  tabs when any are, else the tab in front; right-clicked among them, Close N Tabs
+  stands where Close Tab was. They close as ⌘W closes each, from the right and the
+  one on screen last, remembered as one batch, so one ⇧⌘T brings them all back where
+  they were (and a group they emptied with them). The cross and the wheel still close
+  just their own tab.
+- [x] **Carrying** (Chrome's way; Search carries one tab only): a carry from one of
+  several picked tabs gathers the others picked in its block beside it, in the row's
+  order and round where it stands (`Browser::gather`), and the run goes as one, passing
+  a neighbour at its middle (`Browser::move_tabs`; `move_tab` is a run of one). Picked
+  tabs in another block (a group, the pins) stay where they are. The picked stay picked
+  after the drop, and the row keeps the keys. Pressing one of several picked no longer
+  picks it or lets the others go until it is let go without a carry: picking a tab
+  gives the page the keys, and the row losing them let the selection go before the
+  carry could take it (found in the test world).
+- Checked: `cargo test` (tap-core 104, tap-import 31, tap-shell 56), clippy
+  `-D warnings`, nightly fmt. In a test world with real mouse events: a, c and e picked
+  of a–e, c carried right gathered a and e beside it and moved the three past d
+  (b d a c e), lifted together on the way and still picked after; ⌘W closed the three
+  (b d left, d in front); one ⇧⌘T brought them back in place, a in front.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and

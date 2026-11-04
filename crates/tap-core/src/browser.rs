@@ -686,10 +686,32 @@ impl Browser {
     /// pins, its group's, or the tabs in no group (Search's `move(_:within:to:)`). A
     /// place past the last is the last. It never leaves its block this way.
     pub fn move_tab(&mut self, id: TabId, place: usize) {
-        let Some(from) = self.tabs.iter().position(|t| t.id == id) else {
+        self.move_tabs(&[id], place);
+    }
+
+    /// A run of tabs side by side, carried together (picked tabs, gathered): to
+    /// `place` among the tabs of their block, the run counted as one. A run that isn't
+    /// side by side in one block stays where it is.
+    pub fn move_tabs(&mut self, run: &[TabId], place: usize) {
+        let Some(indices) = run
+            .iter()
+            .map(|id| self.index(*id))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let (Some(&from), Some(&last)) = (indices.first(), indices.last()) else {
             return;
         };
         let rank = groups::rank(&self.tabs[from].entry, &self.groups);
+        if last + 1 - from != run.len()
+            || indices.windows(2).any(|w| w[1] != w[0] + 1)
+            || self.tabs[from..=last]
+                .iter()
+                .any(|t| groups::rank(&t.entry, &self.groups) != rank)
+        {
+            return;
+        }
         // The row is kept in rank order (`order`), so a block's tabs stand together.
         let Some(first) = self
             .tabs
@@ -702,14 +724,47 @@ impl Browser {
             .iter()
             .take_while(|t| groups::rank(&t.entry, &self.groups) == rank)
             .count();
-        let to = first + place.min(count - 1);
+        let to = first + place.min(count - run.len());
         if to == from {
             return;
         }
-        let tab = self.tabs.remove(from);
-        self.tabs.insert(to, tab);
+        let moving: Vec<Tab> = self.tabs.drain(from..=last).collect();
+        self.tabs.splice(to..to, moving);
         self.dirty.insert(BrowserFields::TABS);
         self.session_changed = true;
+    }
+
+    /// Carrying a picked tab carries the others picked in its block: they gather
+    /// beside it, in the row's order, around where it stands (Chrome's way with a
+    /// selection). Answers the run, left to right; just the tab when nothing else of
+    /// its block is picked.
+    pub fn gather(&mut self, id: TabId) -> Vec<TabId> {
+        let Some(index) = self.index(id) else {
+            return Vec::new();
+        };
+        let rank = groups::rank(&self.tabs[index].entry, &self.groups);
+        let run: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| {
+                groups::rank(&t.entry, &self.groups) == rank
+                    && (t.id == id || self.selected.contains(&t.id))
+            })
+            .map(|t| t.id)
+            .collect();
+        if run.len() < 2 || !self.selected.contains(&id) {
+            return vec![id];
+        }
+        let before = run.iter().position(|t| *t == id).unwrap_or(0);
+        let (gathered, rest): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .partition(|t| run.contains(&t.id));
+        self.tabs = rest;
+        let at = (index - before).min(self.tabs.len());
+        self.tabs.splice(at..at, gathered);
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+        run
     }
 
     /// A group carried past others, its tabs with it (Search's `moveTabGroup`): from
@@ -1712,6 +1767,53 @@ impl Browser {
             .count()
     }
 
+    /// ⌘W: the picked tabs if there are any, or else the one in front (Search's
+    /// `closeFront`).
+    pub fn close_front(&mut self) {
+        if self.selection_count() > 0 {
+            self.close_selected();
+        } else if let Some(id) = self.active {
+            self.close(id);
+        }
+    }
+
+    /// Close N Tabs: every picked tab, as ⌘W closes each, remembered together so one
+    /// ⇧⌘T brings them all back (a group they emptied with them); from the right, the
+    /// one on screen last, so no neighbour wakes only to be closed (Search's
+    /// `closePickedTabs`).
+    pub fn close_selected(&mut self) {
+        let going: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| self.selected.contains(&t.id))
+            .map(|t| t.id)
+            .collect();
+        if going.is_empty() {
+            return;
+        }
+        self.clear_selection();
+        for (place, group) in self.groups.iter().enumerate() {
+            let emptied = self
+                .tabs
+                .iter()
+                .filter(|t| t.entry.group_id.as_deref() == Some(group.id.as_str()))
+                .all(|t| going.contains(&t.id));
+            if emptied {
+                self.closed_groups.push((group.clone(), place));
+            }
+        }
+        self.batches += 1;
+        self.batch = Some(self.batches);
+        let front = self.active.filter(|id| going.contains(id));
+        for id in going.iter().rev().filter(|id| Some(**id) != front) {
+            self.close(*id);
+        }
+        if let Some(id) = front {
+            self.close(id);
+        }
+        self.batch = None;
+    }
+
     /// The picked tabs' addresses in the row's order, pages only (Search's
     /// `selectedTabLinks`): what ⌘C and Copy Addresses copy, one to a line.
     #[must_use]
@@ -2627,6 +2729,101 @@ mod tests {
         browser.clear_selection();
         assert_eq!(browser.selection_count(), 0);
         assert_eq!(browser.selected_links(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn picked_tabs_close_together_and_come_back_together() {
+        let mut browser = with_pages(&[
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+            "https://e.com",
+        ]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[3]);
+        browser.extend_selection(ids[1], false, true);
+        assert_eq!(browser.selection_count(), 2, "d (live) and b");
+        browser.close_front();
+        assert_eq!(
+            urls(&browser),
+            ["https://a.com", "https://c.com", "https://e.com"]
+        );
+        assert_eq!(browser.selection_count(), 0);
+        assert_eq!(
+            browser.active_tab().map(Tab::url),
+            Some("https://e.com"),
+            "the one on screen went last, to its right-hand neighbour"
+        );
+        // One ⇧⌘T: both back where they were, the one that was in front in front.
+        browser.reopen();
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://a.com",
+                "https://b.com",
+                "https://c.com",
+                "https://d.com",
+                "https://e.com"
+            ]
+        );
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://d.com"));
+        assert!(!browser.can_reopen());
+        // Nothing picked: ⌘W is the tab in front, as ever.
+        browser.close_front();
+        assert_eq!(browser.tabs().len(), 4);
+    }
+
+    #[test]
+    fn picked_tabs_gather_beside_the_carried_one_and_move_as_one() {
+        let mut browser = with_pages(&[
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+            "https://e.com",
+        ]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[0]);
+        browser.extend_selection(ids[2], false, true);
+        browser.extend_selection(ids[4], false, true);
+        // a, c, e picked; c carried: a and e gather round it, c keeps its place.
+        let run = browser.gather(ids[2]);
+        assert_eq!(run, [ids[0], ids[2], ids[4]]);
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://b.com",
+                "https://a.com",
+                "https://c.com",
+                "https://e.com",
+                "https://d.com"
+            ]
+        );
+        assert_eq!(browser.tabs()[2].id, ids[2]);
+        // The run, as one, to the end of the row, then to its start.
+        browser.move_tabs(&run, 9);
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://b.com",
+                "https://d.com",
+                "https://a.com",
+                "https://c.com",
+                "https://e.com"
+            ]
+        );
+        browser.move_tabs(&run, 0);
+        assert_eq!(
+            urls(&browser)[..3],
+            ["https://a.com", "https://c.com", "https://e.com"]
+        );
+        assert_eq!(browser.selection_count(), 3, "still picked after the carry");
+        // A run that isn't side by side doesn't move.
+        browser.move_tabs(&[ids[0], ids[4]], 2);
+        assert_eq!(urls(&browser)[0], "https://a.com");
+        // A tab that isn't picked is carried alone.
+        assert_eq!(browser.gather(ids[1]), [ids[1]]);
     }
 
     #[test]

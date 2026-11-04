@@ -72,6 +72,8 @@ pub enum Command {
     GroupClose,
     /// Copy N Addresses: the picked tabs', one to a line.
     TabCopySelected,
+    /// Close N Tabs: the picked ones, together.
+    TabCloseSelected,
     /// Move to Group › a group: 300 and its place among the groups.
     TabIntoGroup = 300,
     /// A heading's Color › a colour: 400 and its place in `groups::COLOURS`.
@@ -114,11 +116,8 @@ pub fn run(tag: NSInteger) {
         1 => browser.begin_editing(true),
         2 => browser.reopen(),
         3 => browser.begin_editing(false),
-        4 => {
-            if let Some(id) = browser.active() {
-                browser.close(id);
-            }
-        }
+        // ⌘W: the picked tabs if any are, or else the one in front.
+        4 => browser.close_front(),
         5 => browser.reload(),
         6 => browser.stop(),
         7 => {

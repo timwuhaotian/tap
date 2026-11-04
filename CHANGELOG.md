@@ -7,6 +7,11 @@ Info.plist.
 
 ## Unreleased
 
+- **Picked tabs close together**: ⌘W, or Close N Tabs in the menu of one of them; one
+  ⇧⌘T brings them all back.
+- **Picked tabs move together**: drag one of them and the others come along, side by
+  side, and stay picked.
+
 ## 0.1.7 — 2026-11-04
 
 Pick tabs together, choose a group's colour, and the tab you're on glides.

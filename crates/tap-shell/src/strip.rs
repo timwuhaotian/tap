@@ -197,10 +197,11 @@ enum Key {
     Plus,
 }
 
-/// What the hand carries: a tab, or a group by its heading.
+/// What the hand carries: tabs side by side (one, or the picked ones gathered round
+/// the one pressed, `lead`), or a group by its heading.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Carried {
-    Tab(TabId),
+    Tabs { lead: TabId, run: Vec<TabId> },
     Group(String),
 }
 
@@ -219,7 +220,7 @@ struct Grab {
 /// A reorder the hand asked for: a tab to a place among its block's, or a group from
 /// one place among the groups to another.
 enum Move {
-    Tab(TabId, usize),
+    Tabs(Vec<TabId>, usize),
     Group(usize, usize),
 }
 
@@ -230,6 +231,11 @@ enum Click {
     Edit,
     /// A heading: its group folds or opens.
     Fold(String),
+    /// One of several picked tabs, pressed and let go without a carry: the others
+    /// are let go and it is the tab in front, as a plain click would have it. Not
+    /// on the press: picking a tab gives the page the keys, and the row losing them
+    /// would let the picked tabs go before a carry could take them along.
+    Unpick(TabId),
 }
 
 /// Where everything in the row goes for a width, one rectangle per slot.
@@ -901,22 +907,36 @@ impl Strip {
                 // Any other tab is picked at once, as it goes into the hand; the live
                 // one becomes the field on release, unless the address bar holds the
                 // field, or the press became a carry.
-                // A plain click lets any picked tabs go, and the page has the keys.
-                let picked = rt::read(|browser| browser.selection_count() > 0).unwrap_or(false);
-                if picked {
+                // A plain click lets any picked tabs go, and the page has the keys;
+                // on one of several picked, only once it is let go without a carry,
+                // since a carry takes them all along.
+                let (picked, among) = rt::read(|browser| {
+                    let count = browser.selection_count();
+                    (count > 0, count > 1 && browser.is_selected(id))
+                })
+                .unwrap_or_default();
+                if picked && !among {
                     rt::dispatch(|browser| {
                         browser.clear_selection();
                         browser.focus_page();
                     });
                 }
-                if live {
-                    if !self.look_now().bar {
-                        self.ivars().click.replace(Some(Click::Edit));
-                    }
-                } else {
+                if among {
+                    self.ivars().click.replace(Some(Click::Unpick(id)));
+                } else if live && !self.look_now().bar {
+                    self.ivars().click.replace(Some(Click::Edit));
+                }
+                if !live && !among {
                     rt::dispatch(move |browser| browser.select(id));
                 }
-                self.grab(Carried::Tab(id), &Key::Tab(id), x);
+                self.grab(
+                    Carried::Tabs {
+                        lead: id,
+                        run: vec![id],
+                    },
+                    &Key::Tab(id),
+                    x,
+                );
             }
             Spot::Heading(place) => {
                 let Some(group) =
@@ -975,8 +995,18 @@ impl Strip {
                 grab.carrying = true;
                 self.ivars().click.replace(None);
                 self.ivars().pressed.set(None);
+                // One of several picked: the others of its block gather beside it
+                // and go along.
+                if let Carried::Tabs { lead, run } = &mut grab.what {
+                    let lead = *lead;
+                    let gathered = rt::update(|browser| browser.gather(lead)).unwrap_or_default();
+                    if !gathered.is_empty() {
+                        *run = gathered;
+                    }
+                }
             }
         }
+        rt::settle();
         self.carry();
         self.animate();
         self.setNeedsDisplay(true);
@@ -1006,6 +1036,11 @@ impl Strip {
                     browser.toggle_group(place);
                 }
             }),
+            Some(Click::Unpick(id)) => rt::dispatch(move |browser| {
+                browser.clear_selection();
+                browser.select(id);
+                browser.focus_page();
+            }),
             None => {}
         }
     }
@@ -1018,28 +1053,39 @@ impl Strip {
         let left = grab.origin + grab.travel;
         let wanted = self
             .with_layout(|browser, row, layout| match &grab.what {
-                Carried::Tab(id) => {
-                    let me = browser.tab(*id)?;
+                Carried::Tabs { lead, run } => {
+                    let me = browser.tab(*lead)?;
                     let block = (me.is_pinned(), group_of(me));
-                    let peers: Vec<(TabId, (f64, f64))> = row
-                        .iter()
-                        .zip(&layout.tabs)
-                        .filter_map(|(item, rect)| match item {
-                            Item::Tab(index) => {
-                                let tab = &browser.tabs()[*index];
-                                ((tab.is_pinned(), group_of(tab)) == block).then_some((
-                                    tab.id,
-                                    (rect.origin.x, rect.origin.x + rect.size.width),
-                                ))
-                            }
-                            Item::Heading(_) => None,
-                        })
-                        .collect();
-                    let at = peers.iter().position(|(peer, _)| peer == id)?;
-                    let (start, end) = peers[at].1;
-                    let spans: Vec<(f64, f64)> = peers.iter().map(|(_, span)| *span).collect();
+                    // Each tab of the block on its own, the carried run as one.
+                    let mut spans: Vec<(f64, f64)> = Vec::new();
+                    let mut at: Option<usize> = None;
+                    let mut lead_x = None;
+                    for (item, rect) in row.iter().zip(&layout.tabs) {
+                        let Item::Tab(index) = item else { continue };
+                        let tab = &browser.tabs()[*index];
+                        if (tab.is_pinned(), group_of(tab)) != block {
+                            continue;
+                        }
+                        let span = (rect.origin.x, rect.origin.x + rect.size.width);
+                        if tab.id == *lead {
+                            lead_x = Some(rect.origin.x);
+                        }
+                        if !run.contains(&tab.id) {
+                            spans.push(span);
+                        } else if let Some(open) = at {
+                            spans[open].1 = span.1;
+                        } else {
+                            at = Some(spans.len());
+                            spans.push(span);
+                        }
+                    }
+                    let (at, lead_x) = (at?, lead_x?);
+                    let (start, end) = spans[at];
+                    // The run's left edge where the hand has it: the pressed tab is
+                    // under the hand, the rest of the run beside it.
+                    let left = left - (lead_x - start);
                     let to = place_among(&spans, at, left, left + (end - start));
-                    (to != at).then_some(Move::Tab(*id, to))
+                    (to != at).then_some(Move::Tabs(run.clone(), to))
                 }
                 Carried::Group(group) => {
                     let spans = group_spans(browser, row, &layout.tabs);
@@ -1052,7 +1098,7 @@ impl Strip {
             })
             .flatten();
         match wanted {
-            Some(Move::Tab(id, to)) => rt::dispatch(move |browser| browser.move_tab(id, to)),
+            Some(Move::Tabs(run, to)) => rt::dispatch(move |browser| browser.move_tabs(&run, to)),
             Some(Move::Group(from, to)) => {
                 rt::dispatch(move |browser| browser.move_group(from, to));
             }
@@ -1269,9 +1315,26 @@ impl Strip {
         let x = grab.origin + grab.travel;
         let mut flock = self.ivars().flock.borrow_mut();
         match &grab.what {
-            Carried::Tab(id) => {
-                flock.hold(&Key::Tab(*id), x);
-                vec![Key::Tab(*id)]
+            Carried::Tabs { lead, run } => {
+                let Some(lead_x) = row
+                    .iter()
+                    .zip(&layout.tabs)
+                    .find(|(item, _)| matches!(item, Item::Tab(index) if browser.tabs()[*index].id == *lead))
+                    .map(|(_, rect)| rect.origin.x)
+                else {
+                    return Vec::new();
+                };
+                let mut held = Vec::new();
+                for (item, rect) in row.iter().zip(&layout.tabs) {
+                    if let Item::Tab(index) = item
+                        && run.contains(&browser.tabs()[*index].id)
+                    {
+                        let key = Key::Tab(browser.tabs()[*index].id);
+                        flock.hold(&key, rect.origin.x + (x - lead_x));
+                        held.push(key);
+                    }
+                }
+                held
             }
             Carried::Group(group) => {
                 let Some(heading_x) = row
