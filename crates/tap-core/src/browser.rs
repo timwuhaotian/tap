@@ -83,6 +83,10 @@ pub enum Effect {
     Stop(TabId),
     /// The tab is gone: let its web view go.
     Discard(TabId),
+    /// The only tab was a new tab: the shell closes the window (Search's
+    /// `close`, which closes the window for a lone blank tab). Tap differs
+    /// from Search in letting new tabs pile up, so this is reachable.
+    CloseWindow,
     /// Give the page the keyboard.
     FocusPage(TabId),
     /// Write the session (debounced by the shell's disk writer).
@@ -1154,10 +1158,15 @@ impl Browser {
     }
 
     /// ⌘W, as Search closes: the neighbour on the right takes its place, or the last
-    /// tab; with Settings › Closing a tab goes back, the tab viewed before it. The only
-    /// tab is replaced by a new one, unless it is already new, and so is the last loose
-    /// tab beside groups, and the last but pins when Settings says so: landing on a pin
-    /// or a grouped page you hadn't asked for wakes it and opens its group.
+    /// tab; with Settings › Closing a tab goes back, the tab viewed before it. Closing
+    /// the only tab asks the shell to close the window when it is already new, and
+    /// replaces it with a new one otherwise — as does the last loose tab beside
+    /// groups, and the last but pins when Settings says so: landing on a pin or a
+    /// grouped page you hadn't asked for wakes it and opens its group.
+    ///
+    /// Tap differs from Search in one place: repeated ⌘T leaves a row of new tabs
+    /// rather than reusing one, so any of them (and the only one, via the window)
+    /// closes.
     pub fn close(&mut self, id: TabId) {
         let Some(index) = self.index(id) else { return };
         let closing = &self.tabs[index];
@@ -1172,6 +1181,7 @@ impl Browser {
         let internal = closing.is_internal();
         if self.tabs.len() == 1 || (self.active == Some(id) && (only_pins || only_kept)) {
             if closing.is_blank() {
+                self.effects.push(Effect::CloseWindow);
                 return;
             }
             self.remember(index);
@@ -1540,11 +1550,11 @@ impl Browser {
             self.dirty.insert(BrowserFields::EDITING);
             match command {
                 Command::Settings => self.open_page(Page::Settings),
+                // Tap differs from Search here: every "new tab" opens one, so
+                // new tabs pile up rather than reusing the blank one in front.
                 Command::NewTab => {
-                    if !self.active_tab().is_some_and(Tab::is_blank) {
-                        let place = self.place_for_front();
-                        self.open_at(None, true, None, Some(place));
-                    }
+                    let place = self.place_for_front();
+                    self.open_at(None, true, None, Some(place));
                     self.begin_editing(false);
                 }
             }
@@ -2191,7 +2201,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_only_tab_leaves_a_new_one_and_reopen_brings_it_back() {
+    fn closing_the_only_tab_leaves_a_new_one_and_closing_it_closes_the_window() {
         let mut browser = with_pages(&["https://a.com"]);
         let only = browser.active().expect("a tab");
         browser.close(only);
@@ -2199,12 +2209,54 @@ mod tests {
         assert!(browser.active_tab().is_some_and(Tab::is_blank));
         assert!(browser.editing().is_some(), "the new tab's field is open");
         let blank = browser.active().expect("a tab");
+        browser.take_effects();
         browser.close(blank);
-        assert_eq!(browser.tabs().len(), 1, "an empty last tab stays");
+        assert_eq!(
+            browser.tabs().len(),
+            1,
+            "the model stands until the window goes"
+        );
+        assert!(
+            browser.take_effects().contains(&Effect::CloseWindow),
+            "the shell closes the window"
+        );
 
         browser.reopen();
         assert_eq!(browser.tabs().len(), 1, "the empty tab gives way");
         assert_eq!(browser.active_tab().map(Tab::url), Some("https://a.com"));
+    }
+
+    #[test]
+    fn new_tabs_pile_up_and_each_closes() {
+        let mut browser = behaving(
+            &["https://a.com"],
+            Behaviour {
+                commands: true,
+                ..Behaviour::default()
+            },
+        );
+        for _ in 0..2 {
+            browser.begin_editing(false);
+            browser.set_typed("new tab", false);
+            browser.submit();
+        }
+        assert_eq!(
+            browser.tabs().len(),
+            3,
+            "no reuse of the blank one in front"
+        );
+        assert!(browser.active_tab().is_some_and(Tab::is_blank));
+        let blanks: Vec<TabId> = browser
+            .tabs()
+            .iter()
+            .filter(|t| t.is_blank())
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(blanks.len(), 2);
+        browser.take_effects();
+        browser.close(blanks[1]);
+        assert_eq!(browser.tabs().len(), 2, "a new tab among others just goes");
+        assert!(browser.take_effects().contains(&Effect::Discard(blanks[1])));
     }
 
     #[test]

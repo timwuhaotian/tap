@@ -7,6 +7,10 @@ Info.plist.
 
 ## Unreleased
 
+- **New tabs pile up and close**: +/⌘T and the "new tab" field command always open a
+  fresh blank tab instead of reusing the blank one in front; the cross on a new tab
+  closes it, and closing the only tab when it is already new closes the window.
+
 ## 0.1.8 — 2026-11-05
 
 Picked tabs close together and move together.
