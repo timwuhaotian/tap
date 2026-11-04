@@ -2081,6 +2081,11 @@ impl Browser {
         }
     }
 
+    /// The finest progress step that counts as change. The drawn line moves by less
+    /// than a pixel inside a tab's pill at this size, while a load reports far finer
+    /// steps many times over, and every one of them marked the whole row dirty.
+    const PROGRESS_STEP: f64 = 1.0 / 128.0;
+
     pub fn page_loading(&mut self, id: TabId, loading: bool, progress: f64) {
         let Some(tab) = self.tab_mut(id) else { return };
         Tab::set(
@@ -2089,7 +2094,7 @@ impl Browser {
             &mut tab.dirty,
             TabFields::LOADING,
         );
-        if (tab.progress - progress).abs() > f64::EPSILON {
+        if (tab.progress - progress).abs() >= Self::PROGRESS_STEP {
             tab.progress = progress;
             tab.dirty.insert(TabFields::PROGRESS);
         }
@@ -3031,6 +3036,25 @@ mod tests {
             effects.iter().any(|e| matches!(e, Effect::SaveHistory(history, _)
                 if String::from_utf8_lossy(&history.encode(history::now())).contains("Example Domain")))
         );
+    }
+
+    #[test]
+    fn a_progress_step_too_small_to_draw_marks_nothing() {
+        let mut browser = with_pages(&["https://a.com"]);
+        let id = browser.active().expect("a tab");
+        browser.page_loading(id, true, 0.5);
+        let _ = browser.take_dirty();
+
+        browser.page_loading(id, true, 0.5 + 1e-9);
+        let (_, tabs) = browser.take_dirty();
+        assert!(
+            !tabs.iter().any(|(_, fields)| fields.contains(TabFields::PROGRESS)),
+            "a step smaller than the drawn line changes nothing"
+        );
+
+        browser.page_loading(id, true, 0.9);
+        let (_, tabs) = browser.take_dirty();
+        assert!(tabs.iter().any(|(_, fields)| fields.contains(TabFields::PROGRESS)));
     }
 
     #[test]
