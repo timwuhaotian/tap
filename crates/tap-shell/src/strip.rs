@@ -232,6 +232,9 @@ struct Grab {
     start: f64,
     origin: f64,
     travel: f64,
+    /// How far down the strip the pointer is now, set by every drag: off the row,
+    /// over the page, the carried tabs join no group.
+    down: f64,
     /// Past `CARRY`: the slot is in the hand.
     carrying: bool,
 }
@@ -1040,16 +1043,18 @@ impl Strip {
             start: x,
             origin,
             travel: 0.0,
+            down: 0.0,
             carrying: false,
         }));
     }
 
     fn drag(&self, event: &NSEvent) {
-        let x = self.convertPoint_fromView(event.locationInWindow(), None).x;
+        let point = self.convertPoint_fromView(event.locationInWindow(), None);
         {
             let mut grab = self.ivars().grab.borrow_mut();
             let Some(grab) = grab.as_mut() else { return };
-            grab.travel = x - grab.start;
+            grab.travel = point.x - grab.start;
+            grab.down = point.y;
             if !grab.carrying {
                 if grab.travel.abs() < CARRY {
                     return;
@@ -1121,6 +1126,7 @@ impl Strip {
         let left = grab.origin + grab.travel;
         // Over another group, the tabs wait to join it on release (Search's
         // `groupDestination`) rather than moving along their own block.
+        let height = self.bounds().size.height;
         let drop = self
             .with_layout(|browser, row, layout| {
                 let Carried::Tabs { lead, run } = &grab.what else {
@@ -1128,7 +1134,8 @@ impl Strip {
                 };
                 let me = browser.tab(*lead).filter(|t| !t.is_pinned())?;
                 let spans = drop_spans(browser, row, &layout.tabs);
-                groups::drop_target(grab.start + grab.travel, &spans, run)
+                let hand = NSPoint::new(grab.start + grab.travel, grab.down);
+                drop_at(hand, height, &spans, run)
                     .filter(|to| Some(to.group.as_str()) != group_of(me))
             })
             .flatten();
@@ -1633,6 +1640,21 @@ fn drop_plate(browser: &Browser, row: &[Item], layout: &Layout, place: usize, da
     colour.colorWithAlphaComponent(0.7).setStroke();
     path.setLineWidth(1.5);
     path.stroke();
+}
+
+/// The group tabs let go at `hand` would join (Search's `GroupDropFrames.resolve`):
+/// only over the row itself, `height` tall, since a group's heading and tabs are
+/// what take them. Carried off it, over the page, they join nothing.
+fn drop_at(
+    hand: NSPoint,
+    height: f64,
+    spans: &[GroupSpans<'_>],
+    carried: &[TabId],
+) -> Option<GroupDrop> {
+    (0.0..height)
+        .contains(&hand.y)
+        .then(|| groups::drop_target(hand.x, spans, carried))
+        .flatten()
 }
 
 /// Each group in the row for a drop: its heading's span and its shown tabs'.
@@ -2412,6 +2434,25 @@ mod tests {
             ),
             Some(cut)
         );
+    }
+
+    #[test]
+    fn tabs_join_a_group_only_when_let_go_over_the_row() {
+        // Group A's heading 100–150, one tab 152–252.
+        let spans = [GroupSpans {
+            group: "A",
+            collapsed: false,
+            heading: (100.0, 150.0),
+            members: vec![(TabId(1), (152.0, 252.0))],
+        }];
+        let at = |x, y| drop_at(NSPoint::new(x, y), palette::STRIP, &spans, &[]);
+        for y in [0.0, palette::STRIP / 2.0, palette::STRIP - 1.0] {
+            assert_eq!(at(180.0, y).map(|d| d.group), Some("A".to_owned()));
+        }
+        // Carried off the row, over the page or above the window: no group.
+        assert_eq!(at(180.0, palette::STRIP + 40.0), None);
+        assert_eq!(at(180.0, -5.0), None);
+        assert_eq!(at(400.0, palette::STRIP / 2.0), None, "past every group");
     }
 
     #[test]
