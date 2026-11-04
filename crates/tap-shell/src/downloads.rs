@@ -40,16 +40,16 @@ fn testing() -> bool {
     std::env::var_os(identity::PROBE_ENV).is_some()
 }
 
-/// Where downloads go: the user's Downloads, or a test world's own.
-fn folder() -> PathBuf {
+/// Where downloads go: the folder Settings names (Downloads unless changed), or a test
+/// world's own.
+pub fn folder() -> PathBuf {
     if testing() {
         let folder = store::file("Downloads");
         let _ = std::fs::create_dir_all(&folder);
         return folder;
     }
-    std::env::var_os("HOME")
-        .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
-        .join("Downloads")
+    // Settings › General › Save to, else Downloads.
+    crate::settings::downloads_folder()
 }
 
 /// Files finished so far, for the bench.

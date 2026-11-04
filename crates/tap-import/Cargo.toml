@@ -1,0 +1,22 @@
+[package]
+name = "tap-import"
+description = "What Tap brings in and sends out: profile files (Search #845). No AppKit, no WebKit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Deflate only, through the pure-Rust backend: a profile is a plain zip, and the other
+# methods (and their C libraries) would only make the binary bigger.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde.workspace = true
+serde_json.workspace = true
+tap-core.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+
+[lints]
+workspace = true

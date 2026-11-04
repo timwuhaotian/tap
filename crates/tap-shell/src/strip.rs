@@ -1,8 +1,9 @@
 //! The only chrome there is: the row of tabs at the top of the window (Search's
 //! `TabBar.swift`). Titles, the live one on a grey pill, a cross on the one under the
 //! pointer, the plus after the last, and the field in place of the live tab while you
-//! type. Drawn as one view: a row of three hundred tabs is one draw, not three hundred
-//! views.
+//! type. A tab group's name heads its tabs; a click on it folds the group to its name
+//! (and the tab in front, if it is one of its own) or opens it again. Drawn as one view:
+//! a row of three hundred tabs is one draw, not three hundred views.
 
 use std::cell::{Cell, RefCell};
 
@@ -15,55 +16,85 @@ use objc2_app_kit::{
     NSTrackingAreaOptions, NSView,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
-use tap_core::browser::{Browser, TabId};
+use tap_core::{
+    browser::{Browser, TabId},
+    groups::Item,
+};
 
 use crate::{icons, palette, rt};
 
 /// A site icon's side, in points.
 const ICON: f64 = 16.0;
 
-/// What the pointer is over.
+/// What the pointer is over. Tabs by their place among the tabs, headings by their
+/// group's place among the groups.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Spot {
     #[default]
     Nothing,
     Tab(usize),
     Close(usize),
+    Heading(usize),
     Plus,
 }
 
-/// Where everything in the row goes for a width.
+/// A thing in the row, as the layout sees it: a tab, or a heading as wide as its name.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Slot {
+    Tab,
+    Heading(f64),
+}
+
+/// Where everything in the row goes for a width, one rectangle per slot.
 struct Layout {
     tabs: Vec<NSRect>,
     plus: NSRect,
 }
 
+/// A heading's width: its name, with air on both sides.
+fn heading_width(name: &str) -> f64 {
+    (palette::text_width(name) + 20.0)
+        .ceil()
+        .min(palette::TAB_WIDTH)
+}
+
 /// The row's geometry: tabs from the lights, each its fixed width until the row is full,
-/// the live tab as wide as the field while it is being edited.
-fn layout(width: f64, count: usize, editing: Option<usize>) -> Layout {
+/// the live tab as wide as the field while it is being edited; headings keep their own
+/// width. `editing` is the live tab's slot.
+fn layout(width: f64, slots: &[Slot], editing: Option<usize>) -> Layout {
+    let count = slots.len();
     let top = (palette::STRIP - palette::ROW) / 2.0;
     let room = (width - palette::LIGHTS - palette::HELM - palette::PLUS - 12.0).max(0.0);
     #[allow(clippy::cast_precision_loss)] // a row never holds 2^52 tabs
     let gaps = palette::TAB_GAP * count.saturating_sub(1) as f64;
+    let headings: f64 = slots
+        .iter()
+        .map(|s| match s {
+            Slot::Heading(w) => *w,
+            Slot::Tab => 0.0,
+        })
+        .sum();
     let field = editing.map_or(0.0, |_| palette::FIELD.min(room * 0.6));
+    let tabs_count = slots.iter().filter(|s| **s == Slot::Tab).count();
     let others = if editing.is_some() {
-        count.saturating_sub(1)
+        tabs_count.saturating_sub(1)
     } else {
-        count
+        tabs_count
     };
     #[allow(clippy::cast_precision_loss)]
     let each = if others == 0 {
         palette::TAB_WIDTH
     } else {
-        ((room - field - gaps) / others as f64).clamp(palette::TAB_MIN, palette::TAB_WIDTH)
+        ((room - field - gaps - headings) / others as f64)
+            .clamp(palette::TAB_MIN, palette::TAB_WIDTH)
     };
     let mut x = palette::LIGHTS;
     let mut tabs = Vec::with_capacity(count);
-    for index in 0..count {
-        let w = if editing == Some(index) {
-            field.max(each)
-        } else {
-            each
+    for (index, slot) in slots.iter().enumerate() {
+        let w = match slot {
+            Slot::Heading(w) => *w,
+            Slot::Tab if editing == Some(index) => field.max(each),
+            Slot::Tab => each,
         };
         tabs.push(NSRect::new(
             NSPoint::new(x, top),
@@ -101,13 +132,30 @@ fn tab_at(index: usize) -> Option<TabId> {
     rt::read(|browser| browser.tabs().get(index).map(|t| t.id)).flatten()
 }
 
-fn editing_index(browser: &Browser) -> Option<usize> {
+/// The row as drawn: what each slot is, and the slots for layout.
+fn slots(browser: &Browser) -> (Vec<Item>, Vec<Slot>) {
+    let row = browser.row();
+    let slots = row
+        .iter()
+        .map(|item| match item {
+            Item::Heading(place) => Slot::Heading(heading_width(
+                browser.groups().get(*place).map_or("", |g| g.name.as_str()),
+            )),
+            Item::Tab(_) => Slot::Tab,
+        })
+        .collect();
+    (row, slots)
+}
+
+/// The live tab's slot, while the field is open on it.
+fn editing_slot(browser: &Browser, row: &[Item]) -> Option<usize> {
     let editing = browser.editing()?;
     if editing.launching {
         return None;
     }
     let active = browser.active()?;
-    browser.tabs().iter().position(|t| t.id == active)
+    let index = browser.tabs().iter().position(|t| t.id == active)?;
+    row.iter().position(|item| *item == Item::Tab(index))
 }
 
 pub struct Ivars {
@@ -203,8 +251,9 @@ impl Strip {
     pub fn field_rect(&self) -> Option<NSRect> {
         let width = self.bounds().size.width;
         rt::read(|browser| {
-            let index = editing_index(browser)?;
-            let rect = layout(width, browser.tabs().len(), Some(index))
+            let (row, slots) = slots(browser);
+            let index = editing_slot(browser, &row)?;
+            let rect = layout(width, &slots, Some(index))
                 .tabs
                 .get(index)
                 .copied()?;
@@ -220,12 +269,16 @@ impl Strip {
         let point = self.convertPoint_fromView(event.locationInWindow(), None);
         let width = self.bounds().size.width;
         rt::read(|browser| {
-            let editing = editing_index(browser);
-            let layout = layout(width, browser.tabs().len(), editing);
-            for (index, rect) in layout.tabs.iter().enumerate() {
+            let (row, slots) = slots(browser);
+            let editing = editing_slot(browser, &row);
+            let layout = layout(width, &slots, editing);
+            for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
                 if contains(*rect, point) {
-                    let can_close =
-                        editing != Some(index) && rect.size.width >= palette::TAB_TITLED;
+                    let index = match item {
+                        Item::Heading(place) => return Spot::Heading(*place),
+                        Item::Tab(index) => *index,
+                    };
+                    let can_close = editing != Some(slot) && rect.size.width >= palette::TAB_TITLED;
                     return if can_close && contains(close_rect(*rect), point) {
                         Spot::Close(index)
                     } else {
@@ -272,6 +325,7 @@ impl Strip {
                     }
                 });
             }
+            Spot::Heading(place) => rt::dispatch(move |browser| browser.toggle_group(place)),
             Spot::Plus => rt::dispatch(|browser| browser.begin_editing(true)),
             Spot::Nothing => {
                 // The empty row is title bar: it moves the window, and a double click
@@ -309,6 +363,7 @@ impl Strip {
         *self.ivars().tracking.borrow_mut() = Some(area);
     }
 
+    #[allow(clippy::too_many_lines)] // the row, left to right, in one pass
     fn draw(&self) {
         let dark = palette::is_dark(self);
         let bounds = self.bounds();
@@ -323,11 +378,36 @@ impl Strip {
 
         let spot = self.ivars().spot.get();
         let inside = self.ivars().inside.get();
+        // A row too long for the window stops at the doors rather than running under them.
+        NSBezierPath::clipRect(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(bounds.size.width - palette::HELM, bounds.size.height),
+        ));
         let _ = rt::read(|browser| {
-            let editing = editing_index(browser);
-            let layout = layout(bounds.size.width, browser.tabs().len(), editing);
+            let (row, slots) = slots(browser);
+            let editing = editing_slot(browser, &row);
+            let layout = layout(bounds.size.width, &slots, editing);
             let active = browser.active();
-            for (index, (tab, rect)) in browser.tabs().iter().zip(&layout.tabs).enumerate() {
+            for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
+                let index = match item {
+                    Item::Heading(place) => {
+                        if spot == Spot::Heading(*place) {
+                            palette::HOVER.resolve(dark).setFill();
+                            pill(*rect).fill();
+                        }
+                        let name = browser.groups().get(*place).map_or("", |g| g.name.as_str());
+                        let text = NSRect::new(
+                            NSPoint::new(rect.origin.x + 10.0, rect.origin.y + 7.0),
+                            NSSize::new(rect.size.width - 20.0, 17.0),
+                        );
+                        palette::draw_text(name, text, &palette::MUTED.resolve(dark));
+                        continue;
+                    }
+                    Item::Tab(index) => *index,
+                };
+                let Some(tab) = browser.tabs().get(index) else {
+                    continue;
+                };
                 let live = Some(tab.id) == active;
                 let under = matches!(spot, Spot::Tab(i) | Spot::Close(i) if i == index);
                 if live || under {
@@ -335,7 +415,7 @@ impl Strip {
                     grey.resolve(dark).setFill();
                     pill(*rect).fill();
                 }
-                if editing == Some(index) {
+                if editing == Some(slot) {
                     continue;
                 }
                 let crossed = (under || live) && rect.size.width >= palette::TAB_TITLED;
@@ -363,6 +443,33 @@ impl Strip {
                             None,
                         );
                     }
+                } else if !titled {
+                    // A narrow tab with no icon yet (a tab brought in asleep, say) shows
+                    // its first letter on a tile, as Search's "Tabs show: Letters" does,
+                    // rather than nothing at all.
+                    let square = NSRect::new(
+                        NSPoint::new(
+                            rect.origin.x + (rect.size.width - ICON) / 2.0,
+                            rect.origin.y + (rect.size.height - ICON) / 2.0,
+                        ),
+                        NSSize::new(ICON, ICON),
+                    );
+                    palette::HAIRLINE.resolve(dark).setFill();
+                    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0)
+                        .fill();
+                    let letter = letter(&tab.label());
+                    let width = palette::text_width(&letter);
+                    palette::draw_text(
+                        &letter,
+                        NSRect::new(
+                            NSPoint::new(
+                                square.origin.x + (ICON - width) / 2.0,
+                                square.origin.y - 0.5,
+                            ),
+                            NSSize::new(width + 1.0, 17.0),
+                        ),
+                        &palette::MUTED.resolve(dark),
+                    );
                 }
                 if titled {
                     let right = if crossed { 30.0 } else { 12.0 };
@@ -400,6 +507,14 @@ impl Strip {
             }
         });
     }
+}
+
+/// The first letter of what a tab says, upper case; a dot for nothing.
+fn letter(label: &str) -> String {
+    label
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or_else(|| "•".to_owned(), |c| c.to_uppercase().collect())
 }
 
 fn pill(rect: NSRect) -> Retained<NSBezierPath> {
@@ -461,9 +576,13 @@ fn progress(rect: NSRect, done: f64, color: &NSColor) {
 mod tests {
     use super::*;
 
+    fn tabs(count: usize) -> Vec<Slot> {
+        vec![Slot::Tab; count]
+    }
+
     #[test]
     fn tabs_keep_their_width_until_the_row_is_full_then_give_way() {
-        let wide = layout(1600.0, 3, None);
+        let wide = layout(1600.0, &tabs(3), None);
         assert!(
             wide.tabs
                 .iter()
@@ -471,7 +590,7 @@ mod tests {
         );
         assert!((wide.tabs[0].origin.x - palette::LIGHTS).abs() < f64::EPSILON);
 
-        let crowded = layout(900.0, 30, None);
+        let crowded = layout(900.0, &tabs(30), None);
         assert!(
             crowded
                 .tabs
@@ -483,8 +602,27 @@ mod tests {
 
     #[test]
     fn the_live_tab_widens_into_the_field() {
-        let row = layout(1600.0, 3, Some(1));
+        let row = layout(1600.0, &tabs(3), Some(1));
         assert!((row.tabs[1].size.width - palette::FIELD).abs() < f64::EPSILON);
         assert!(row.tabs[2].origin.x > row.tabs[1].origin.x + palette::FIELD);
+    }
+
+    #[test]
+    fn a_heading_keeps_its_width_and_the_tabs_share_the_rest() {
+        let row = layout(
+            900.0,
+            &[
+                Slot::Heading(70.0),
+                Slot::Tab,
+                Slot::Tab,
+                Slot::Heading(50.0),
+                Slot::Tab,
+            ],
+            None,
+        );
+        assert!((row.tabs[0].size.width - 70.0).abs() < f64::EPSILON);
+        assert!((row.tabs[3].size.width - 50.0).abs() < f64::EPSILON);
+        assert!(row.tabs[1].size.width > palette::TAB_MIN);
+        assert!(row.tabs[4].origin.x > row.tabs[3].origin.x + 50.0);
     }
 }

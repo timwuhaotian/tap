@@ -69,19 +69,34 @@ pub struct Entry {
     pub muted: bool,
 }
 
+/// A named section of ordinary tabs (Search's `TabGroup.swift`). Its tabs stay ordinary
+/// tabs; their own `groupID` says which group they are in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabGroup {
+    pub id: String,
+    pub name: String,
+    /// Folded: only its heading shows, and the tab in front if it is one of its own. A
+    /// group saved without it is an open one.
+    #[serde(default, deserialize_with = "lenient_bool")]
+    pub collapsed: bool,
+}
+
 /// The row of tabs and which one was in front; `active` is -1 for none.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub tabs: Vec<Entry>,
     pub active: i64,
-    /// Tab groups and Split View pairs are kept exactly as read, so a session written
-    /// by Search loses nothing when Tap writes it back before those features land.
+    /// The row's tab groups, in order (Search's `TabGroup`). Read leniently: a value
+    /// that doesn't make sense is taken for no groups at all, never for a file that won't
+    /// decode, which would bring back not a single tab.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "lenient"
     )]
-    pub groups: Option<serde_json::Value>,
+    pub groups: Option<Vec<TabGroup>>,
+    /// Split View pairs are kept exactly as read, so a session written by Search loses
+    /// nothing when Tap writes it back before Split View lands.
     #[serde(default, deserialize_with = "lenient_splits")]
     pub splits: serde_json::Value,
 }
@@ -160,8 +175,29 @@ mod tests {
 
         let again = Shape::decode(&shape.encode()).expect("round trip");
         assert_eq!(again, shape);
-        assert!(again.groups.is_some());
+        let groups = again.groups.expect("groups survive");
+        assert_eq!(
+            (groups[0].name.as_str(), groups[0].collapsed),
+            ("Work", false)
+        );
         assert_eq!(again.splits.as_array().map(Vec::len), Some(1));
+    }
+
+    /// Search's leniency for groups: nonsense there is no groups, not a lost session.
+    #[test]
+    fn groups_that_make_no_sense_are_no_groups() {
+        let shape = Shape::decode(
+            br#"{"tabs":[{"url":"https://a.com","title":"A"}],"active":0,
+            "groups":[{"id":"X"}]}"#,
+        )
+        .expect("the tabs still come back");
+        assert_eq!((shape.tabs.len(), shape.groups), (1, None));
+        let folded = Shape::decode(
+            br#"{"tabs":[],"active":0,
+            "groups":[{"id":"X","name":"Later","collapsed":true}]}"#,
+        )
+        .expect("decodes");
+        assert!(folded.groups.is_some_and(|g| g[0].collapsed));
     }
 
     #[test]

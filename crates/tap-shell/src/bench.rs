@@ -41,7 +41,7 @@ use tap_core::{
 use crate::{
     dialogs, downloads, links,
     menu::{self, Command},
-    rt, sleep, store, web, window,
+    profile, rt, settings, sleep, store, update, web, window,
 };
 
 /// The longest request line read: a line that never ends is not a request.
@@ -166,6 +166,29 @@ fn describe(browser: &Browser, tab: &Tab) -> Value {
         "active": browser.active() == Some(tab.id),
         "back": tab.can_back(),
         "forward": tab.can_forward(),
+        "group": tab.group().and_then(|id| browser.groups().iter().find(|g| g.id == id)).map(|g| g.name.clone()),
+        "page": tab.page().map(tap_core::internal::Page::title),
+    })
+}
+
+/// The row as drawn: group headings among the tabs, a folded group's tabs left out.
+fn row(browser: &Browser) -> Value {
+    let items: Vec<Value> = browser
+        .row()
+        .iter()
+        .map(|item| match item {
+            tap_core::groups::Item::Heading(place) => {
+                let group = &browser.groups()[*place];
+                json!({ "heading": group.name, "folded": group.collapsed })
+            }
+            tap_core::groups::Item::Tab(index) => {
+                json!({ "tab": browser.tabs()[*index].label() })
+            }
+        })
+        .collect();
+    json!({
+        "groups": browser.groups().iter().map(|g| json!({ "name": g.name, "folded": g.collapsed })).collect::<Vec<_>>(),
+        "row": items,
     })
 }
 
@@ -232,6 +255,97 @@ fn handle(request: &Value, reply: Reply) {
                 })
             });
             reply.say(out.unwrap_or_else(|| json!({ "error": "no browser" })));
+        }
+        "row" => reply.say(rt::read(row).unwrap_or_default()),
+        "fold" => {
+            // A click on a group's heading, by its place among the groups.
+            let Some(place) = request.get("group").and_then(Value::as_u64) else {
+                return reply.say(json!({ "error": "fold needs a group number" }));
+            };
+            rt::dispatch(move |browser| {
+                browser.toggle_group(usize::try_from(place).unwrap_or(usize::MAX));
+            });
+            reply.say(rt::read(row).unwrap_or_default());
+        }
+        "export-profile" => {
+            // File › Export Tap Profile… without its panel: straight to the path given.
+            let Some(path) = text("path") else {
+                return reply.say(json!({ "error": "export-profile needs a path" }));
+            };
+            match profile::write(std::path::Path::new(&path)) {
+                Ok(written) => reply.say(json!({
+                    "path": path, "tabs": written.tabs, "groups": written.groups, "settings": written.settings,
+                })),
+                Err(why) => reply.say(json!({ "error": why })),
+            }
+        }
+        "import-profile" => {
+            // File › Import Profile… without its panel, or a file opened from the Finder.
+            let Some(path) = text("path") else {
+                return reply.say(json!({ "error": "import-profile needs a path" }));
+            };
+            match profile::take(std::path::Path::new(&path)) {
+                Ok(taken) => reply.say(json!({
+                    "said": taken.said, "tabs": taken.tabs, "groups": taken.groups, "places": taken.places,
+                    "bookmarks": taken.bookmarks, "settings": taken.settings,
+                })),
+                Err(why) => reply.say(json!({ "error": why })),
+            }
+        }
+        "settings" => {
+            // Settings as it shows them; with `set`, a setting changed first, as its
+            // control would (`{"set": {"look": "dark"}}`; a merged control by its row's id).
+            if let Some(Value::Object(set)) = request.get("set") {
+                let mut kept = crate::prefs::Kept::new();
+                for (key, value) in set {
+                    let merged =
+                        tap_core::settings_index::item(key).and_then(|item| match item.control {
+                            tap_core::settings_index::Control::Merged(which) => Some(which),
+                            _ => None,
+                        });
+                    match (merged, value.as_str()) {
+                        (Some(which), Some(raw)) => {
+                            tap_core::settings_index::set_merged(&mut kept, which, raw);
+                        }
+                        _ => tap_core::settings_index::Prefs::set(&mut kept, key, value.clone()),
+                    }
+                }
+                crate::prefs::apply(mtm);
+                settings::changed();
+            }
+            if let Some(page) = text("page")
+                .as_deref()
+                .and_then(tap_core::settings_index::Page::named)
+            {
+                rt::dispatch(|browser| browser.open_page(tap_core::internal::Page::Settings));
+                settings::show_page(page);
+            }
+            if let Some(words) = text("find") {
+                rt::dispatch(|browser| browser.open_page(tap_core::internal::Page::Settings));
+                settings::find(&words);
+            }
+            let mut out = settings::describe();
+            out["engine"] = json!(rt::read(|b| b.engine.raw()));
+            out["keywords"] = json!(rt::read(|b| b
+                .keywords
+                .iter()
+                .map(|k| k.keyword.clone())
+                .collect::<Vec<_>>()));
+            reply.say(out);
+        }
+        "update" => {
+            // The updater: what it says, or a check as Check for Updates… starts one, or
+            // Restart to Update.
+            match text("action").as_deref() {
+                Some("check") => update::check_now(),
+                Some("restart") => {
+                    // Answered before Tap goes: always one answer.
+                    reply.say(update::status());
+                    return later(0.3, update::restart);
+                }
+                _ => {}
+            }
+            reply.say(update::status());
         }
         "open" => {
             let Some(url) = text("url").as_deref().and_then(address::url) else {
@@ -372,6 +486,10 @@ fn handle(request: &Value, reply: Reply) {
                 Some("closeFind") => Command::CloseFind,
                 Some("matchCase") => Command::MatchCase,
                 Some("wholeWords") => Command::WholeWords,
+                Some("settings") => Command::Settings,
+                Some("importProfile") => Command::ImportProfile,
+                Some("exportProfile") => Command::ExportProfile,
+                Some("checkForUpdates") => Command::CheckForUpdates,
                 _ => return reply.say(json!({ "error": "command needs a name" })),
             };
             menu::run(tag as isize);
@@ -424,7 +542,8 @@ fn handle(request: &Value, reply: Reply) {
             reply.say(json!({ "quitting": true }));
             later(0.3, || {
                 if let Some(mtm) = MainThreadMarker::new() {
-                    NSApplication::sharedApplication(mtm).terminate(None);
+                    // Past any sheet left open, which would keep AppKit from quitting.
+                    menu::quit_now(mtm);
                 }
             });
         }

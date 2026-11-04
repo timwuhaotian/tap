@@ -21,7 +21,7 @@ use std::{cell::RefCell, collections::HashMap, sync::OnceLock};
 
 use block2::RcBlock;
 use objc2::{MainThreadMarker, msg_send, rc::Retained, runtime::AnyObject};
-use objc2_foundation::{NSString, NSTimer, NSUserDefaults};
+use objc2_foundation::{NSString, NSTimer};
 use objc2_web_kit::{WKMediaCaptureState, WKWebView};
 use serde_json::Value;
 use tap_core::{browser::TabId, history};
@@ -36,7 +36,11 @@ thread_local! {
 
 /// How long a tab has to go without being looked at.
 fn wait() -> f64 {
-    let defaults = NSUserDefaults::standardUserDefaults();
+    let defaults = crate::prefs::defaults();
+    // Settings › Tabs › Sleep tabs you aren't using › Never.
+    if !tap_core::settings_index::flag(&crate::prefs::Kept::new(), "tabs.sleep") {
+        return f64::INFINITY;
+    }
     let set = defaults.doubleForKey(&NSString::from_str("sleep.after"));
     if set > 0.0 {
         return set;

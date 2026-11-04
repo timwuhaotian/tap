@@ -93,6 +93,72 @@
 				<string>public.json</string>
 			</array>
 		</dict>
+		<!-- A profile exported from Tap or Search (#845): opened from the Finder, or from
+		     AirDrop on the other Mac, it is brought in (crates/tap-shell/src/profile.rs). -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Tap Profile</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.timwuhaotian.tap.profile</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Search Profile</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>app.search.profile</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.timwuhaotian.tap.profile</string>
+			<key>UTTypeDescription</key>
+			<string>Tap Profile</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>tapprofile</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.search.profile</string>
+			<key>UTTypeDescription</key>
+			<string>Search Profile</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>searchprofile</string>
+				</array>
+			</dict>
+		</dict>
 	</array>
 	<!-- A browser goes wherever it is pointed, including http sites and localhost. -->
 	<key>NSAppTransportSecurity</key>

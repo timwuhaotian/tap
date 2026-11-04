@@ -7,6 +7,36 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.1 — 2026-11-04
+
+Settings, profiles you can carry to your other Mac with their tab groups, and Tap
+updates itself from now on (0.1.0 doesn't: download this one by hand).
+
+- **Settings** (Tap › Settings…, ⌘,), in a tab of its own as Search's is: every page,
+  group and row of Search's Settings, with a field to find a setting. What Tap does
+  already works from there: Search with (and your own engine's address), sleeping tabs,
+  light or dark, Confirm before quitting, where downloads go, making Tap the default
+  browser, clearing history, cookies or the cache, updates. Rows for what Tap can't do
+  yet show what is kept for them, dimmed, and say so. Settings use Search's own names
+  and values, so a Search profile's settings read as they are.
+- **Export and import a whole profile** as one offline file (Search's
+  [#845](https://github.com/driceroland/Search/pull/845) format): File › Export Tap
+  Profile… writes a `.tapprofile` and offers it to AirDrop, Mail or Messages; on the
+  other Mac, open it (or File › Import Profile…) and its tabs come in with their
+  groups, folded or open as they were, along with its history, bookmarks and settings.
+  Search's `.searchprofile` files come in the same way. Sign-ins, passwords and cookies
+  never go in the file. Spaces, pins and extensions of their own come later; a
+  profile's tabs from several spaces come in one after another.
+- **Tab groups in the row.** A group's name heads its tabs; click it to fold the group
+  to its name (and the tab you're on, if it's one of its own) or open it again. Groups
+  come back after a relaunch, and a link opened from a grouped tab stays in the group.
+  A narrow tab whose icon hasn't arrived yet shows its first letter.
+- **Tap updates itself**, as Kil does: it checks a few seconds after it opens and every
+  six hours (Settings › About › Install updates on its own), or when you choose Tap ›
+  Check for Updates…. A new version is downloaded and checked (its checksum, Developer
+  ID and Apple's notarization) and installs when Tap quits; Restart Now does it at
+  once and opens the new Tap.
+
 ## 0.1.0 — 2026-11-04
 
 The first release: Tap browses, and can be the Mac's browser. Much of Search is still

@@ -5,7 +5,7 @@
 //! redraws only what they name. Anything that has to happen to a web view is pushed as
 //! an [`Effect`] and carried out by the shell after the model is let go of.
 
-use std::time::Instant;
+use std::{collections::HashMap, time::Instant};
 
 use bitflags::bitflags;
 
@@ -14,10 +14,12 @@ use crate::{
     crash::{CrashCount, PageEnd},
     engine::{self, Engine},
     find::{self, Find},
-    fnd::Url,
+    fnd::{self, Url},
+    groups::{self, Item},
     history::{self, History, Suggestion},
+    internal::{self, Page},
     keyword::{self, Keyword},
-    session,
+    session::{self, TabGroup},
 };
 
 /// A tab's identity for as long as the app runs. Not saved: a restored tab gets a new one.
@@ -211,6 +213,21 @@ impl Tab {
     pub fn is_blank(&self) -> bool {
         self.url.is_empty()
     }
+    /// One of Tap's own pages, drawn by Tap where a web page would be.
+    #[must_use]
+    pub fn page(&self) -> Option<Page> {
+        internal::page(&self.url)
+    }
+    /// Under Tap's own scheme: never handed to WebKit, whether Tap has the page or not.
+    #[must_use]
+    pub fn is_internal(&self) -> bool {
+        internal::is_internal(&self.url)
+    }
+    /// The group the tab is in, by its identity.
+    #[must_use]
+    pub fn group(&self) -> Option<&str> {
+        self.entry.group_id.as_deref()
+    }
 
     /// What the tab says: the name you gave it, the page's title, the address until
     /// there is a title, or "New Tab" (Search's `Tab.label`).
@@ -218,6 +235,9 @@ impl Tab {
     pub fn label(&self) -> String {
         if let Some(name) = self.entry.name.as_deref().filter(|n| !n.is_empty()) {
             return name.to_owned();
+        }
+        if let Some(page) = self.page() {
+            return page.title().to_owned();
         }
         if !self.title.is_empty() {
             return self.title.clone();
@@ -289,6 +309,8 @@ pub struct Browser {
     history_changed: bool,
     /// The find bar (⌘F), for whichever tab is in front.
     find: Find,
+    /// The row's tab groups, in order; each tab's entry says which it is in.
+    groups: Vec<TabGroup>,
     next: u64,
 }
 
@@ -318,6 +340,7 @@ impl Browser {
             history: History::default(),
             history_changed: false,
             find: Find::default(),
+            groups: Vec::new(),
             next: 1,
         };
         let id = browser.make_tab();
@@ -334,21 +357,16 @@ impl Browser {
             return browser;
         }
         browser.tabs.clear();
+        browser.groups = unique(shape.groups.unwrap_or_default());
         for entry in shape.tabs {
-            let id = TabId(browser.next);
-            browser.next += 1;
-            let mut tab = Tab::new(id);
-            tab.url.clone_from(&entry.url);
-            tab.title.clone_from(&entry.title);
-            // Sessions written before tabs kept it start counting at launch.
-            tab.touched = entry.touched.unwrap_or(tab.touched);
-            tab.entry = entry;
+            let tab = browser.tab_from(entry);
             browser.tabs.push(tab);
         }
         let front = usize::try_from(shape.active)
             .ok()
             .and_then(|i| browser.tabs.get(i))
             .map(|t| t.id);
+        browser.order();
         if let Some(id) = front {
             browser.select(id);
         } else {
@@ -358,6 +376,49 @@ impl Browser {
         }
         browser.session_changed = false;
         browser
+    }
+
+    /// A tab as a session keeps it, asleep until it is shown.
+    fn tab_from(&mut self, entry: session::Entry) -> Tab {
+        let id = TabId(self.next);
+        self.next += 1;
+        let mut tab = Tab::new(id);
+        tab.url.clone_from(&entry.url);
+        tab.title.clone_from(&entry.title);
+        // Sessions written before tabs kept it start counting at launch.
+        tab.touched = entry.touched.unwrap_or(tab.touched);
+        tab.entry = entry;
+        tab
+    }
+
+    /// The row put back in its one order (see [`groups`]): a tab whose group is gone is
+    /// in none, the tabs stand pins first, then group by group, then the rest, each
+    /// keeping its place among its own, and a group left with no tab goes.
+    fn order(&mut self) {
+        for tab in &mut self.tabs {
+            if tab
+                .entry
+                .group_id
+                .as_deref()
+                .is_some_and(|id| !self.groups.iter().any(|g| g.id == id))
+            {
+                tab.entry.group_id = None;
+            }
+        }
+        let groups = &self.groups;
+        self.tabs
+            .sort_by_cached_key(|tab| groups::rank(&tab.entry, groups));
+        self.prune();
+    }
+
+    /// A group lasts as long as its tabs.
+    fn prune(&mut self) {
+        let entries: Vec<&session::Entry> = self.tabs.iter().map(|t| &t.entry).collect();
+        let kept = groups::kept(&self.groups, &entries);
+        if kept.len() != self.groups.len() {
+            self.groups = kept;
+            self.dirty.insert(BrowserFields::TABS);
+        }
     }
 
     fn make_tab(&mut self) -> TabId {
@@ -439,26 +500,152 @@ impl Browser {
         &self.history
     }
 
+    /// A `history.json` from elsewhere (a profile file) added to this one, as Search's
+    /// import takes it: a place already here keeps the larger count. Answers how many
+    /// places came in.
+    pub fn take_history(&mut self, data: &[u8]) -> usize {
+        let taken = self.history.take_file(data, history::now());
+        self.history_changed |= taken > 0;
+        taken
+    }
+
+    /// Settings › Privacy › Clear › History.
+    pub fn clear_history(&mut self) {
+        self.history = History::default();
+        self.history_changed = true;
+    }
+
     /// The session as Search writes it.
     #[must_use]
     pub fn shape(&self) -> session::Shape {
+        let kept: Vec<&Tab> = self.tabs.iter().filter(|t| !t.is_blank()).collect();
+        // Counted among the tabs written, not the row: a new tab before it isn't kept.
         let active = self
             .active
-            .and_then(|id| self.index(id))
+            .and_then(|id| kept.iter().position(|t| t.id == id))
             .map_or(-1, |i| i64::try_from(i).unwrap_or(-1));
+        let entries: Vec<&session::Entry> = kept.iter().map(|t| &t.entry).collect();
+        let groups = groups::kept(&self.groups, &entries);
         session::Shape {
-            tabs: self
-                .tabs
-                .iter()
-                .filter(|t| !t.is_blank())
-                .map(Tab::entry)
-                .collect(),
-            active: if self.active_tab().is_some_and(Tab::is_blank) {
-                -1
-            } else {
-                active
-            },
+            tabs: kept.iter().map(|t| t.entry()).collect(),
+            active,
+            groups: (!groups.is_empty()).then_some(groups),
             ..session::Shape::default()
+        }
+    }
+
+    // MARK: groups
+
+    /// The row's tab groups, in order.
+    #[must_use]
+    pub fn groups(&self) -> &[TabGroup] {
+        &self.groups
+    }
+
+    /// What the row shows, left to right: group headings among the tabs, a folded
+    /// group's tabs left out but for the one in front.
+    #[must_use]
+    pub fn row(&self) -> Vec<Item> {
+        let entries: Vec<(&session::Entry, bool)> = self
+            .tabs
+            .iter()
+            .map(|t| (&t.entry, Some(t.id) == self.active))
+            .collect();
+        groups::row(&entries, &self.groups)
+    }
+
+    /// A click on a group's heading folds it, or opens it again (Search's
+    /// `toggleTabGroup`).
+    pub fn toggle_group(&mut self, place: usize) {
+        let Some(group) = self.groups.get_mut(place) else {
+            return;
+        };
+        group.collapsed = !group.collapsed;
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// Sessions from elsewhere (a profile file), their tabs added after this row's with
+    /// their groups as they were, folded or not. Each group gets a fresh identity, so
+    /// the same file brought in twice makes two groups rather than one that two rows
+    /// fight over. A tab of a page Tap can't show (Search's own History, say) stays out.
+    /// The tabs come in asleep; the one that was in front in the first session comes
+    /// in front. A lone new tab gives way. Answers how many tabs and groups came in.
+    pub fn take_tabs(&mut self, shapes: Vec<session::Shape>) -> (usize, usize) {
+        let mut made: Vec<String> = Vec::new();
+        let mut came: Vec<TabId> = Vec::new();
+        let mut front = None;
+        for shape in shapes {
+            let mut fresh: HashMap<String, String> = HashMap::new();
+            for group in unique(shape.groups.unwrap_or_default()) {
+                let id = fnd::uuid();
+                fresh.insert(group.id.clone(), id.clone());
+                made.push(id.clone());
+                self.groups.push(TabGroup { id, ..group });
+            }
+            for (index, mut entry) in shape.tabs.into_iter().enumerate() {
+                let Some(url) = internal::from_search(&entry.url).filter(|u| !u.is_empty()) else {
+                    continue;
+                };
+                entry.url = url;
+                entry.group_id = entry.group_id.and_then(|g| fresh.get(&g).cloned());
+                let tab = self.tab_from(entry);
+                if front.is_none() && i64::try_from(index).ok() == Some(shape.active) {
+                    front = Some(tab.id);
+                }
+                came.push(tab.id);
+                self.tabs.push(tab);
+            }
+        }
+        let Some(&first) = came.first() else {
+            self.prune();
+            return (0, 0);
+        };
+        if self.tabs.len() > came.len() {
+            let blank = self.tabs[0].id;
+            if self.tabs.len() == came.len() + 1 && self.tabs[0].is_blank() {
+                self.tabs.remove(0);
+                self.effects.push(Effect::Discard(blank));
+                if self.active == Some(blank) {
+                    self.active = None;
+                }
+            }
+        }
+        self.order();
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+        self.select(front.unwrap_or(first));
+        let groups = self.groups.iter().filter(|g| made.contains(&g.id)).count();
+        (came.len(), groups)
+    }
+
+    // MARK: Tap's own pages
+
+    /// Settings (⌘,), or another of Tap's own pages: the tab it is already in, else the
+    /// new tab in front, else a tab of its own at the end.
+    pub fn open_page(&mut self, page: Page) {
+        if let Some(id) = self
+            .tabs
+            .iter()
+            .find(|t| t.page() == Some(page))
+            .map(|t| t.id)
+        {
+            self.select(id);
+            return;
+        }
+        let Some(url) = Url::parse(&page.address()) else {
+            return;
+        };
+        match self.active {
+            Some(id) if self.active_tab().is_some_and(Tab::is_blank) => {
+                if self.editing.take().is_some() {
+                    self.dirty.insert(BrowserFields::EDITING);
+                }
+                self.go(id, &url);
+            }
+            _ => {
+                self.open(Some(&url), true, None);
+            }
         }
     }
 
@@ -507,6 +694,9 @@ impl Browser {
         }
         tab.awake = true;
         tab.dirty.insert(TabFields::AWAKE);
+        if tab.is_internal() {
+            return;
+        }
         let url = tab.url.clone();
         self.effects.push(Effect::Load { tab: id, url });
     }
@@ -518,13 +708,20 @@ impl Browser {
         self.next += 1;
         let mut tab = Tab::new(id);
         tab.opener = opener;
+        // A link from a group stays in it (Search's tabs.newPlace note).
+        tab.entry.group_id = opener
+            .and_then(|from| self.tab(from))
+            .filter(|from| from.entry.pin.is_none())
+            .and_then(|from| from.entry.group_id.clone());
         if let Some(url) = url {
             url.as_str().clone_into(&mut tab.url);
             tab.awake = true;
-            self.effects.push(Effect::Load {
-                tab: id,
-                url: tab.url.clone(),
-            });
+            if !tab.is_internal() {
+                self.effects.push(Effect::Load {
+                    tab: id,
+                    url: tab.url.clone(),
+                });
+            }
         }
         let place = opener
             .and_then(|from| {
@@ -536,6 +733,7 @@ impl Browser {
             })
             .unwrap_or(self.tabs.len());
         self.tabs.insert(place, tab);
+        self.order();
         self.link_run = opener.map(|from| LinkRun {
             opener: from,
             last: id,
@@ -574,6 +772,7 @@ impl Browser {
             let fresh = TabId(self.next);
             self.next += 1;
             self.tabs[0] = Tab::new(fresh);
+            self.groups.clear();
             self.active = Some(fresh);
             self.dirty
                 .insert(BrowserFields::TABS | BrowserFields::ACTIVE);
@@ -584,6 +783,7 @@ impl Browser {
         self.remember(index);
         self.effects.push(Effect::Discard(id));
         self.tabs.remove(index);
+        self.prune();
         self.dirty.insert(BrowserFields::TABS);
         self.session_changed = true;
         if self.active == Some(id) {
@@ -617,6 +817,8 @@ impl Browser {
         }
         let place = index.min(self.tabs.len());
         self.tabs.insert(place, tab);
+        // Its group may have gone with it: then it comes back in none.
+        self.order();
         self.dirty.insert(BrowserFields::TABS);
         self.session_changed = true;
         self.select(id);
@@ -831,11 +1033,17 @@ impl Browser {
         tab.dead = false;
         tab.dirty
             .insert(TabFields::URL | TabFields::TITLE | TabFields::FAILURE | TabFields::AWAKE);
+        let internal = tab.is_internal();
         self.session_changed = true;
-        self.effects.push(Effect::Load {
-            tab: id,
-            url: url.as_str().to_owned(),
-        });
+        if internal {
+            // Its web view, if it had one, has nothing to show now.
+            self.effects.push(Effect::Discard(id));
+        } else {
+            self.effects.push(Effect::Load {
+                tab: id,
+                url: url.as_str().to_owned(),
+            });
+        }
         self.effects.push(Effect::FocusPage(id));
     }
 
@@ -875,7 +1083,10 @@ impl Browser {
 
     /// ⌘F: the bar, with the keys in its field and its word selected. Only over a page.
     pub fn open_find(&mut self) {
-        if self.active_tab().is_none_or(Tab::is_blank) {
+        if self
+            .active_tab()
+            .is_none_or(|t| t.is_blank() || t.is_internal())
+        {
             return;
         }
         self.find.show();
@@ -949,7 +1160,7 @@ impl Browser {
     pub fn reload(&mut self) {
         let Some(id) = self.active else { return };
         let Some(tab) = self.tab_mut(id) else { return };
-        if tab.url.is_empty() {
+        if tab.url.is_empty() || tab.is_internal() {
             return;
         }
         // Try again on a page that kept crashing: its process is gone, so the address
@@ -1024,6 +1235,7 @@ impl Browser {
         let opener = tab.opener.filter(|o| self.index(*o).is_some());
         self.effects.push(Effect::Discard(id));
         self.tabs.remove(index);
+        self.prune();
         self.dirty.insert(BrowserFields::TABS);
         self.session_changed = true;
         if self.active == Some(id) {
@@ -1048,6 +1260,9 @@ impl Browser {
         }
         if tab.is_blank() {
             return Some("blank");
+        }
+        if tab.is_internal() {
+            return Some("one of Tap's own pages");
         }
         if !tab.awake || tab.stale {
             return Some("already asleep");
@@ -1178,6 +1393,18 @@ impl Browser {
         self.effects.push(Effect::Reload(id));
         Recovery::LoadedAgain
     }
+}
+
+/// Groups by identity, the first of each kept: two with one identity would be one group
+/// drawn twice.
+fn unique(groups: Vec<TabGroup>) -> Vec<TabGroup> {
+    let mut seen: Vec<TabGroup> = Vec::with_capacity(groups.len());
+    for group in groups {
+        if !seen.iter().any(|g| g.id == group.id) {
+            seen.push(group);
+        }
+    }
+    seen
 }
 
 #[cfg(test)]
@@ -1395,6 +1622,190 @@ mod tests {
             !effects.iter().any(|e| matches!(e, Effect::Save(_))),
             "restoring changes nothing to save"
         );
+    }
+
+    /// A session as Search writes one with groups: tabs of a group need not stand
+    /// together in the file, and a folded group's tabs stay out of the row.
+    fn grouped() -> session::Shape {
+        let shape = r#"{"tabs":[
+            {"url":"https://loose.com","title":"Loose"},
+            {"url":"https://a1.com","title":"A1","groupID":"AAAAAAAA-0000-4000-8000-000000000001"},
+            {"url":"https://b1.com","title":"B1","groupID":"BBBBBBBB-0000-4000-8000-000000000002"},
+            {"url":"https://a2.com","title":"A2","groupID":"AAAAAAAA-0000-4000-8000-000000000001"},
+            {"url":"https://gone.com","title":"Gone","groupID":"CCCCCCCC-0000-4000-8000-000000000003"}],
+          "active":3,
+          "groups":[{"id":"AAAAAAAA-0000-4000-8000-000000000001","name":"软件开发","collapsed":true},
+                    {"id":"BBBBBBBB-0000-4000-8000-000000000002","name":"AI Providers","collapsed":false}]}"#;
+        session::Shape::decode(shape.as_bytes()).expect("decodes")
+    }
+
+    fn urls(browser: &Browser) -> Vec<&str> {
+        browser.tabs().iter().map(Tab::url).collect()
+    }
+
+    #[test]
+    fn a_session_with_groups_comes_back_group_by_group() {
+        let browser = Browser::restored(grouped());
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://a1.com",
+                "https://a2.com",
+                "https://b1.com",
+                "https://loose.com",
+                "https://gone.com"
+            ],
+            "each group's tabs together, in the groups' order; a tab of no known group is loose"
+        );
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://a2.com"));
+        // The first group is folded: its heading, and of its tabs only the one in front.
+        assert_eq!(
+            browser.row(),
+            [
+                Item::Heading(0),
+                Item::Tab(1),
+                Item::Heading(1),
+                Item::Tab(2),
+                Item::Tab(3),
+                Item::Tab(4)
+            ]
+        );
+        let shape = browser.shape();
+        let groups = shape.groups.expect("groups are written back");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.name.as_str(), g.collapsed))
+                .collect::<Vec<_>>(),
+            [("软件开发", true), ("AI Providers", false)]
+        );
+        assert_eq!(shape.active, 1);
+        assert_eq!(shape.tabs[4].group_id, None);
+    }
+
+    #[test]
+    fn a_heading_folds_its_group_and_a_link_from_a_group_stays_in_it() {
+        let mut browser = Browser::restored(grouped());
+        browser.toggle_group(0);
+        assert!(!browser.groups()[0].collapsed);
+        assert_eq!(
+            browser.row().len(),
+            7,
+            "every tab shows once its group is open"
+        );
+        let a1 = browser.tabs()[0].id;
+        let link = browser.open(Some(&url("https://a3.com")), false, Some(a1));
+        assert_eq!(
+            browser.tab(link).and_then(Tab::group),
+            browser.tabs()[0].group()
+        );
+        assert_eq!(
+            urls(&browser)[..3],
+            ["https://a1.com", "https://a3.com", "https://a2.com"]
+        );
+        // The group goes with its last tab.
+        let b1 = browser.tabs()[3].id;
+        browser.close(b1);
+        assert_eq!(browser.groups().len(), 1);
+        assert!(!browser.row().contains(&Item::Heading(1)));
+    }
+
+    #[test]
+    fn a_profile_s_tabs_come_in_with_their_groups_and_a_lone_new_tab_gives_way() {
+        let mut browser = Browser::new();
+        let (tabs, groups) = browser.take_tabs(vec![grouped()]);
+        assert_eq!((tabs, groups), (5, 2));
+        assert_eq!(browser.tabs().len(), 5, "the new tab gave way");
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://a2.com"));
+        assert!(
+            browser.tabs().iter().filter(|t| t.awake()).count() == 1,
+            "only the tab in front loads"
+        );
+        assert!(
+            !browser
+                .groups()
+                .iter()
+                .any(|g| g.id == "AAAAAAAA-0000-4000-8000-000000000001"),
+            "each group has a fresh identity"
+        );
+
+        // Brought in twice: two of each group, never one shared by both.
+        let (tabs, groups) = browser.take_tabs(vec![grouped()]);
+        assert_eq!((tabs, groups, browser.groups().len()), (5, 2, 4));
+        assert_eq!(browser.tabs().len(), 10);
+        let names: Vec<&str> = browser.groups().iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["软件开发", "AI Providers", "软件开发", "AI Providers"]
+        );
+        assert!(
+            browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Save(_)))
+        );
+    }
+
+    #[test]
+    fn search_s_own_pages_come_over_as_tap_s_or_not_at_all() {
+        let shape = session::Shape::decode(
+            br#"{"tabs":[{"url":"search://settings","title":"Settings"},
+                         {"url":"search://history","title":"History"}],"active":0}"#,
+        )
+        .expect("decodes");
+        let mut browser = with_pages(&["https://a.com"]);
+        assert_eq!(browser.take_tabs(vec![shape]).0, 1);
+        assert_eq!(urls(&browser), ["https://a.com", "tap://settings"]);
+    }
+
+    #[test]
+    fn settings_is_a_page_of_tap_s_own_that_never_reaches_webkit() {
+        let mut browser = with_pages(&["https://a.com"]);
+        browser.open_page(Page::Settings);
+        let effects = browser.take_effects();
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::Load { .. })),
+            "nothing is loaded: {effects:?}"
+        );
+        let settings = browser.active_tab().expect("in front");
+        assert_eq!(
+            (settings.url(), settings.label().as_str()),
+            ("tap://settings", "Settings")
+        );
+        assert!(browser.awake_because(settings.id).is_some());
+        // Asked for again, the same tab comes in front.
+        let first = browser.tabs()[0].id;
+        browser.select(first);
+        browser.open_page(Page::Settings);
+        assert_eq!(browser.tabs().len(), 2);
+        assert_eq!(
+            browser.active_tab().and_then(Tab::page),
+            Some(Page::Settings)
+        );
+        browser.open_find();
+        assert!(!browser.find().open(), "no finding in Tap's own page");
+        // Restored, it comes back the same way, still without a load.
+        let mut again = Browser::restored(browser.shape());
+        assert!(
+            !again
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Load { .. }))
+        );
+    }
+
+    #[test]
+    fn the_tab_in_front_is_counted_among_the_tabs_written() {
+        let mut browser = Browser::new();
+        let blank = browser.active().expect("a tab");
+        let second = browser.open(Some(&url("https://b.com")), false, None);
+        browser.select(second);
+        assert_eq!(
+            browser.shape().active,
+            0,
+            "the new tab before it isn't written"
+        );
+        let _ = blank;
     }
 
     fn visited(pages: &[(&str, &str)]) -> Browser {

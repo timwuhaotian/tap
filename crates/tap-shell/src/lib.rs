@@ -17,10 +17,15 @@ mod offers;
 mod oslog;
 mod page_find;
 mod palette;
+mod prefs;
+mod profile;
 mod rt;
+mod settings;
 mod sleep;
 mod store;
 mod strip;
+mod update;
+mod update_window;
 mod web;
 mod window;
 
@@ -40,15 +45,21 @@ pub fn run() {
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     let commands = menu::Commands::new(mtm);
     app.setDelegate(Some(ProtocolObject::from_ref(&*commands)));
-    app.setMainMenu(Some(&menu::main_menu(mtm, &commands)));
+    let (bar, update_item) = menu::main_menu(mtm, &commands);
+    app.setMainMenu(Some(&bar));
+    update_window::install(commands.clone());
 
     let mut browser = Browser::restored(store::read_session());
     let (history, rewrite) = store::read_history();
     browser.set_history(history, rewrite);
     rt::install(browser);
+    prefs::apply(mtm);
     window::open(mtm, &commands);
     bench::start();
     sleep::start(mtm);
+    if let Some(item) = update_item {
+        update::start(item);
+    }
     // A window that opens on a new tab opens with the keys in its field.
     rt::dispatch(|browser| {
         if browser.active_tab().is_some_and(Tab::is_blank) && browser.editing().is_none() {

@@ -363,6 +363,69 @@ impl History {
         true
     }
 
+    /// A place brought in from elsewhere: another browser's history, or a profile file
+    /// (Search's `History.take`). The larger of the two counts, not their sum, so the
+    /// same file brought in twice doesn't count every visit twice. Answers whether it was
+    /// a place Tap keeps.
+    pub fn take(&mut self, url: &str, title: &str, count: i64, last: f64) -> bool {
+        if !is_web(url) {
+            return false;
+        }
+        let Some(url) = kept(url) else { return false };
+        let key = identity(&url);
+        if key.is_empty() {
+            return false;
+        }
+        if let Some(seen) = self.visits.get_mut(&key) {
+            seen.count = seen.count.max(count).min(MOST_VISITS);
+            if last > seen.last {
+                seen.last = last;
+            }
+            if seen.title.is_empty() {
+                title.clone_into(&mut seen.title);
+            }
+            return true;
+        }
+        self.visits.insert(
+            key.clone(),
+            Visit {
+                url,
+                key: key.clone(),
+                title: title.to_owned(),
+                count: count.clamp(0, MOST_VISITS),
+                last,
+            },
+        );
+        self.remember(&key);
+        true
+    }
+
+    /// Every place a `history.json` holds, as [`History::take`] takes them. Read
+    /// leniently, as Search's `History.Entry` is: only the address has to be there. Answers
+    /// how many were taken.
+    pub fn take_file(&mut self, data: &[u8], now: f64) -> usize {
+        #[derive(Deserialize)]
+        struct Row {
+            url: String,
+            #[serde(default)]
+            title: String,
+            #[serde(default = "one")]
+            count: i64,
+            #[serde(default)]
+            last: Option<f64>,
+        }
+        fn one() -> i64 {
+            1
+        }
+        let Ok(rows) = serde_json::from_slice::<Vec<serde_json::Value>>(data) else {
+            return 0;
+        };
+        rows.into_iter()
+            .filter_map(|row| serde_json::from_value::<Row>(row).ok())
+            .filter(|row| self.take(&row.url, &row.title, row.count, row.last.unwrap_or(now)))
+            .count()
+    }
+
     /// The page's title arrived, or changed. Answers whether anything changed.
     pub fn retitle(&mut self, url: &str, title: &str) -> bool {
         let key = identity(url);
@@ -600,6 +663,27 @@ mod tests {
     }
 
     /// Search's `testLegacyLoadRebuildsIdentityFromStoredURL`.
+    /// Search's import rule: a place brought in twice keeps the larger count, never the
+    /// sum, and a row needs only its address.
+    #[test]
+    fn places_brought_in_twice_are_not_counted_twice() {
+        let mut history = History::default();
+        let file =
+            br#"[{"url":"https://example.com/a","key":"x","title":"A","count":5,"last":815000000},
+                        {"url":"https://example.com/b"},
+                        {"url":"ftp://example.com/c","count":3},
+                        {"title":"no address"}]"#;
+        assert_eq!(history.take_file(file, NOW), 2);
+        assert_eq!(history.take_file(file, NOW), 2);
+        let a = &pages(&history, "example.com")[0];
+        assert_eq!((a.count, a.title.as_str(), a.last), (5, "A", 815_000_000.0));
+        assert_eq!(
+            history.len(),
+            2,
+            "the bad scheme and the row without an address stay out"
+        );
+    }
+
     #[test]
     fn loading_rebuilds_keys_from_addresses_and_merges_what_meets() {
         let file = br#"[

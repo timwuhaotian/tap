@@ -21,13 +21,16 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize, NSString};
 use objc2_web_kit::WKWebView;
-use tap_core::browser::{Browser, BrowserFields, Editing, TabFields, TabId};
+use tap_core::{
+    browser::{Browser, BrowserFields, Editing, TabFields, TabId},
+    internal::Page,
+};
 
 use crate::{
     dialogs, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
-    palette, rt,
+    palette, rt, settings,
     strip::Strip,
     web,
 };
@@ -35,6 +38,8 @@ use crate::{
 /// What the views need from the model, read in one go while it is borrowed.
 pub struct View {
     active: Option<TabId>,
+    /// One of Tap's own pages, in place of a web page.
+    page: Option<Page>,
     failure: Option<String>,
     editing: Option<Editing>,
     can_back: bool,
@@ -49,6 +54,7 @@ impl View {
         let tab = browser.active_tab();
         View {
             active: browser.active(),
+            page: tab.and_then(tap_core::browser::Tab::page),
             failure: tab.and_then(|t| t.failure().map(str::to_owned)),
             editing: browser.editing().cloned(),
             can_back: tab.is_some_and(tap_core::browser::Tab::can_back),
@@ -361,6 +367,7 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
 
 /// The active tab's page in the stage, or what it says in place of the page.
 fn show_page(views: &Views, view: &View) {
+    show_own_page(views, view.page);
     let web = view.active.and_then(web::existing);
     let previous = views.shown.replace(view.active);
     if previous != view.active
@@ -398,6 +405,33 @@ fn show_page(views: &Views, view: &View) {
             views.trouble.setHidden(false);
         }
         None => views.trouble.setHidden(true),
+    }
+}
+
+/// One of Tap's own pages in the stage, below the find bar and the field like a web page,
+/// or taken away when the tab in front is a web page.
+fn show_own_page(views: &Views, page: Option<Page>) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    match page {
+        Some(Page::Settings) => {
+            let own = settings::view(mtm, views.stage.bounds());
+            // SAFETY: a plain read of a live view's superview.
+            if unsafe { own.superview() }.as_deref() != Some(&**views.stage) {
+                own.setFrame(views.stage.bounds());
+                views.stage.addSubview_positioned_relativeTo(
+                    &own,
+                    objc2_app_kit::NSWindowOrderingMode::Below,
+                    None,
+                );
+            }
+            own.setHidden(false);
+        }
+        None => {
+            let own = settings::view(mtm, views.stage.bounds());
+            own.setHidden(true);
+        }
     }
 }
 
@@ -598,6 +632,11 @@ pub fn first_responder() -> String {
         "other".to_owned()
     })
     .unwrap_or_default()
+}
+
+/// The one window, for a sheet or a picker to hang from.
+pub fn main_window() -> Option<Retained<NSWindow>> {
+    with_views(|views| views.window.clone())
 }
 
 /// The window in front, out of the Dock if it was put there.

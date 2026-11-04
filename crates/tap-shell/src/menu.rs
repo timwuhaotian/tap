@@ -1,6 +1,8 @@
 //! The menus and their keys (Search's `App.swift` commands and `Shortcuts.swift`), and
 //! the one object every menu item and door sends its command to.
 
+use std::cell::Cell;
+
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -8,12 +10,13 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationDelegate, NSEventModifierFlags, NSMenu, NSMenuItem,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationDelegate,
+    NSApplicationTerminateReply, NSEventModifierFlags, NSMenu, NSMenuItem,
 };
 use objc2_foundation::{NSArray, NSInteger, NSNotification, NSString, NSURL};
-use tap_core::browser::Browser;
+use tap_core::{browser::Browser, identity, internal::Page, settings_index};
 
-use crate::{findbar, links, rt, store};
+use crate::{findbar, links, prefs, profile, rt, store, update, update_window};
 
 /// What a menu item or a door asks for, carried as its tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +40,15 @@ pub enum Command {
     FindOptions,
     MatchCase,
     WholeWords,
+    /// Settings… (⌘,): Tap's own page.
+    Settings,
+    ImportProfile,
+    ExportProfile,
+    /// Check for Updates…, or Restart to Update once one is ready.
+    CheckForUpdates,
+    /// The update window's buttons.
+    RestartToUpdate,
+    CloseUpdate,
     /// ⌘1 to ⌘9 are 101 to 109.
     Tab = 100,
 }
@@ -46,6 +58,27 @@ pub fn run(tag: NSInteger) {
     // The options menu is the bar's own business: nothing in the model changes.
     if tag == Command::FindOptions as NSInteger {
         findbar::show_options();
+        return;
+    }
+    // Panels and windows of their own, not the model's business.
+    if tag == Command::ImportProfile as NSInteger {
+        profile::choose_and_import();
+        return;
+    }
+    if tag == Command::ExportProfile as NSInteger {
+        profile::export();
+        return;
+    }
+    if tag == Command::CheckForUpdates as NSInteger {
+        update::chosen();
+        return;
+    }
+    if tag == Command::RestartToUpdate as NSInteger {
+        update::restart();
+        return;
+    }
+    if tag == Command::CloseUpdate as NSInteger {
+        update_window::close();
         return;
     }
     rt::dispatch(move |browser: &mut Browser| match tag {
@@ -85,6 +118,7 @@ pub fn run(tag: NSInteger) {
             let on = !browser.find().whole_words();
             browser.set_find_whole_words(on);
         }
+        19 => browser.open_page(Page::Settings),
         101..=109 => browser.select_number(usize::try_from(tag - 100).unwrap_or(1)),
         _ => {}
     });
@@ -100,12 +134,34 @@ define_class!(
     unsafe impl NSObjectProtocol for Commands {}
 
     unsafe impl NSApplicationDelegate for Commands {
+        #[unsafe(method(applicationShouldTerminate:))]
+        fn should_terminate(&self, app: &NSApplication) -> NSApplicationTerminateReply {
+            if QUITTING_NOW.get() || !confirms_quit() {
+                return NSApplicationTerminateReply::TerminateNow;
+            }
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&NSString::from_str("Quit Tap?"));
+            alert.setInformativeText(&NSString::from_str(
+                "Your tabs come back as they are when you open Tap again.",
+            ));
+            alert.addButtonWithTitle(&NSString::from_str("Quit"));
+            alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+            let _ = app;
+            if alert.runModal() == NSAlertFirstButtonReturn {
+                NSApplicationTerminateReply::TerminateNow
+            } else {
+                NSApplicationTerminateReply::TerminateCancel
+            }
+        }
+
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _note: &NSNotification) {
             // Quitting doesn't wait for the writer thread: the session goes now.
             if let Some(shape) = rt::read(Browser::shape) {
                 store::save_session_now(&shape);
             }
+            // A staged update replaces the app now, and Restart to Update opens it.
+            update::install_on_quit();
         }
 
         #[unsafe(method(application:openURLs:))]
@@ -130,6 +186,33 @@ define_class!(
         }
     }
 );
+
+thread_local! {
+    /// Restart to Update, or the bench's quit: no question first.
+    static QUITTING_NOW: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Settings › General › "Confirm before quitting", never on a test run.
+fn confirms_quit() -> bool {
+    std::env::var_os(identity::PROBE_ENV).is_none()
+        && settings_index::flag(&prefs::Kept::new(), "quit.confirm")
+}
+
+/// Quits without asking. A sheet left open on a window (a save panel, a question) would
+/// keep AppKit from quitting at all, so each is put away first, as Cancel.
+pub fn quit_now(mtm: MainThreadMarker) {
+    QUITTING_NOW.set(true);
+    let app = NSApplication::sharedApplication(mtm);
+    for window in &app.windows() {
+        if let Some(sheet) = window.attachedSheet() {
+            window.endSheet(&sheet);
+        }
+    }
+    if app.modalWindow().is_some() {
+        app.abortModal();
+    }
+    app.terminate(None);
+}
 
 impl Commands {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
@@ -214,9 +297,13 @@ fn submenu(
     holder
 }
 
-/// The menu bar, with Search's keys.
+/// The menu bar, with Search's keys, and the Tap menu's update item, which changes its
+/// title once an update is ready.
 #[allow(clippy::too_many_lines)] // one declarative table, read top to bottom as the menus are
-pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu> {
+pub fn main_menu(
+    mtm: MainThreadMarker,
+    commands: &Commands,
+) -> (Retained<NSMenu>, Option<Retained<NSMenuItem>>) {
     let option = NSEventModifierFlags::Command | NSEventModifierFlags::Option;
     let control = NSEventModifierFlags::Control;
     let control_shift = NSEventModifierFlags::Control | NSEventModifierFlags::Shift;
@@ -247,6 +334,12 @@ pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu>
             "Tap",
             vec![
                 system("About Tap", "", sel!(orderFrontStandardAboutPanel:)),
+                with(
+                    item("Check for Updates…", "", Command::CheckForUpdates),
+                    NSEventModifierFlags::empty(),
+                ),
+                separator(),
+                item("Settings…", ",", Command::Settings),
                 separator(),
                 system("Hide Tap", "h", sel!(hide:)),
                 with(
@@ -268,6 +361,17 @@ pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu>
                 // ⇧⌘T arrives as "T", which "t" with a Shift mask never matches.
                 item("Reopen Closed Tab", "T", Command::ReopenTab),
                 item("Open Location…", "l", Command::OpenLocation),
+                separator(),
+                // A profile as one offline file for your other Mac, and one from it;
+                // passwords and cookies never go in it (Search #845).
+                with(
+                    item("Import Profile…", "", Command::ImportProfile),
+                    NSEventModifierFlags::empty(),
+                ),
+                with(
+                    item("Export Tap Profile…", "", Command::ExportProfile),
+                    NSEventModifierFlags::empty(),
+                ),
                 separator(),
                 item("Close Tab", "w", Command::CloseTab),
             ],
@@ -336,5 +440,8 @@ pub fn main_menu(mtm: MainThreadMarker, commands: &Commands) -> Retained<NSMenu>
     if let Some(window_menu) = menus[5].submenu() {
         NSApplication::sharedApplication(mtm).setWindowsMenu(Some(&window_menu));
     }
-    bar
+    let update = menus[0]
+        .submenu()
+        .and_then(|menu| menu.itemWithTag(Command::CheckForUpdates as isize));
+    (bar, update)
 }

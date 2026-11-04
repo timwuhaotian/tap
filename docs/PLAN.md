@@ -439,9 +439,11 @@ The port is written by hand, never by find-and-replace.
 - Search's old Split shape is accepted.
 - Checked structurally, not byte for byte. Fixtures are synthetic, never user data.
 
-**`.searchprofile` (#845).** `tap_import::search_profile` ports the manifest,
-`AnyCodable` (`$data`/`$date`), the allowlist, collect and import.
-- Uses the `zip` crate with `enclosed_name()` against zip-slip, instead of `ditto`.
+**`.searchprofile` (#845).** `tap_import::profile` ports the manifest, the allowlist,
+collect and import; `tap_shell::prefs` carries `AnyCodable`'s `$data`/`$date` shape
+across NSUserDefaults (done in 0.1.1, §8).
+- Uses the `zip` crate (deflate only) instead of `ditto`, and never unpacks to disk:
+  files are read by flat name into memory, so a `../` name reaches nothing.
 - Tap **reads** `.searchprofile` and Safari zips, and **writes** `.tapprofile` with the
   identical layout and `format: 1`.
 
@@ -656,6 +658,86 @@ BookmarksFile, Registrable.
 - The matching Python tests are green on both apps: close_last_tab, closing_tabs,
   completion_keys, dialog_keys, link_place, new_tab_*, tab_switcher.
 
+### 0.1.1 — Settings, profile files, tab groups and the updater (brought forward)
+
+At the user's request (2026-11-04: Settings like Search's in the main menu; profile
+export and import in #845's format, tested on Search's own main profile; the profile's
+tab groups and their tabs opening on the new Mac in one go; Kil's Check for Updates and
+restart flow; then a patch release). Pieces of M3, M4, M6 and M8, each as narrow as
+that asks:
+
+- [x] **Settings** (Tap › Settings…, ⌘,), Tap's own page in a tab (`tap://settings`,
+  `tap_core::internal`; no scheme handler, never WebKit's). `tap_core::settings_index`
+  ports `SettingsIndex.swift` whole: Search's pages, groups and rows, keys, words,
+  merged controls (`TabsLayout`, `SleepChoice`, `FloatOwn`, pins keep, `PeekChoice`),
+  `applies`/`needs`, the find field. Translation's row is left out (§2). Values are
+  Search's keys and Search's defaults in NSUserDefaults; a test run keeps its own suite
+  (`com.timwuhaotian.tap.test.<world>`, `tap_shell::prefs`), never yours. The page
+  (`tap_shell::settings`) is the rail of pages with the find field, then each group's
+  card of rows with real AppKit controls (switch, segments, pop-up, buttons). **Live
+  now:** Make default (http and https), Import Profile…/Export Tap Profile…, Confirm
+  before quitting, Save to, Appearance, Sleep tabs, Search with (custom address too),
+  site shortcuts (listed; used by the field), Clear history/cookies/cache, Updates
+  (Check for Updates…, Install updates on its own), What's new. Every other row shows
+  what is kept under its keys, dimmed, "Not in Tap yet; kept for when it is"; the
+  layout, tab look and floating-⌘T rows show what Tap does for now (`fixed`). Not yet:
+  editing site shortcuts, the (i) popovers (the long text is the row's tooltip), the
+  Extensions page's list, Search's shortcut editor.
+- [x] **Profile files (#845)**: File › Export Tap Profile… and Import Profile…, and the
+  General row's buttons. `tap-import` (new crate) packs and reads #845's layout exactly
+  (`profile::pack`/`unpack`, `zip` with deflate only): manifest `format` 1 and scope
+  "profile", the store files byte for byte, `prefs.json` allowlisted by the index (77
+  keys: Search's 78 less `translate.pages`, checked against `SettingsIndex.swift`),
+  `installed.json`. Reading never unpacks to disk: flat names only, `__MACOSX` and paths
+  skipped, 64 MB a file and 256 MB in all. Export: a save sheet named
+  `Tap-profile-<day>.tapprofile`, then the share picker (AirDrop to the other Mac).
+  Import: `.tapprofile`, `.searchprofile`, or a `.zip` with a profile's manifest, from
+  the panel or opened from the Finder/AirDrop (Info.plist declares both types; asked
+  first). Its sessions' tabs come in after this row's, asleep, in their groups (fresh
+  group identities, folded as they were), the first session's front tab in front, a
+  lone new tab giving way; history merged as Search's `History.take` (larger count, not
+  the sum); bookmarks kept in `bookmarks.json` without doubles for M3; settings set and
+  applied at once. Not yet (said in the result line where it applies): spaces and
+  profiles of their own (each space's tabs come in one after another), pins as pins
+  (they come as tabs), reinstalling extensions, Search importing `.tapprofile` (it takes
+  the file renamed `.searchprofile`).
+- [x] **Tab groups in the row**: `session::TabGroup` typed (lenient, as Search's), kept
+  by the model (`tap_core::groups`): the row's one order is pins, each group's tabs in
+  the groups' order, then the rest (Search's top bar draws it so); a folded group shows
+  its name and only the tab in front if it is its own; a click on the name folds or
+  opens it; a link from a group stays in it; a group goes with its last tab; the
+  session writes them back. A narrow tab with no icon yet shows its first letter
+  (Search's "Letters"). Not yet: making, naming, dragging groups; the row scrolling when
+  too long (it stops at the doors).
+- [x] **The updater**, Kil's `update.rs` ported (`tap_shell::update`, `update_window`),
+  as §12 says. The version compared is the bundle's own. Tap › Check for Updates…
+  opens the window (checking, downloading x of y MB, verifying, ready with Later and
+  Restart Now, up to date, or why not); the item becomes "Restart to Update to x.y.z"
+  once one is staged. Restart Now and the bench's `quit` put any open sheet away first:
+  AppKit won't quit under one.
+- Checked end to end through the bench in test worlds:
+  - Search's real main profile, packed as `SearchProfile.collectCurrentProfile` packs
+    it (from `~/Library/Application Support/Search` and its defaults; a scratch fixture,
+    never committed): 27 tabs in 3 groups (软件开发 and 娱乐 folded, AI Providers open),
+    2,000 places, 368 bookmarks and 14 settings came in, the front tab in front and the
+    only one loaded, the strip drawn by eye. They came back the same after a relaunch.
+  - Tap's own export unpacks with `ditto -x -k` (what Search's import uses) into #845's
+    layout. A fresh world importing it got the same tabs, groups and folds, and the
+    settings landed in its own suite.
+  - Settings: by eye, page by page; Search with DuckDuckGo sent the field's words there;
+    the find field ("dark") shows Search's results under PAGE › GROUP headings.
+  - Updater: a copy of the build relabelled 0.0.9 and signed with the Developer ID
+    (team 43VLF3KTFZ), pointed with `TAP_UPDATE_BASE` at `releases/`, found 0.1.0,
+    downloaded it, checked its checksum, bundle id, version, team and notarization, and
+    showed it ready. Restart Now swapped the bundle (0.1.0, "Notarized Developer ID",
+    nothing left beside it) and reopened it in the same test world. It did the same with
+    the export's save sheet open. The unit test stages the committed DMG through every
+    check, as Kil's does.
+- Found on the way, in Search's #845 (the user's own PR): its import keeps only sessions
+  of spaces listed in `spaces.json`, and Search writes no `spaces.json` while Personal
+  has one space. So a profile from this Mac's Search would bring no tabs into Search.
+  Tap reads `session.json` as the first space's whether or not the list is there.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -703,6 +785,8 @@ window Python tests, and the ProfilesTests port pass.
 - Chrome, Safari, Firefox and Arc; ImportFile (html, csv, Safari zip)
 - **#841:** open tabs and groups offered in Bring Things Over
 - **#845:** File › Export Tap Profile, and import of `.searchprofile` and `.tapprofile`
+  (in since 0.1.1 for one space and one profile; spaces and profiles of their own come
+  with M4)
 - "From Search"
 
 This needs M3 (SettingsIndex) and M4 (spaces and profiles) first.
@@ -727,7 +811,7 @@ all Extension* ports pass.
 
 ### M8 — Distribution and the rest
 - Updater, Kil's design (§12), behind Search's "Check for Updates…" item and
-  `update.install` setting
+  `update.install` setting (in since 0.1.1)
 - AppleScript, sharing
 - The AI code behind the off switch
 - The remaining bench verbs
@@ -988,8 +1072,9 @@ means following these steps.
 
 **From 0.1.0** `releases/` is committed with every release, as Kil's is, and the repo
 `timwuhaotian/tap` stays public so the raw download link works. Releases before 1.0 are
-early ones: each says in the README what it doesn't do yet. Until the updater lands,
-`latest.toml` is written for it but nothing reads it, and an update is a new download.
+early ones: each says in the README what it doesn't do yet. From 0.1.1 the updater
+reads `latest.toml`; 0.1.0 has no updater, so it is the one release whose users
+download again.
 
 ### Updater (port of Kil's `update.rs`, replacing Search's appcast updater)
 
@@ -1003,8 +1088,12 @@ early ones: each says in the README what it doesn't do yet. Until the updater la
      running app>"`; and `spctl`, which confirms notarization.
   3. Stage it, and install it **when Tap quits**. Nothing restarts on its own.
 - Ad-hoc builds (no team) never update.
-- Search's **Check for Updates…** menu item and the `update.install` setting (install
-  automatically, on by default) stay, for parity.
+- Search's **Check for Updates…** menu item and the `update.install` setting (on by
+  default) stay, for parity. Off, Tap checks only when asked (Kil's meaning, not
+  Search's "tells you and waits").
+- **Restart Now** (the update window) and **Restart to Update to x.y.z** (the Tap menu,
+  once staged) quit at once, install, and open the new Tap (`open` after this process
+  is gone; a test run's `TAP_PROBE` and `TAP_UPDATE_BASE` go with it).
 - `TAP_UPDATE_BASE` overrides both URLs, and is honoured in test runs only.
 - Not carried over from Search: the signed appcast, the same-host rule, the Homebrew
   cask, the Intel build and the DMG background art.
@@ -1064,6 +1153,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | The bench came forward from M1 to check the browsing build by, and found three bugs no unit test could: `selectText:` ending the field's own editing session, focus handed out before the page was in the window, and shifted key equivalents that a real keyboard never matches (⇧⌘T must be "T"; ⌃⇧Tab is the back-tab character). |
 | 2026-11-04 | Browsing came before M1's foundations, at the user's request: the core model, runtime, window, tabs, field and web views are in (M2 progress). The bench moves up next: driving the UI with synthetic keystrokes is unreliable and can reach other apps. |
 | 2026-11-04 | The GitHub repo `timwuhaotian/tap` is public from day one, not only from 1.0. Nothing is downloadable until `releases/` is first committed at 1.0. |
+| 2026-11-04 | At the user's request, 0.1.1 brings forward Settings (Search's whole index, the rows Tap acts on live, the rest dimmed with their values), #845 profile files (export, import, opened from the Finder), tab groups in the row, and Kil's updater (§8 "0.1.1"), then ships as a patch release. Profile files are read in memory with the `zip` crate in a new `tap-import` crate, as §4 and §7 planned. |
 | 2026-11-04 | At the user's request ("全部完成后，发布0.1.0版本"), 0.1.0 is released once M2 is done, rather than waiting for full parity at 1.0: browsing, the field, history, page questions, downloads, find, sleeping tabs, session, site icons, links from other apps and #849. `releases/` is committed from 0.1.0; the README says what isn't in yet. Full parity stays the bar for 1.0. Not in 0.1.0 and needed before people rely on it: the updater (M8 in the plan, ported from Kil). |
 
 ## Appendix A — Parity tracker
@@ -1144,12 +1234,12 @@ added below this one as M1 starts.
 | ImageMenu.swift | 290 | w/image_menu, a | M5 | todo |
 | Import.swift | 1576 | i/{discovery,chromium,safari,firefox} | M6 | todo |
 | ImportArc.swift | 289 | i/arc | M6 | todo |
-| ImportFile.swift | 398 | i/file | M6 | todo |
+| ImportFile.swift | 398 | i/file; #845 part: i/profile | M6 | partial |
 | ImportPanel.swift | 572 | s/ui/import_panel | M6 | todo |
 | ImportRecord.swift | 60 | i/records | M6 | todo |
 | ImportSession.swift | 367 | i/session_snss (#841) | M1/M6 | todo |
 | Inspector.swift | 59 | w/inspector | M2 | todo |
-| InternalPages.swift | 168 | c/internal_pages, s/ui/internal_pages | M3 | todo |
+| InternalPages.swift | 168 | c/internal, s/window (stage) | M3 | partial |
 | KeptScroll.swift | 36 | a/kept-scroll, w/kept_scroll | M5 | todo |
 | KeyLayout.swift | 65 | sys/key_layout | M1 | todo |
 | Keyword.swift | 73 | c/keyword | M2 | partial |
@@ -1174,7 +1264,7 @@ added below this one as M1 starts.
 | Pins.swift | 190 | c/pins | M3 | todo |
 | Plate.swift | 271 | ui/plate | M3 | todo |
 | PopupGesture.swift | 156 | c/popup_gesture, w/relays, a | M5 | todo |
-| Prefs.swift | 818 | c/prefs | M1 | todo |
+| Prefs.swift | 818 | c/settings_index (keys, defaults, merged), s/prefs | M1 | partial |
 | Privacy.swift | 108 | c/privacy, w/privacy | M5 | todo |
 | Profiles.swift | 343 | c/profiles, w/stores, s/ui/profiles | M4 | todo |
 | Reader.swift | 594 | a/reader, c/reader, s/ui/reader_look | M5 | todo |
@@ -1182,10 +1272,10 @@ added below this one as M1 starts.
 | RecordingIndicator.swift | 217 | s/ui/recording_indicator | M5 | todo |
 | Registrable.swift | 25 | c/registrable | M1 | todo |
 | Scripting.swift | 80 | s/app/scripting | M8 | todo |
-| SearchProfile.swift (#845 branch) | 350 | i/search_profile (#845) | M6 | todo |
+| SearchProfile.swift (#845 branch) | 350 | i/profile, s/profile (#845) | M6 | partial |
 | Session.swift | 195 | c/session | M1/M2 | partial |
-| Settings.swift | 1454 | s/ui/settings/* | M3 | todo |
-| SettingsIndex.swift | 656 | c/settings_index | M3 | todo |
+| Settings.swift | 1454 | s/settings | M3 | partial |
+| SettingsIndex.swift | 656 | c/settings_index | M3 | tested |
 | Sharing.swift | 23 | s/app/sharing | M8 | todo |
 | Shield.swift | 178 | c/shield, w/shield | M5 | todo |
 | Shortcuts.swift | 502 | c/shortcuts, s/app/shortcuts | M3 | partial |
@@ -1211,14 +1301,14 @@ added below this one as M1 starts.
 | Tab.swift | 3012 | c/tab, w/{config,page_view,tab_host,spi,relays} | M2 | partial |
 | TabBar.swift | 1771 | s/ui/tab_bar/* | M2→M3 | partial |
 | TabDrag.swift | 288 | c/tab_drag, s/ui/tab_drag | M3 | todo |
-| TabGroup.swift | 32 | c/tab_group | M3 | todo |
-| TabGroups.swift | 233 | s/ui/tab_groups | M3 | todo |
+| TabGroup.swift | 32 | c/session (TabGroup), c/groups | M3 | ported |
+| TabGroups.swift | 233 | c/groups, s/strip (headings) | M3 | partial |
 | TabOffers.swift | 146 | s/ui/tab_offers | M2 | todo |
 | TabShortcutHint.swift | 26 | s/ui/tab_shortcut_hint | M3 | todo |
 | TabSwitcher.swift | 631 | c/tab_switcher, s/ui/tab_switcher | M3 | todo |
 | Translate.swift | 1076 | — (Swift-only Translation API) | — | dropped |
 | Trim.swift | 61 | sys/trim | M2 | todo |
-| Updater.swift | 605 | c/updater, s/updater | M8 | todo |
+| Updater.swift | 605 | s/update, s/update_window (Kil's design, §12) | M8 | fixed-deviation |
 | Vault.swift | 408 | sys/keychain, w/vault, i/csv | M5 | todo |
 | Welcome.swift | 460 | s/ui/welcome | M3 | todo |
 | WhatsNew.swift | 513 | c/whats_new, s/ui/whats_new | M3 | todo |

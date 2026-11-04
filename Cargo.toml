@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/tap-core", "crates/tap-shell", "crates/tap-app", "xtask"]
+members = ["crates/tap-core", "crates/tap-import", "crates/tap-shell", "crates/tap-app", "xtask"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 authors = ["timwuhaotian"]
@@ -30,6 +30,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 tap-core = { path = "crates/tap-core" }
+tap-import = { path = "crates/tap-import" }
 tap-shell = { path = "crates/tap-shell" }
 
 [workspace.lints.rust]
@@ -52,3 +53,7 @@ codegen-units = 1
 # Never unwind through AppKit or WebKit frames (docs/PLAN.md §10).
 panic = "abort"
 debug = "line-tables-only"
+
+# Cold code: run once per import or export (docs/PLAN.md §10).
+[profile.release.package.tap-import]
+opt-level = "s"

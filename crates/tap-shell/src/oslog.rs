@@ -40,8 +40,12 @@ const STRING_PRIVATE: u8 = 0x21;
 const HAS_PRIVATE: u8 = 0x01;
 const HAS_NON_SCALAR: u8 = 0x02;
 
-/// The format string, a constant inside the image as `os_log` requires.
+/// `OS_LOG_TYPE_DEFAULT`.
+const DEFAULT: u8 = 0x00;
+
+/// The format strings, constants inside the image as `os_log` requires.
 static PAGE_ENDED: &[u8] = b"A page's process ended (%{public}s) on %{private}s: %{public}s\0";
+static SAID: &[u8] = b"%{public}s\0";
 
 struct Log(*mut c_void);
 // SAFETY: an os_log handle is a process-wide, thread-safe object.
@@ -49,32 +53,56 @@ unsafe impl Send for Log {}
 // SAFETY: as above.
 unsafe impl Sync for Log {}
 
+fn handle(slot: &'static OnceLock<Log>, category: &str) -> *mut c_void {
+    slot.get_or_init(|| {
+        let subsystem = CString::new(identity::LOG_SUBSYSTEM).unwrap_or_default();
+        let category = CString::new(category).unwrap_or_default();
+        // SAFETY: two valid C strings; the handle lives for the process.
+        Log(unsafe { os_log_create(subsystem.as_ptr(), category.as_ptr()) })
+    })
+    .0
+}
+
 fn pages() -> *mut c_void {
     static PAGES: OnceLock<Log> = OnceLock::new();
-    PAGES
-        .get_or_init(|| {
-            let subsystem = CString::new(identity::LOG_SUBSYSTEM).unwrap_or_default();
-            let category = CString::new("Pages").unwrap_or_default();
-            // SAFETY: two valid C strings; the handle lives for the process.
-            Log(unsafe { os_log_create(subsystem.as_ptr(), category.as_ptr()) })
-        })
-        .0
+    handle(&PAGES, "Pages")
+}
+
+/// What the updater and profile files did: public, since nothing in it is a site.
+pub fn note(text: &str) {
+    static NOTES: OnceLock<Log> = OnceLock::new();
+    write(
+        handle(&NOTES, "Updates"),
+        DEFAULT,
+        SAID,
+        &[(STRING_PUBLIC, text)],
+    );
 }
 
 /// "A page's process ended (crash) on <private>: loaded again" (Search #849): the reason
 /// and what was done are public; the site is not.
 pub fn page_ended(reason: &str, site: &str, outcome: &str) {
-    let values = [
-        (STRING_PUBLIC, reason),
-        (STRING_PRIVATE, site),
-        (STRING_PUBLIC, outcome),
-    ];
+    write(
+        pages(),
+        ERROR,
+        PAGE_ENDED,
+        &[
+            (STRING_PUBLIC, reason),
+            (STRING_PRIVATE, site),
+            (STRING_PUBLIC, outcome),
+        ],
+    );
+}
+
+/// One line: `format` is one of the constants above, with a `%s` per value.
+fn write(log: *mut c_void, kind: u8, format: &'static [u8], values: &[(u8, &str)]) {
     let strings: Vec<CString> = values
         .iter()
         .map(|(_, text)| CString::new(*text).unwrap_or_default())
         .collect();
+    let private = values.iter().any(|(d, _)| *d == STRING_PRIVATE);
     let mut buffer = vec![
-        HAS_PRIVATE | HAS_NON_SCALAR,
+        if private { HAS_PRIVATE } else { 0 } | HAS_NON_SCALAR,
         u8::try_from(values.len()).unwrap_or(0),
     ];
     for ((descriptor, _), string) in values.iter().zip(&strings) {
@@ -87,9 +115,9 @@ pub fn page_ended(reason: &str, site: &str, outcome: &str) {
     unsafe {
         _os_log_impl(
             (&raw const __dso_handle).cast(),
-            pages(),
-            ERROR,
-            PAGE_ENDED.as_ptr().cast(),
+            log,
+            kind,
+            format.as_ptr().cast(),
             buffer.as_ptr(),
             u32::try_from(buffer.len()).unwrap_or(0),
         );

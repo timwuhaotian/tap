@@ -18,9 +18,9 @@ it in Rust (AppKit and WebKit through [`objc2`](https://github.com/madsmtm/objc2
 with its own name and icon, and with fixes of its own.
 
 > **Status: early.** Tap browses well and can be your Mac's browser, but much of
-> Search isn't in yet (below), and Tap doesn't update itself yet: download it again for
-> a newer one. [`docs/PLAN.md`](docs/PLAN.md) is the plan; its parity tracker shows
-> where each part stands.
+> Search isn't in yet (below). It updates itself; if yours never offers an update,
+> download it once more. [`docs/PLAN.md`](docs/PLAN.md) is the plan; its parity tracker
+> shows where each part stands.
 
 **Download:** [`Tap-arm64.dmg`](https://github.com/timwuhaotian/tap/raw/main/releases/Tap-arm64.dmg)
 · macOS 14 or later · Apple silicon · signed and notarized by Apple
@@ -32,6 +32,18 @@ with its own name and icon, and with fixes of its own.
   leaves pinyin and kana alone while an input method is composing.
 - **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
   ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon.
+- **Tab groups**: a group's name heads its tabs, and a click folds it away or opens it.
+- **Settings** (⌘,), laid out as Search's: every setting is there to find, and the ones
+  Tap acts on already (search engine, sleeping tabs, light or dark, downloads folder,
+  default browser, clearing data, updates) work from there.
+- **Your profile on your other Mac.** File › Export Tap Profile… writes one offline
+  file of your tabs and their groups, history, bookmarks and settings, and offers it to
+  AirDrop; open it on the other Mac and it all comes in, groups folded or open as they
+  were. Search's profile files
+  ([#845](https://github.com/driceroland/Search/pull/845)) come in too. Sign-ins,
+  passwords and cookies never go in the file.
+- **It updates itself**: checked against Apple's notarization and the developer's
+  signature, installed when Tap quits, or at once with Restart Now.
 - **Tabs come back** where you left them, and cost nothing until you look at them.
 - **Tabs you aren't using sleep** after half an hour and give their memory back; they
   wake on the same page, with Back and the scroll position. Never a tab playing sound,
@@ -45,24 +57,23 @@ with its own name and icon, and with fixes of its own.
 - **A page that keeps crashing stops reloading itself** and says so
   ([#849](https://github.com/driceroland/Search/pull/849)).
 - **Nothing phones home.** No account, no sync, no telemetry. The only requests Tap
-  makes on its own are the pages you open and their icons.
+  makes on its own are the pages you open, their icons, and a look at this
+  repository's `releases/latest.toml` every six hours for an update (Settings › About
+  turns that off).
 
 ## Still to come
 
 Everything else Search does, including:
 
-- Bookmarks, the History page, Settings, private windows, and tabs down the side,
-  pinned tabs, groups, Spaces and profiles, two pages side by side.
+- Bookmarks, the History page, private windows, and tabs down the side, pinned tabs,
+  making and naming groups, Spaces and profiles, two pages side by side.
 - **A content blocker that runs before the page**, in WebKit's network layer.
 - **Reading mode, picture-in-picture, hiding any element for good, dark pages.**
 - **Passwords and passkeys** in the macOS keychain, and **Chrome extensions** on
   WebKit's own extension engine.
 - **Import** from Chrome, Arc, Brave, Edge, Dia, Safari and Firefox, including their
   open tabs and tab groups ([#841](https://github.com/driceroland/Search/pull/841)).
-  Search's own data comes over too.
-- **A whole profile exported and imported** as one offline file
-  ([#845](https://github.com/driceroland/Search/pull/845)).
-- **Updates** that download and install themselves when Tap quits.
+  Search's own data comes over too, without exporting it first.
 
 ## Building
 

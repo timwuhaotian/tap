@@ -6,8 +6,8 @@
 //! `NSURLComponents`, the percent-encoded way Swift's `url.host()`, `url.path()`,
 //! `url.query()` and `url.fragment()` read them.
 
-use objc2::rc::Retained;
-use objc2_foundation::{NSString, NSURL, NSURLComponents};
+use objc2::{AnyThread, rc::Retained};
+use objc2_foundation::{NSString, NSURL, NSURLComponents, NSUUID};
 
 /// An absolute address, exactly as Foundation writes it.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -174,6 +174,18 @@ impl Parts {
     }
 }
 
+/// A fresh identity, written as Swift writes a `UUID`: upper case.
+#[must_use]
+pub fn uuid() -> String {
+    NSUUID::new().UUIDString().to_string()
+}
+
+/// `UUID(uuidString:)`: whether `text` is one, in any case.
+#[must_use]
+pub fn is_uuid(text: &str) -> bool {
+    NSUUID::initWithUUIDString(NSUUID::alloc(), &NSString::from_str(text)).is_some()
+}
+
 /// `URLComponents(string:)`'s host, decoded, as Search's `Engine.host(of:)` reads it.
 #[must_use]
 pub fn components_host(text: &str) -> Option<String> {
@@ -219,6 +231,14 @@ mod tests {
         assert_eq!(url.path(), "/a%20b/");
         assert_eq!(url.query().as_deref(), Some("q=1"));
         assert_eq!(url.fragment().as_deref(), Some("top"));
+    }
+
+    #[test]
+    fn identities_are_upper_case_and_read_in_any_case() {
+        let id = uuid();
+        assert_eq!(id, id.to_uppercase());
+        assert!(is_uuid(&id) && is_uuid(&id.to_lowercase()));
+        assert!(!is_uuid("personal") && !is_uuid(""));
     }
 
     #[test]

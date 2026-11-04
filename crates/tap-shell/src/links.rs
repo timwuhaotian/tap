@@ -7,15 +7,18 @@
 //! wait for it. A test run takes nothing from outside: a link from another app would
 //! bring its window forward. The bench hands links in itself (`link`).
 //!
-//! Not yet: Search's small window for links (Little), the Dock menu's New Window,
-//! staying open with no window, and Settings' "Make Tap the default browser".
+//! A profile file (`.tapprofile`, `.searchprofile`) opened from the Finder, or from
+//! AirDrop on the other Mac, is brought in rather than shown (`profile::open_file`).
+//!
+//! Not yet: Search's small window for links (Little), the Dock menu's New Window, and
+//! staying open with no window.
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSApplication;
 use objc2_foundation::{NSArray, NSURL};
 use tap_core::{fnd::Url, identity};
 
-use crate::{rt, window};
+use crate::{profile, rt, window};
 
 fn testing() -> bool {
     std::env::var_os(identity::PROBE_ENV).is_some()
@@ -27,9 +30,22 @@ pub fn opened(urls: &NSArray<NSURL>) {
         return;
     }
     for url in urls {
+        if let Some(path) = url.path().filter(|_| url.isFileURL())
+            && profile::is_profile_path(&path.to_string())
+        {
+            profile::open_file(std::path::Path::new(&path.to_string()));
+            continue;
+        }
         if let Some(address) = url.absoluteString() {
             take(&address.to_string());
         }
+    }
+}
+
+/// Tap in front, unless this is a test run, which stays off the screen it was started on.
+pub fn bring_app_forward(mtm: MainThreadMarker) {
+    if !testing() {
+        NSApplication::sharedApplication(mtm).activate();
     }
 }
 
