@@ -725,10 +725,10 @@ pub fn items() -> &'static [Item] {
                 .words(&["bug", "feedback", "report"]).control(Control::Buttons(&[("feedback", "Send Feedback")])),
             Item::new("about.notes", "updates", "sparkles", "What's new", "Every version's notes, newest first")
                 .words(&["release notes", "changelog"]).control(Control::Buttons(&[("notes", "What's New…")])),
-            Item::new("bench", "developer", "terminal", "Let a script drive Tap",
-                "A local socket for testing; its tabs never take over")
-                .more("Its tabs open beside yours with a flask on them. See ./bench.")
-                .keys(&["bench"]).words(&["automation", "script", "developer"]).control(Control::Switch("bench")),
+            Item::new("bench", "developer", "terminal", "Let agents use Tap",
+                "Coding agents on this Mac browse with the tap command; their tabs never take over")
+                .more("Off takes the tap command and its agent skill away again.")
+                .keys(&["bench"]).words(&["agents", "automation", "script", "developer", "cli"]).control(Control::Switch("bench")),
 
             // Moved to a menu, or always on: only the find field says so.
             Item::new("autocorrect", "pages", "textformat.abc.dottedunderline", "Correct spelling as you type",
@@ -853,6 +853,8 @@ pub fn default(key: &str) -> Value {
         | "passwords.save" | "passwords.fill" | "shield" | "privacy.clickIDs" | "privacy.gpc"
         | "notifications.ask" | "links.peek" | "swipe.history" | "update.install"
         | "links.show" | "float.flicks" | "autocorrect" | "toolbar.address" => on,
+        // Search's is off; Tap's agents count on it (docs/PLAN.md §8 "Agents use Tap").
+        "bench" => on,
         "look" => "system".into(),
         "sidebar.position" => "left".into(),
         "glyph" => "letters".into(),
@@ -1193,6 +1195,14 @@ mod tests {
         assert!(!applies(roomy, &prefs) && applies(left, &prefs));
         set_merged(&mut prefs, Merged::TabsLayout, "left");
         assert!(applies(roomy, &prefs) && !applies(left, &prefs));
+    }
+
+    #[test]
+    fn agents_may_drive_tap_until_it_is_switched_off() {
+        let mut prefs = Map::default();
+        assert!(flag(&prefs, "bench"));
+        prefs.set("bench", Value::Bool(false));
+        assert!(!flag(&prefs, "bench"));
     }
 
     #[test]
