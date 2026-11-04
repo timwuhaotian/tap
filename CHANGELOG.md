@@ -15,6 +15,9 @@ Picked tabs close together and move together.
   ⇧⌘T brings them all back.
 - **Picked tabs move together**: drag one of them and the others come along, side by
   side, and stay picked.
+- **Picked tabs share a group**: right-click one of them and Move to Group takes
+  them all — New Group holds them all, a group is off only when every picked tab
+  is already in it, and Remove from Group takes them all out.
 
 ## 0.1.7 — 2026-11-04
 
