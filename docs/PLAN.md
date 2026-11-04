@@ -591,8 +591,15 @@ BookmarksFile, Registrable.
   the field, the count, previous and next, Match Case and Whole Words, Done; ⌘F, ⌘G,
   ⇧⌘G, Return, ⇧Return, Esc. Checked through the bench on a page with known counts
   (7, 2 with Match Case, 6 with Whole Words), stepping both ways, and by eye.
-- [ ] Still to come for M2: sleeping tabs, icons, the os_log line for #849 (now on
-  stderr).
+- [x] #849 checked end to end in the app (2026-11-04): the bench's `crash` kills the
+  tab's WebContent process (pid from `_webProcessIdentifier`), as the system's memory
+  killer would. Two kills reload the page, the third leaves "This page kept crashing."
+  with nothing reloading behind it, ⌘R brings the page back. Each ending is in the
+  system log as Search writes it (`oslog::page_ended`, `_os_log_impl` from Rust, the site
+  private), with WebKit's private reason ("crash"):
+  `/usr/bin/log show --predicate 'subsystem == "com.timwuhaotian.tap"'` (plain `log`
+  is a zsh builtin).
+- [ ] Still to come for M2: sleeping tabs, icons.
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
 - Address parsing, engines, keywords, site search, history suggestions; the omnibox
   with inline completion (IME-safe, finding 3.5)

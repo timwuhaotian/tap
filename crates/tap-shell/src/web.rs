@@ -31,7 +31,7 @@ use tap_core::{
     fnd::Url,
 };
 
-use crate::{dialogs, downloads, page_find, rt, store, window};
+use crate::{dialogs, downloads, oslog, page_find, rt, store, window};
 
 /// What the observer watches on every web view; each change re-reads the lot.
 const OBSERVED: [&str; 6] = [
@@ -159,6 +159,21 @@ pub fn existing(tab: TabId) -> Option<Retained<WKWebView>> {
     WEBS.with_borrow(|webs| webs.get(&tab).cloned())
 }
 
+/// The page's WebContent process, through WebKit's private `_webProcessIdentifier`; 0
+/// when this WebKit doesn't say.
+pub fn process_id(web: &WKWebView) -> i32 {
+    let selector = objc2::sel!(_webProcessIdentifier);
+    // SAFETY: asked first whether the web view answers the selector; it returns a pid_t.
+    unsafe {
+        let answers: bool = msg_send![web, respondsToSelector: selector];
+        if answers {
+            msg_send![web, _webProcessIdentifier]
+        } else {
+            0
+        }
+    }
+}
+
 fn tab_of(web: &WKWebView) -> Option<TabId> {
     WEBS.with_borrow(|webs| {
         webs.iter()
@@ -268,13 +283,14 @@ fn process_ended(web: &WKWebView, end: PageEnd) {
     // What the page asked is answered as dismissed: there is no page left to answer.
     dialogs::drop_held(tab);
     rt::dispatch(move |browser| {
+        let site = browser
+            .tab(tab)
+            .and_then(|t| Url::parse(t.url()))
+            .and_then(|u| u.host())
+            .unwrap_or_default();
         let done = browser.process_ended(tab, end, Instant::now());
         // The reason and what was done are public; the site is not (Search #849).
-        eprintln!(
-            "A page's process ended ({}) on <private>: {}",
-            end.name(),
-            done.said()
-        );
+        oslog::page_ended(end.name(), &site, done.said());
     });
 }
 

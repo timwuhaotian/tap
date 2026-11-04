@@ -325,6 +325,21 @@ fn handle(request: &Value, reply: Reply) {
             unsafe { editor.doCommandBySelector(command) };
             reply.say(json!({ "field": window::field_text() }));
         }
+        "crash" => {
+            // The tab's page process, killed as the system's memory killer kills it: the
+            // way #849's loop is reproduced (WebKit's own `_killWebContentProcess` ends it
+            // quietly and never tells the delegate).
+            let Some(web) = tab_id(request).and_then(web::existing) else {
+                return reply.say(json!({ "error": "the tab has no page" }));
+            };
+            let pid = web::process_id(&web);
+            if pid <= 0 {
+                return reply.say(json!({ "error": "no page process" }));
+            }
+            // SAFETY: a signal to a process id WebKit named as this page's.
+            let killed = unsafe { libc::kill(pid, libc::SIGKILL) } == 0;
+            reply.say(json!({ "killed": killed, "process": pid }));
+        }
         "command" => {
             // A command as its menu item or the find bar's buttons send it.
             let tag = match text("name").as_deref() {

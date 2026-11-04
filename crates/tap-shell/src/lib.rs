@@ -12,6 +12,7 @@ mod downloads;
 mod findbar;
 mod menu;
 mod offers;
+mod oslog;
 mod page_find;
 mod palette;
 mod rt;
