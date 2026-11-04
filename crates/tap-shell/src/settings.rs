@@ -16,20 +16,22 @@ use std::{
 
 use block2::RcBlock;
 use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, NSObject, NSObjectProtocol},
     sel,
 };
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
-    NSControl, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSFontWeightMedium,
-    NSFontWeightSemibold, NSImage, NSImageAlignment, NSImageView, NSModalResponseOK, NSOpenPanel,
+    NSControl, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSFontAttributeName,
+    NSFontWeightMedium, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage,
+    NSImageAlignment, NSImageView, NSKernAttributeName, NSModalResponseOK, NSOpenPanel,
     NSPopUpButton, NSResponder, NSScrollView, NSSearchField, NSSegmentSwitchTracking,
     NSSegmentedControl, NSSwitch, NSTextField, NSView, NSWorkspace,
 };
 use objc2_foundation::{
-    NSArray, NSDate, NSPoint, NSProcessInfo, NSRect, NSSet, NSSize, NSString, NSURL,
+    NSArray, NSAttributedString, NSDate, NSDictionary, NSNumber, NSPoint, NSProcessInfo, NSRect,
+    NSSet, NSSize, NSString, NSURL,
 };
 use objc2_web_kit::{WKWebsiteDataStore, WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache};
 use serde_json::Value;
@@ -139,7 +141,7 @@ define_class!(
             let dark = palette::is_dark(self);
             let bounds = self.bounds();
             CARD.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, 12.0, 12.0).fill();
+            palette::card_path(bounds).fill();
             palette::HAIRLINE.resolve(dark).setFill();
             for y in self.ivars().borrow().iter() {
                 NSBezierPath::fillRect(NSRect::new(
@@ -484,7 +486,11 @@ fn build_rail(mtm: MainThreadMarker, state: &State) {
             let icon = symbol(mtm, page.icon(), RAIL_ICON);
             icon.setImageAlignment(NSImageAlignment::AlignLeft);
             icon.setContentTintColor(Some(&tint));
-            icon.setFrameOrigin(NSPoint::new(RAIL_ICON_X, y + (26.0 - RAIL_ICON) / 2.0));
+            // Centred on the pill behind the chosen page, not on the row's text.
+            icon.setFrameOrigin(NSPoint::new(
+                RAIL_ICON_X,
+                y - 1.0 + (28.0 - RAIL_ICON) / 2.0,
+            ));
             state.rail.addSubview(&icon);
             let face = if chosen { semibold() } else { medium() };
             let name = label(mtm, page.title(), 13.0, face, &tint);
@@ -531,7 +537,7 @@ define_class!(
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             palette::WASH.resolve(palette::is_dark(self)).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.bounds(), 8.0, 8.0).fill();
+            palette::pill_path(self.bounds()).fill();
         }
 
         #[unsafe(method(hitTest:))]
@@ -547,6 +553,38 @@ impl Pill {
         // SAFETY: NSView's designated initialiser.
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
+}
+
+/// The find field's empty state: why nothing matched, and why a search can come
+/// up short (rows Tap doesn't act on yet aren't listed anywhere, here included).
+fn no_results(
+    mtm: MainThreadMarker,
+    column: &Column,
+    left: f64,
+    muted: &objc2_app_kit::NSColor,
+    y: f64,
+) -> f64 {
+    let none = label(
+        mtm,
+        "No setting called that. Try other words, like dark, tabs or video",
+        13.0,
+        medium(),
+        muted,
+    );
+    none.sizeToFit();
+    none.setFrameOrigin(NSPoint::new(left + 4.0, y));
+    column.addSubview(&none);
+    let footnote = label(
+        mtm,
+        "Only settings Tap already handles are listed.",
+        11.5,
+        medium(),
+        muted,
+    );
+    footnote.sizeToFit();
+    footnote.setFrameOrigin(NSPoint::new(left + 4.0, y + 22.0));
+    column.addSubview(&footnote);
+    y + 62.0
 }
 
 fn build_column(mtm: MainThreadMarker, state: &State) {
@@ -616,17 +654,7 @@ fn build_column(mtm: MainThreadMarker, state: &State) {
             .filter(|item| shown(item))
             .collect();
         if found.is_empty() {
-            let none = label(
-                mtm,
-                "No setting called that. Try other words, like dark, tabs or video",
-                13.0,
-                medium(),
-                &muted,
-            );
-            none.sizeToFit();
-            none.setFrameOrigin(NSPoint::new(left + 4.0, y));
-            column.addSubview(&none);
-            y += 40.0;
+            y = no_results(mtm, &column, left, &muted, y);
         }
         let mut groups: Vec<&'static str> = found.iter().map(|i| i.group).collect();
         groups.dedup();
@@ -657,11 +685,38 @@ fn heading(
     let image = symbol(mtm, icon, 12.0);
     image.setFrameOrigin(NSPoint::new(left + 4.0, y + 1.0));
     column.addSubview(&image);
-    let text = label(mtm, words, 10.5, semibold(), &palette::MUTED.dynamic());
+    let ink = palette::MUTED.dynamic();
+    let text = label(mtm, words, 10.5, semibold(), &ink);
+    // Air between the capitals, as Search sets them: the string is unchanged, only
+    // drawn with a touch of kern.
+    let string = NSString::from_str(words);
+    let kern = NSNumber::new_cgfloat(0.5);
+    // SAFETY: AppKit's own attribute names, read as the constants they are.
+    let (font_key, color_key, kern_key) = unsafe {
+        (
+            NSFontAttributeName,
+            NSForegroundColorAttributeName,
+            NSKernAttributeName,
+        )
+    };
+    let face = font(10.5, semibold());
+    let attrs = NSDictionary::from_slices(
+        &[font_key, color_key, kern_key],
+        &[face.as_ref(), ink.as_ref(), kern.as_ref()],
+    );
+    // SAFETY: the dictionary holds the type AppKit expects for each name.
+    let rich = unsafe {
+        NSAttributedString::initWithString_attributes(
+            NSAttributedString::alloc(),
+            &string,
+            Some(&attrs),
+        )
+    };
+    text.setAttributedStringValue(&rich);
     text.sizeToFit();
-    text.setFrameOrigin(NSPoint::new(left + 22.0, y));
+    text.setFrameOrigin(NSPoint::new(left + 26.0, y));
     column.addSubview(&text);
-    y + 22.0
+    y + 24.0
 }
 
 fn card(mtm: MainThreadMarker) -> Retained<Card> {
@@ -710,6 +765,11 @@ fn row(
     let counts = index::applies(item, kept);
     let ink = palette::INK.dynamic();
     let muted = palette::MUTED.dynamic();
+    // A row that means nothing as things are set reads as unavailable all over,
+    // not only at its control.
+    let faded = NSColor::tertiaryLabelColor();
+    let title_ink = if counts { ink.clone() } else { faded.clone() };
+    let line_ink = if counts { muted.clone() } else { faded.clone() };
     let control = make_control(mtm, state, item, kept);
     let wide = item.kind == Kind::Wide;
     let control_width = control.as_ref().map_or(0.0, |c| c.frame().size.width);
@@ -723,13 +783,22 @@ fn row(
         index::needs(item).clone_into(&mut detail);
     }
     let icon = symbol(mtm, item.icon, 17.0);
-    let title = label(mtm, &title_of(item), 13.0, medium(), &ink);
+    icon.setContentTintColor(Some(if counts { &muted } else { &faded }));
+    let title = label(mtm, &title_of(item), 13.0, medium(), &title_ink);
     title.sizeToFit();
-    let line = wrapping(mtm, &detail, 11.5, &muted, words);
+    let title_width = title.frame().size.width;
+    let line = wrapping(mtm, &detail, 11.5, &line_ink, words);
     let text_height = 18.0 + 2.0 + line.frame().size.height;
     let mut height = (text_height + 24.0).max(ROW_MIN);
     let text_top = top + (height - text_height) / 2.0;
-    icon.setFrameOrigin(NSPoint::new(18.0, top + (height - 17.0) / 2.0));
+    let icon_y = if wide {
+        // A wide row's control sits under its words, so the icon stays with the
+        // words rather than the row's middle.
+        text_top + 1.0
+    } else {
+        top + (height - 17.0) / 2.0
+    };
+    icon.setFrameOrigin(NSPoint::new(18.0, icon_y));
     title.setFrameOrigin(NSPoint::new(TEXT_INSET, text_top));
     title.setFrameSize(NSSize::new(words, 18.0));
     line.setFrameOrigin(NSPoint::new(TEXT_INSET, text_top + 20.0));
@@ -737,6 +806,25 @@ fn row(
         for view in [&title, &line] {
             view.setToolTip(Some(&NSString::from_str(more)));
         }
+        // The rest of the story gets a seat of its own, for the pointer that never
+        // rests on the words; it carries the same tooltip and does nothing else.
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("info.circle"),
+            None,
+        );
+        // SAFETY: no target or action, so nothing is ever sent anywhere.
+        let info = unsafe {
+            NSButton::buttonWithImage_target_action(&image.unwrap_or_default(), None, None, mtm)
+        };
+        info.setBordered(false);
+        info.setContentTintColor(Some(if counts { &muted } else { &faded }));
+        info.setToolTip(Some(&NSString::from_str(more)));
+        let info_x = (TEXT_INSET + title_width + 5.0).min(TEXT_INSET + words - 15.0);
+        info.setFrame(NSRect::new(
+            NSPoint::new(info_x, text_top + 2.0),
+            NSSize::new(14.0, 14.0),
+        ));
+        card.addSubview(&info);
     }
     card.addSubview(&icon);
     card.addSubview(&title);

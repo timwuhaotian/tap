@@ -1135,6 +1135,37 @@ At the user's request (2026-11-04: "多选的tab支持一起关闭和拖动"), a
   (b d a c e), lifted together on the way and still picked after; ⌘W closed the three
   (b d left, d in front); one ⇧⌘T brought them back in place, a in front.
 
+### Unreleased — Chrome polish
+
+At the user's request (2026-11-05: "polish ui ux"), one polish-only pass over the
+tab row, address bar, menus, Settings rail, find bar and window chrome. No behaviour
+changes, no new features; the two noted deviations from Search's menu are deliberate
+(a count in Copy N Addresses, a Color submenu Search's groups lack).
+
+- [x] **Strip** (`strip.rs`): the plus always draws (only its hover fill gates on the
+  pointer); the press give lands at once under Reduce Motion as well as Low Power;
+  the live tab keeps a hover wash; a narrow tab's letter tile reads in a light window;
+  the load line reads on the live pill.
+- [x] **Address bar** (`address_bar.rs`, `offers.rs`): progress shows only while
+  loading and not editing, from zero with no stub; the badge menu anchors to the
+  capsule; the offer row keeps its full gap; the certificate lines stay readable to
+  VoiceOver.
+- [x] **Menus** (`tabmenu.rs`, `browser.rs`): no stray divider after Move to Group;
+  Copy N Addresses dims when no picked tab has a page (`Browser::can_copy_selected`,
+  tested); Color sits between dividers; the group rename sheet carries the tab's
+  helper line; the picked colour's tick is drawn into its swatch (AppKit hides a tick
+  beside an image).
+- [x] **Settings rail** (`settings.rs`): hidden-until-found rows tint fully when dimmed;
+  an info button carries the tooltip text for pointer and keyboard alike (tooltips stay);
+  the empty state says only handled settings are listed; find headings breathe; rail
+  icons sit on the pill rect, wide-row icons on the text.
+- [x] **Find bar** (`findbar.rs`): the count sizes itself and grows left, never under
+  the arrows; clicks pass through outside the card; previous/next dim with no matches;
+  the options button tints while a switch is on; one 26-point pitch throughout.
+- Checked: `cargo test` (tap-core 105, tap-import 31, tap-shell 56), clippy
+  `-D warnings`, nightly fmt. Not checked by eye: light/dark feel of each wash and
+  the VoiceOver pass over the badge menu.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -1624,6 +1655,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | At the user's request ("所有的登陆名/密码等…bring things over应该也包括这些吧（自动填充）", then "照抄 ../search 的"), 0.1.5 brings forward passwords: Search's ImportPanel sheet with Chromium passwords (one macOS question per browser), the vault with a security domain of its own, Search's form script, the account list and the save bar (§8 "0.1.5"). Search's own passwords come on first use, not all at once: macOS asks per item for another app's items, and Search keeps 569 here (§7). `aes`, `cbc`, `pbkdf2`, `sha1` join `tap-import`, as §5.3 planned; the keychain is reached directly rather than through `security-framework`. |
 | 2026-11-04 | At the user's request ("tap bring things over 理论上应该是能自动侦测到本地的chrome/search 等类似的profil数据的，但目前没有"), 0.1.4 brings forward the core of M6: Bring things over finds Search and the Chromium browsers on this Mac and brings one's open tabs and groups (#841), history and bookmarks through the profile merge (§8 "0.1.4"). `rusqlite` against the system's libsqlite3 joins `tap-import`, as §5.3 planned. |
 | 2026-11-04 | At the user's request, the empty tab row opens a new tab on a double click (Search's `DragStrip.onDoubleClick`, replacing double-click-to-zoom there; a single press still drags the window), and the strip's layout reserves the downloads door beside the helm and pins the plus before those doors when tabs overflow, so the plus never runs under them (`fixed-deviation` from the overflow running to the helm's edge). Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
+| 2026-11-05 | At the user's request (New Tab should open many, and its cross should close it), new tabs pile up: +/⌘T and the "new tab" field command always open a fresh blank tab instead of reusing the blank one in front, and closing the only tab when it is already new closes the window as Search's `close` does (`fixed-deviation` from Search's `newTab` reusing a blank tab). Core asks with a new `Effect::CloseWindow`, carried out by the shell. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 | 2026-11-05 | The page-load path is audited end to end at the user's request and tightened in seven places (§10 "The page-load path"), all behaviour-preserving, as a PR like the one before it. |
 
 ## Appendix A — Parity tracker

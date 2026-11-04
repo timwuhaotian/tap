@@ -27,7 +27,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSEventModifierFlags,
-    NSGraphicsContext, NSResponder, NSShadow, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSGraphicsContext, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_core_graphics::CGContext;
 use objc2_foundation::{NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSTimer};
@@ -452,11 +452,7 @@ fn faded(alpha: f64, draw: impl FnOnce()) {
 /// Search's lift for a carried tab: a soft shadow under it while the hand has it.
 fn lifted(draw: impl FnOnce()) {
     NSGraphicsContext::saveGraphicsState_class();
-    let shadow = NSShadow::new();
-    shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.14)));
-    shadow.setShadowBlurRadius(12.0);
-    shadow.setShadowOffset(NSSize::new(0.0, -4.0));
-    shadow.set();
+    palette::lift_shadow().set();
     draw();
     NSGraphicsContext::restoreGraphicsState_class();
 }
@@ -686,8 +682,8 @@ impl Strip {
         let scale = self.ivars().press_scale.get();
         if (scale - target).abs() > 0.001 {
             // Down answers at once, back up settles, as Search's `Give` has it.
-            // While the Mac saves power the sink is a step, not an ease.
-            let step = if look.light {
+            // With no motion to spare the sink lands at once rather than easing.
+            let step = if motion::reduced() || look.light {
                 1.0
             } else if target < scale {
                 0.45
@@ -756,6 +752,7 @@ impl Strip {
                 let Some(state) = rt::read(|browser| {
                     let tab = browser.tab(id)?;
                     let tabs = browser.tabs();
+                    let among = browser.is_selected(id);
                     Some(TabState {
                         has_page: !tab.is_blank() && !tab.is_internal(),
                         others: tabs.iter().any(|t| t.id != id && !t.is_pinned()),
@@ -767,10 +764,20 @@ impl Strip {
                             .and_then(|g| browser.groups().iter().position(|x| x.id == g)),
                         groups: browser.groups().iter().map(|g| g.name.clone()).collect(),
                         can_sleep: browser.awake_because(id).is_none(),
-                        picked: if browser.is_selected(id) {
-                            browser.selection_count()
+                        picked: if among { browser.selection_count() } else { 0 },
+                        picked_groups: if among && browser.selection_count() > 1 {
+                            browser
+                                .tabs()
+                                .iter()
+                                .filter(|t| browser.is_selected(t.id))
+                                .map(|t| {
+                                    t.group().and_then(|g| {
+                                        browser.groups().iter().position(|x| x.id == g)
+                                    })
+                                })
+                                .collect()
                         } else {
-                            0
+                            Vec::new()
                         },
                     })
                 })
@@ -1465,20 +1472,19 @@ impl Strip {
                     }
                     Item::Tab(_) => {
                         palette::WASH.resolve(dark).setFill();
-                        pill(rect).fill();
+                        palette::pill_path(rect).fill();
                     }
                 });
                 draw_item(browser, &paint, slot, item, rect);
             }
             NSGraphicsContext::restoreGraphicsState_class();
-            if inside {
-                let (plus_rect, _) = at(&Key::Plus, layout.plus);
-                if paint.spot == Spot::Plus {
-                    palette::HOVER.resolve(dark).setFill();
-                    pill(plus_rect).fill();
-                }
-                plus(plus_rect, &palette::MUTED.resolve(dark));
+            let (plus_rect, _) = at(&Key::Plus, layout.plus);
+            // The plus is always there to be found; only its wash waits for the pointer.
+            if inside && paint.spot == Spot::Plus {
+                palette::HOVER.resolve(dark).setFill();
+                palette::pill_path(plus_rect).fill();
             }
+            plus(plus_rect, &palette::MUTED.resolve(dark));
         });
     }
 
@@ -1634,16 +1640,13 @@ fn draw_heading(name: &str, colour: Option<&str>, rect: NSRect, under: bool, dar
 
 /// The live tab's pill: Search's wash, lifted a little off the row so the tab you
 /// are on reads as the one in front — a soft shadow in a light window, a faint
-/// edge in a dark one, where a shadow wouldn't show.
+/// edge in a dark one, where a shadow wouldn't show — and a hairline round it in
+/// both, so the pill reads as a plate.
 fn live_pill(rect: NSRect, dark: bool) {
-    let path = pill(rect);
+    let path = palette::pill_path(rect);
     NSGraphicsContext::saveGraphicsState_class();
     if !dark {
-        let shadow = NSShadow::new();
-        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.10)));
-        shadow.setShadowBlurRadius(3.0);
-        shadow.setShadowOffset(NSSize::new(0.0, -1.0));
-        shadow.set();
+        palette::live_shadow().set();
     }
     palette::WASH.resolve(dark).setFill();
     path.fill();
@@ -1652,6 +1655,8 @@ fn live_pill(rect: NSRect, dark: bool) {
         NSColor::colorWithWhite_alpha(1.0, 0.07).setStroke();
         path.setLineWidth(1.0);
         path.stroke();
+    } else {
+        palette::stroke_hairline(&path, dark);
     }
 }
 
@@ -1696,13 +1701,29 @@ fn draw_tab(
     // A picked tab wears the accent, lightly; one under the pointer its own grey.
     let picked = !gone && browser.is_selected(tab.id);
     if picked {
-        NSColor::controlAccentColor()
+        let accent = NSColor::controlAccentColor();
+        accent
             .colorWithAlphaComponent(if dark { 0.32 } else { 0.18 })
             .setFill();
-        pill(*rect).fill();
+        let plate = palette::pill_path(*rect);
+        plate.fill();
+        accent
+            .colorWithAlphaComponent(if dark { 0.50 } else { 0.35 })
+            .setStroke();
+        plate.setLineWidth(1.0);
+        plate.stroke();
     } else if under && !live {
         palette::HOVER.resolve(dark).setFill();
-        pill(*rect).fill();
+        let plate = palette::pill_path(*rect);
+        plate.fill();
+        palette::stroke_hairline(&plate, dark);
+    } else if under && live {
+        // Over the live pill, so only a breath of hover lest it cover the live one.
+        palette::HOVER
+            .resolve(dark)
+            .colorWithAlphaComponent(0.5)
+            .setFill();
+        palette::pill_path(*rect).fill();
     }
     let titled = rect.size.width >= palette::TAB_TITLED;
     // Search's `ReadingFill`: ink at 5.5% over the live pill, from its
@@ -1783,7 +1804,7 @@ fn draw_tab(
             NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
             NSSize::new(ICON, ICON),
         );
-        palette::HAIRLINE.resolve(dark).setFill();
+        palette::HOVER.resolve(dark).setFill();
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
         let letter = monogram(tab);
         let width = palette::text_width(&letter);
@@ -1855,7 +1876,7 @@ fn draw_tab(
     }
     // The load's progress: along the pill's foot, unless the address bar says it.
     if live && tab.loading() && !look.bar {
-        progress(*rect, tab.progress(), &palette::MUTED.resolve(dark));
+        progress(*rect, tab.progress(), &palette::INK.resolve(dark));
     }
 }
 
@@ -1882,7 +1903,7 @@ fn reading_fill(rect: NSRect, read: f64, dark: bool) {
     // The context is saved and restored around the clip, balanced on this call,
     // so the pill's clip never leaks into what is drawn after the fill.
     NSGraphicsContext::saveGraphicsState_class();
-    pill(rect).addClip();
+    palette::pill_path(rect).addClip();
     NSColor::colorWithWhite_alpha(tone, 0.055).setFill();
     NSBezierPath::fillRect(NSRect::new(
         rect.origin,
@@ -2093,10 +2114,6 @@ fn letter(label: &str) -> String {
         .chars()
         .find(|c| c.is_alphanumeric())
         .map_or_else(|| "•".to_owned(), |c| c.to_uppercase().collect())
-}
-
-fn pill(rect: NSRect) -> Retained<NSBezierPath> {
-    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, palette::RADIUS, palette::RADIUS)
 }
 
 fn cross(square: NSRect, color: &NSColor) {

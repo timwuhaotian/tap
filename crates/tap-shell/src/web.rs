@@ -996,6 +996,12 @@ pub fn perform(effect: Effect) {
             sleep::take_memory(tab);
             discard(mtm, tab);
         }
+        // The only tab was already new: the window goes, as Search closes it.
+        Effect::CloseWindow => {
+            if let Some(window) = window::main_window() {
+                window.performClose(None);
+            }
+        }
         Effect::Sleep(tab) => sleep::try_sleep(tab, |_| {}),
         Effect::Retire { tab, since } => sleep::try_retire(tab, since),
         Effect::FocusPage(tab) => window::focus_page(existing(tab).as_deref()),

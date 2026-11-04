@@ -5,7 +5,7 @@
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::NSObject,
 };
-use objc2_app_kit::{NSBezierPath, NSColor, NSEvent, NSResponder, NSShadow, NSView};
+use objc2_app_kit::{NSEvent, NSResponder, NSView};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use tap_core::{
     browser::Browser,
@@ -131,28 +131,18 @@ impl Offers {
         if offers.is_empty() {
             return;
         }
-        let shadow = NSShadow::new();
-        shadow.setShadowBlurRadius(14.0);
-        shadow.setShadowOffset(NSSize::new(0.0, -3.0));
-        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
-            0.0,
-            if dark { 0.5 } else { 0.16 },
-        )));
-        shadow.set();
-        palette::GROUND.resolve(dark).setFill();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.card(), 12.0, 12.0).fill();
-        NSShadow::new().set();
+        palette::shadowed(&palette::float_shadow(dark), || {
+            palette::GROUND.resolve(dark).setFill();
+            palette::card_path(self.card()).fill();
+        });
 
         for (row, offer) in offers.iter().enumerate() {
             let rect = self.row_rect(row);
             if picked == Some(row) {
                 palette::WASH.resolve(dark).setFill();
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                    rect,
-                    palette::RADIUS,
-                    palette::RADIUS,
-                )
-                .fill();
+                let plate = palette::pill_path(rect);
+                plate.fill();
+                palette::stroke_hairline(&plate, dark);
             }
             draw_row(offer, rect, dark);
         }
@@ -171,10 +161,7 @@ fn draw_row(offer: &Suggestion, rect: NSRect, dark: bool) {
     let main_width = palette::text_width(&main).min(width * 0.62);
     palette::draw_text(
         &main,
-        NSRect::new(
-            NSPoint::new(left, text_top),
-            NSSize::new(main_width + 1.0, 17.0),
-        ),
+        NSRect::new(NSPoint::new(left, text_top), NSSize::new(main_width, 17.0)),
         &palette::INK.resolve(dark),
     );
     if !detail.is_empty() {

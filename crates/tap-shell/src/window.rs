@@ -17,8 +17,8 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder, NSShadow,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton,
+    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder,
     NSTextField, NSTextFieldDelegate, NSTextInputClient, NSTextView, NSView,
     NSViewFrameDidChangeNotification, NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidExitFullScreenNotification,
@@ -45,6 +45,7 @@ use tap_core::{
 
 use crate::{
     address_bar::{self, AddressBar},
+    blank::BlankView,
     dialogs, downloads, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
@@ -95,6 +96,8 @@ struct Views {
     /// The address bar under the strip, while Settings has it up.
     bar: Retained<AddressBar>,
     stage: Retained<Stage>,
+    /// The instrument behind a blank tab's field.
+    blank: Retained<BlankView>,
     field: Retained<NSTextField>,
     plate: Retained<Plate>,
     /// The rows under the field, and the grey rest of the address after its text.
@@ -174,6 +177,12 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
     root.addSubview(&stage);
+    let blank = BlankView::new(mtm, stage.bounds());
+    blank.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    blank.setHidden(true);
+    stage.addSubview(&blank);
     let bar = AddressBar::new(
         mtm,
         NSRect::new(
@@ -230,6 +239,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             strip,
             bar,
             stage,
+            blank,
             field,
             plate,
             offers,
@@ -547,6 +557,7 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
 /// The active tab's page in the stage, or what it says in place of the page.
 fn show_page(views: &Views, view: &View) {
     show_own_page(views, view.page);
+    show_blank(views, view);
     let web = view.active.and_then(web::existing);
     let previous = views.shown.replace(view.active);
     if previous != view.active
@@ -585,6 +596,15 @@ fn show_page(views: &Views, view: &View) {
         }
         None => views.trouble.setHidden(true),
     }
+}
+
+/// The instrument behind a blank tab's field, or put away when the tab in
+/// front has a page of its own to show.
+fn show_blank(views: &Views, view: &View) {
+    let show = view.blank && view.page.is_none();
+    views.blank.setFrame(views.stage.bounds());
+    views.blank.setHidden(!show);
+    views.blank.set_animating(show);
 }
 
 /// One of Tap's own pages in the stage, below the find bar and the field like a web page,
@@ -760,14 +780,13 @@ fn place_offers(views: &Views, view: &View) {
     }
 }
 
-/// What a launching (⌘T) field becomes, once `newtab.floating` has its say
-/// (Search's `Browser.launch`): kept floating only over a page that is showing
-/// something; anywhere else ⌘T is an ordinary new tab, made at once.
+/// What a launching (⌘T) field becomes, once `newtab.floating` has its say.
+/// Tap differs from Search's `Browser.launch` here: Search reuses a blank tab in
+/// front, so repeated ⌘T never leaves a row of empty tabs; Tap always makes a new
+/// blank tab, so new tabs pile up and each one closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Launch {
     Keep,
-    /// The tab in front is already blank: the field opens on it, in the strip.
-    ReuseBlank,
     /// A new blank tab is made now, and the field opens on it, in the strip.
     OpenBlank,
 }
@@ -775,8 +794,6 @@ enum Launch {
 fn launch_action(floating: bool, launching: bool, blank: bool) -> Launch {
     if !launching || (floating && !blank) {
         Launch::Keep
-    } else if blank {
-        Launch::ReuseBlank
     } else {
         Launch::OpenBlank
     }
@@ -799,10 +816,6 @@ fn queue_launch_conversion() {
             blank,
         ) {
             Launch::Keep => {}
-            Launch::ReuseBlank => {
-                browser.cancel_editing();
-                browser.begin_editing(false);
-            }
             Launch::OpenBlank => {
                 browser.open(None, true, None);
                 browser.begin_editing(false);
@@ -1371,17 +1384,10 @@ impl Suggest {
         if words.is_empty() {
             return;
         }
-        let shadow = NSShadow::new();
-        shadow.setShadowBlurRadius(14.0);
-        shadow.setShadowOffset(NSSize::new(0.0, -3.0));
-        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
-            0.0,
-            if dark { 0.5 } else { 0.16 },
-        )));
-        shadow.set();
-        palette::GROUND.resolve(dark).setFill();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.card(), 12.0, 12.0).fill();
-        NSShadow::new().set();
+        palette::shadowed(&palette::float_shadow(dark), || {
+            palette::GROUND.resolve(dark).setFill();
+            palette::card_path(self.card()).fill();
+        });
         let engine = Engine::from_raw(&text(&Kept::new(), "search.engine")).unwrap_or_default();
         let detail = format!(
             "Search {}",
@@ -1790,13 +1796,10 @@ define_class!(
         fn draw_rect(&self, _dirty: NSRect) {
             let dark = palette::is_dark(self);
             let card = NSRect::new(NSPoint::new(20.0, 20.0), NSSize::new(self.bounds().size.width - 40.0, 44.0));
-            let shadow = NSShadow::new();
-            shadow.setShadowBlurRadius(16.0);
-            shadow.setShadowOffset(NSSize::new(0.0, -4.0));
-            shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, if dark { 0.5 } else { 0.18 })));
-            shadow.set();
-            palette::GROUND.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 12.0, 12.0).fill();
+            palette::shadowed(&palette::shadow(16.0, -4.0, 0.18, 0.5, dark), || {
+                palette::GROUND.resolve(dark).setFill();
+                palette::card_path(card).fill();
+            });
         }
     }
 );
@@ -1899,9 +1902,9 @@ mod tests {
     #[test]
     fn floating_only_floats_over_a_page_with_something_on_it() {
         assert_eq!(launch_action(true, true, false), Launch::Keep);
-        assert_eq!(launch_action(true, true, true), Launch::ReuseBlank);
+        assert_eq!(launch_action(true, true, true), Launch::OpenBlank);
         assert_eq!(launch_action(false, true, false), Launch::OpenBlank);
-        assert_eq!(launch_action(false, true, true), Launch::ReuseBlank);
+        assert_eq!(launch_action(false, true, true), Launch::OpenBlank);
         assert_eq!(launch_action(false, false, false), Launch::Keep);
     }
 
