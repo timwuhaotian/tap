@@ -247,6 +247,19 @@ impl Index {
         }
     }
 
+    /// The icon the page itself was last seen wearing, in this look: no guessing
+    /// from its neighbours. `lookup` is for drawing; this is Search's
+    /// `Icons.fetch` early return, which skips only the page's own record.
+    #[must_use]
+    pub fn exact(&self, url: &Url, dark: bool) -> Option<String> {
+        let site = site(url)?;
+        self.pages
+            .get(&site)?
+            .get(&page(url))?
+            .wears(dark)
+            .map(str::to_owned)
+    }
+
     /// The icon a page wears: its own, or the page of its site that shares the most of
     /// its path; the same site with or without www. A host whose pages don't agree on one
     /// icon is several apps, and another one's page is no guide.
@@ -402,6 +415,21 @@ mod tests {
                 .lookup(&url("https://mac-mini/radarr/x"), false)
                 .as_deref(),
             Some("radarr")
+        );
+    }
+
+    #[test]
+    fn only_the_page_itself_counts_as_already_asked() {
+        let mut index = Index::default();
+        index.record(&url("https://example.com/"), "front-door", false, 1.0);
+        assert_eq!(
+            index.exact(&url("https://example.com/section"), false),
+            None,
+            "a fresh sibling icon must not skip probing the new section"
+        );
+        assert_eq!(
+            index.exact(&url("https://example.com/"), false).as_deref(),
+            Some("front-door")
         );
     }
 }

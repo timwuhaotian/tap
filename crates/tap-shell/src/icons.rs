@@ -106,8 +106,9 @@ pub fn fetch(tab: TabId, web: &WKWebView) {
     }
     // Fresh and right for this look: nothing to do (Search's `Icons.fetch`). Without
     // this every visit re-probed the page, re-downloaded and redrew its icon, and
-    // rewrote the PNG and the whole index JSON on the main thread.
-    if let Some(name) = with_index(|index| index.lookup(&page, false))
+    // rewrote the PNG and the whole index JSON on the main thread. Only the page's
+    // own record counts: a neighbour's fresh icon is no proof this page was probed.
+    if let Some(name) = with_index(|index| index.exact(&page, false))
         && std::fs::metadata(folder().join(format!("{name}.png")))
             .and_then(|kept| kept.modified())
             .is_ok_and(|kept| kept.elapsed().is_ok_and(|age| age < FRESH))
