@@ -1058,35 +1058,44 @@ fn sync(web: &WKWebView) {
 /// together: the model takes them as one.
 fn sync_one(web: &WKWebView, key: &str) {
     let Some(tab) = tab_of(web) else { return };
-    match key {
-        "title" => {
-            let title = unsafe { web.title().map(|t| t.to_string()).unwrap_or_default() };
-            rt::dispatch(move |browser| browser.page_title(tab, &title));
-        }
-        "URL" => {
-            let url = unsafe {
+    // SAFETY: plain property reads on a live web view, whichever key moved.
+    let reads = || unsafe {
+        match key {
+            "title" => Reads::Title(web.title().map(|t| t.to_string()).unwrap_or_default()),
+            "URL" => Reads::Address(
                 web.URL()
                     .and_then(|u| u.absoluteString())
                     .map(|u| u.to_string())
-                    .unwrap_or_default()
-            };
-            rt::dispatch(move |browser| browser.page_url(tab, &url));
+                    .unwrap_or_default(),
+            ),
+            "loading" | "estimatedProgress" => {
+                Reads::Load(web.isLoading(), web.estimatedProgress())
+            }
+            "canGoBack" | "canGoForward" => Reads::History(web.canGoBack(), web.canGoForward()),
+            "hasOnlySecureContent" => Reads::Secure(web.hasOnlySecureContent()),
+            _ => Reads::All,
         }
-        "loading" | "estimatedProgress" => {
-            let (loading, progress) =
-                unsafe { (web.isLoading(), web.estimatedProgress()) };
-            rt::dispatch(move |browser| browser.page_loading(tab, loading, progress));
+    };
+    match reads() {
+        Reads::Title(title) => rt::dispatch(move |b| b.page_title(tab, &title)),
+        Reads::Address(url) => rt::dispatch(move |b| b.page_url(tab, &url)),
+        Reads::Load(loading, progress) => {
+            rt::dispatch(move |b| b.page_loading(tab, loading, progress));
         }
-        "canGoBack" | "canGoForward" => {
-            let (back, forward) = unsafe { (web.canGoBack(), web.canGoForward()) };
-            rt::dispatch(move |browser| browser.page_history(tab, back, forward));
-        }
-        "hasOnlySecureContent" => {
-            let secure = unsafe { web.hasOnlySecureContent() };
-            rt::dispatch(move |browser| browser.page_security(tab, secure));
-        }
-        _ => sync(web),
+        Reads::History(back, forward) => rt::dispatch(move |b| b.page_history(tab, back, forward)),
+        Reads::Secure(secure) => rt::dispatch(move |b| b.page_security(tab, secure)),
+        Reads::All => sync(web),
     }
+}
+
+/// What one key's read brought back.
+enum Reads {
+    Title(String),
+    Address(String),
+    Load(bool, f64),
+    History(bool, bool),
+    Secure(bool),
+    All,
 }
 
 fn process_ended(web: &WKWebView, end: PageEnd) {

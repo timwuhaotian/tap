@@ -159,7 +159,10 @@ fn drain(receive: &Receiver<Job>) {
         let mut latest: HashMap<PathBuf, Job> = HashMap::new();
         let mut waiting = vec![];
         for job in std::iter::once(first).chain(receive.try_iter()) {
-            if let Some(done) = latest.get_mut(&job.body.path()).and_then(|old| old.done.take()) {
+            if let Some(done) = latest
+                .get_mut(&job.body.path())
+                .and_then(|old| old.done.take())
+            {
                 waiting.push(done);
             }
             latest.insert(job.body.path(), job);
@@ -191,10 +194,7 @@ fn write(path: PathBuf, data: Vec<u8>, now: bool) {
             let _ = wait.recv();
         }
     } else {
-        let _ = writer().send(Job {
-            body,
-            done: None,
-        });
+        let _ = writer().send(Job { body, done: None });
     }
 }
 

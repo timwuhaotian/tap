@@ -495,7 +495,7 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         }
         if views.title.borrow().as_str() != view.title {
             views.window.setTitle(&NSString::from_str(&view.title));
-            *views.title.borrow_mut() = view.title.clone();
+            views.title.borrow_mut().clone_from(&view.title);
         }
 
         if dirty.intersects(BrowserFields::ACTIVE | BrowserFields::TABS)

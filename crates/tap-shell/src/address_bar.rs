@@ -445,9 +445,10 @@ fn draw_address(shown: &Shown, rect: NSRect, dark: bool) {
 // The badge's image, made once per symbol, warning and look: the SF Symbol catalogue
 // lookup and the colour configuration ran on every draw of the bar. A symbol that
 // can't be made is remembered as absent, so it isn't looked for again on each draw.
+type Badges = HashMap<(&'static str, bool, bool), Option<Retained<NSImage>>>;
+
 thread_local! {
-    static BADGES: std::cell::RefCell<HashMap<(&'static str, bool, bool), Option<Retained<NSImage>>>> =
-        std::cell::RefCell::new(HashMap::new());
+    static BADGES: std::cell::RefCell<Badges> = std::cell::RefCell::new(HashMap::new());
 }
 
 fn badge_image(symbol: &'static str, warns: bool, dark: bool) -> Option<Retained<NSImage>> {

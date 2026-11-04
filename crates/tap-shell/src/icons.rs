@@ -7,13 +7,7 @@
 //! view of its own; a second icon for the dark look; the letter shown before an icon
 //! arrives; icons in the field's rows.
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::PathBuf,
-    ptr,
-    time::Duration,
-};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, ptr, time::Duration};
 
 use block2::RcBlock;
 use objc2::{AllocAnyThread, rc::Retained};
@@ -42,6 +36,7 @@ const EDGE: f64 = 32.0;
 const LARGEST: usize = 1_000_000;
 /// How long a kept icon stands for the page (Search's `Favicons.fresh`): after this, a
 /// finished page is asked again, in case the site has changed what it wears.
+#[allow(clippy::duration_suboptimal_units)] // `Duration::from_days` is unstable
 const FRESH: Duration = Duration::from_secs(7 * 86_400);
 
 /// What the page declares, read in Tap's own world (Search's `Favicons.probe`).

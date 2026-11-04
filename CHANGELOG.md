@@ -7,6 +7,24 @@ Info.plist.
 
 ## Unreleased
 
+A load stops paying for what didn't change: the page-load path is tightened end to
+end, behaviour-preserving (docs/PLAN.md §10 "The page-load path").
+
+- A page that keeps loading no longer rewrites `session.json` on every progress tick;
+  the session and history files are encoded on the writer thread, not the main one.
+- A page that already wears a fresh site icon (kept under 7 days) isn't probed,
+  re-downloaded and redrawn again on every visit, and the PNG is written off the main
+  thread.
+- The web view's observer reads only the property that moved, instead of all seven
+  and calling all five model setters, on each of a load's ticks.
+- Progress counts as change only in steps the drawn line can show; the tab row and the
+  address bar redraw only when something drawn moved, and the reload/stop symbol and
+  the window title are touched only on change.
+- The chrome's text style and the address bar's badge image are made once, not on
+  every draw.
+- History's recency score is worked out once per visit when the file is written, not
+  inside the sort's comparator.
+
 ## 0.1.8 — 2026-11-05
 
 Picked tabs close together and move together.

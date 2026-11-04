@@ -2471,12 +2471,20 @@ mod tests {
         browser.page_url(id, "https://a.com");
         browser.page_title(id, "");
         assert!(
-            !browser.take_effects().iter().any(|e| matches!(e, Effect::Save(_)))
+            !browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Save(_)))
         );
 
         browser.page_url(id, "https://a.com/next");
         browser.page_title(id, "Example Domain");
-        assert!(browser.take_effects().iter().any(|e| matches!(e, Effect::Save(_))));
+        assert!(
+            browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Save(_)))
+        );
     }
 
     /// A session as Search writes one with groups: tabs of a group need not stand
@@ -3048,13 +3056,18 @@ mod tests {
         browser.page_loading(id, true, 0.5 + 1e-9);
         let (_, tabs) = browser.take_dirty();
         assert!(
-            !tabs.iter().any(|(_, fields)| fields.contains(TabFields::PROGRESS)),
+            !tabs
+                .iter()
+                .any(|(_, fields)| fields.contains(TabFields::PROGRESS)),
             "a step smaller than the drawn line changes nothing"
         );
 
         browser.page_loading(id, true, 0.9);
         let (_, tabs) = browser.take_dirty();
-        assert!(tabs.iter().any(|(_, fields)| fields.contains(TabFields::PROGRESS)));
+        assert!(
+            tabs.iter()
+                .any(|(_, fields)| fields.contains(TabFields::PROGRESS))
+        );
     }
 
     #[test]
