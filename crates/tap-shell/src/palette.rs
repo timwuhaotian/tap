@@ -8,11 +8,11 @@ use block2::RcBlock;
 use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular, NSForegroundColorAttributeName,
-    NSLineBreakMode, NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSStringDrawing,
-    NSView,
+    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
+    NSForegroundColorAttributeName, NSLineBreakMode, NSMutableParagraphStyle,
+    NSParagraphStyleAttributeName, NSShadow, NSStringDrawing, NSView,
 };
-use objc2_foundation::{NSArray, NSAttributedStringKey, NSDictionary, NSRect, NSString};
+use objc2_foundation::{NSArray, NSAttributedStringKey, NSDictionary, NSRect, NSSize, NSString};
 
 /// A grey for a light window and one for a dark.
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +49,69 @@ pub const HELM: f64 = 3.0 * DOOR + 2.0 * 2.0 + 8.0;
 /// The address field, in both the places it shows up.
 pub const FIELD: f64 = 560.0;
 pub const RADIUS: f64 = 8.0;
+/// Every floating card's radius: offers, suggestions, sign-in, bring, Settings.
+/// One radius so the chrome reads as one piece.
+pub const CARD_RADIUS: f64 = 12.0;
+
+/// A card's outline at the shared radius.
+#[must_use]
+pub fn card_path(rect: NSRect) -> Retained<NSBezierPath> {
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, CARD_RADIUS, CARD_RADIUS)
+}
+
+/// A pill's outline at the chrome radius: tabs, picked rows, the address capsule.
+#[must_use]
+pub fn pill_path(rect: NSRect) -> Retained<NSBezierPath> {
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, RADIUS, RADIUS)
+}
+
+/// One shadow, described once: `blur` points of blur, `dy` down, ink at `light`
+/// in a light window and at `dark_alpha` in a dark one.
+#[must_use]
+pub fn shadow(blur: f64, dy: f64, light: f64, dark_alpha: f64, dark: bool) -> Retained<NSShadow> {
+    let shadow = NSShadow::new();
+    shadow.setShadowBlurRadius(blur);
+    shadow.setShadowOffset(NSSize::new(0.0, dy));
+    shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
+        0.0,
+        if dark { dark_alpha } else { light },
+    )));
+    shadow
+}
+
+/// The shadow under a floating card: offers, suggestions, sign-in.
+#[must_use]
+pub fn float_shadow(dark: bool) -> Retained<NSShadow> {
+    shadow(14.0, -3.0, 0.16, 0.5, dark)
+}
+
+/// The shadow under a carried tab: Search's lift.
+#[must_use]
+pub fn lift_shadow() -> Retained<NSShadow> {
+    shadow(12.0, -4.0, 0.14, 0.14, false)
+}
+
+/// The shadow under the live tab's pill in a light window; in a dark one the
+/// pill wears an edge instead, where a shadow wouldn't show.
+#[must_use]
+pub fn live_shadow() -> Retained<NSShadow> {
+    shadow(3.0, -1.0, 0.10, 0.10, false)
+}
+
+/// Draws `draw` under `shadow`, then takes the shadow back off.
+pub fn shadowed(shadow: &NSShadow, draw: impl FnOnce()) {
+    shadow.set();
+    draw();
+    NSShadow::new().set();
+}
+
+/// A 1-point hairline round `path`: the edge that makes a filled pill read as
+/// a plate rather than a flat mark.
+pub fn stroke_hairline(path: &NSBezierPath, dark: bool) {
+    HAIRLINE.resolve(dark).setStroke();
+    path.setLineWidth(1.0);
+    path.stroke();
+}
 
 /// A colour for a light window and one for a dark, as red, green and blue.
 #[derive(Clone, Copy, Debug)]

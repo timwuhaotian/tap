@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+Chrome refinement, no behaviour change.
+
+- **One card, one pill, one shadow**: every floating card and pill now shares
+  `palette`'s radius, hairline and shadow instead of each drawing its own.
+- **The live tab reads as a plate**: a hairline edge in both themes, and the
+  hovered and picked tabs wear one too.
+
 ## 0.1.8 — 2026-11-05
 
 Picked tabs close together and move together.

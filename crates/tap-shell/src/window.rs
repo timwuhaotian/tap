@@ -17,8 +17,8 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder, NSShadow,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton,
+    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder,
     NSTextField, NSTextFieldDelegate, NSTextInputClient, NSTextView, NSView,
     NSViewFrameDidChangeNotification, NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidExitFullScreenNotification,
@@ -1347,17 +1347,10 @@ impl Suggest {
         if words.is_empty() {
             return;
         }
-        let shadow = NSShadow::new();
-        shadow.setShadowBlurRadius(14.0);
-        shadow.setShadowOffset(NSSize::new(0.0, -3.0));
-        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
-            0.0,
-            if dark { 0.5 } else { 0.16 },
-        )));
-        shadow.set();
-        palette::GROUND.resolve(dark).setFill();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.card(), 12.0, 12.0).fill();
-        NSShadow::new().set();
+        palette::shadowed(&palette::float_shadow(dark), || {
+            palette::GROUND.resolve(dark).setFill();
+            palette::card_path(self.card()).fill();
+        });
         let engine = Engine::from_raw(&text(&Kept::new(), "search.engine")).unwrap_or_default();
         let detail = format!(
             "Search {}",
@@ -1766,13 +1759,10 @@ define_class!(
         fn draw_rect(&self, _dirty: NSRect) {
             let dark = palette::is_dark(self);
             let card = NSRect::new(NSPoint::new(20.0, 20.0), NSSize::new(self.bounds().size.width - 40.0, 44.0));
-            let shadow = NSShadow::new();
-            shadow.setShadowBlurRadius(16.0);
-            shadow.setShadowOffset(NSSize::new(0.0, -4.0));
-            shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, if dark { 0.5 } else { 0.18 })));
-            shadow.set();
-            palette::GROUND.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 12.0, 12.0).fill();
+            palette::shadowed(&palette::shadow(16.0, -4.0, 0.18, 0.5, dark), || {
+                palette::GROUND.resolve(dark).setFill();
+                palette::card_path(card).fill();
+            });
         }
     }
 );
