@@ -35,7 +35,7 @@ use objc2_quartz_core::CADisplayLink;
 use tap_core::{
     browser::{Browser, Tab, TabId},
     fnd::{Parts, Url},
-    groups::Item,
+    groups::{self, GroupDrop, GroupSpans, Item},
     location::{is_address, is_loopback},
     settings_index,
 };
@@ -126,6 +126,25 @@ fn tick() {
             strip.tick();
         }
     });
+}
+
+/// Where the row lays out each of its slots, as the bench aims a hand at them: left,
+/// top, width and height in the strip's points, which are the window's from its top
+/// left (the strip sits at the window's top edge).
+pub fn slot_rects() -> Vec<[f64; 4]> {
+    LIVE_STRIP.with_borrow(|slot| {
+        slot.as_ref()
+            .and_then(|strip| {
+                strip.with_layout(|_, _, layout| {
+                    layout
+                        .tabs
+                        .iter()
+                        .map(|r| [r.origin.x, r.origin.y, r.size.width, r.size.height])
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    })
 }
 
 fn redraw_strip() {
@@ -364,6 +383,16 @@ fn close_rect(tab: NSRect) -> NSRect {
     )
 }
 
+/// What a press takes a slot by: its whole column, the strip's height and the gap to
+/// its right. Above, below or between the pills is still the tab, not title bar, so
+/// a press meant for a tab never moves the window instead.
+fn column(rect: NSRect, height: f64) -> NSRect {
+    NSRect::new(
+        NSPoint::new(rect.origin.x, 0.0),
+        NSSize::new(rect.size.width + palette::TAB_GAP, height),
+    )
+}
+
 fn contains(rect: NSRect, point: NSPoint) -> bool {
     point.x >= rect.origin.x
         && point.x < rect.origin.x + rect.size.width
@@ -468,6 +497,8 @@ struct Paint {
     cmd_held: bool,
     active: Option<TabId>,
     editing: Option<usize>,
+    /// The group carried tabs would join if let go now, by its place.
+    drop: Option<usize>,
 }
 
 pub struct Ivars {
@@ -493,6 +524,8 @@ pub struct Ivars {
     /// What each slot last said, to draw it while it fades once gone.
     faces: RefCell<HashMap<Key, String>>,
     grab: RefCell<Option<Grab>>,
+    /// Where the carried tabs land if let go now: another group, under the hand.
+    drop: RefCell<Option<GroupDrop>>,
     click: RefCell<Option<Click>>,
     /// Frames while something moves, paused when nothing does.
     link: RefCell<Option<Retained<CADisplayLink>>>,
@@ -647,6 +680,7 @@ impl Strip {
             folded: RefCell::new(HashMap::new()),
             faces: RefCell::new(HashMap::new()),
             grab: RefCell::new(None),
+            drop: RefCell::new(None),
             click: RefCell::new(None),
             link: RefCell::new(None),
             last_frame: Cell::new(None),
@@ -820,15 +854,16 @@ impl Strip {
     fn spot_at(&self, event: &NSEvent) -> Spot {
         let point = self.convertPoint_fromView(event.locationInWindow(), None);
         let bar = self.look_now().bar;
+        let height = self.bounds().size.height;
         self.with_layout(|browser, row, layout| {
             let editing = editing_slot(browser, row, bar);
             // The plus first: where it is pinned it stands over the run of
             // tabs, and it, not the tab beneath, takes the click.
-            if contains(layout.plus, point) {
+            if contains(column(layout.plus, height), point) {
                 return Spot::Plus;
             }
             for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
-                if contains(*rect, point) {
+                if contains(column(*rect, height), point) {
                     let index = match item {
                         Item::Heading(place) => return Spot::Heading(*place),
                         Item::Tab(index) => *index,
@@ -901,6 +936,7 @@ impl Strip {
             self.setNeedsDisplay(true);
         }
         self.ivars().grab.replace(None);
+        self.ivars().drop.replace(None);
         self.ivars().click.replace(None);
         match spot {
             Spot::Close(index) => {
@@ -1026,7 +1062,12 @@ impl Strip {
         }
         let grab = self.ivars().grab.take();
         let click = self.ivars().click.take();
-        if grab.is_some_and(|g| g.carrying) {
+        let drop = self.ivars().drop.take();
+        if let Some(grab) = grab.filter(|g| g.carrying) {
+            // Let go over another group: the carried tabs join it there.
+            if let (Some(to), Carried::Tabs { run, .. }) = (drop, grab.what) {
+                rt::dispatch(move |browser| browser.drop_into_group(&run, &to));
+            }
             // Let go: the slot springs from the hand into its place.
             self.animate();
             self.setNeedsDisplay(true);
@@ -1058,6 +1099,24 @@ impl Strip {
             return;
         };
         let left = grab.origin + grab.travel;
+        // Over another group, the tabs wait to join it on release (Search's
+        // `groupDestination`) rather than moving along their own block.
+        let drop = self
+            .with_layout(|browser, row, layout| {
+                let Carried::Tabs { lead, run } = &grab.what else {
+                    return None;
+                };
+                let me = browser.tab(*lead).filter(|t| !t.is_pinned())?;
+                let spans = drop_spans(browser, row, &layout.tabs);
+                groups::drop_target(grab.start + grab.travel, &spans, run)
+                    .filter(|to| Some(to.group.as_str()) != group_of(me))
+            })
+            .flatten();
+        let over = drop.is_some();
+        self.ivars().drop.replace(drop);
+        if over {
+            return;
+        }
         let wanted = self
             .with_layout(|browser, row, layout| match &grab.what {
                 Carried::Tabs { lead, run } => {
@@ -1405,6 +1464,12 @@ impl Strip {
                 cmd_held: self.ivars().cmd_held.get(),
                 active: browser.active(),
                 editing,
+                drop: self
+                    .ivars()
+                    .drop
+                    .borrow()
+                    .as_ref()
+                    .and_then(|to| browser.groups().iter().position(|g| g.id == to.group)),
             };
             let flock = self.ivars().flock.borrow();
             // Where a slot is drawn this frame: its springs' place, at the row's height.
@@ -1436,6 +1501,9 @@ impl Strip {
                 faded(place.alpha, || self.draw_gone(browser, key, rect, &paint));
             }
             draw_group_lines(browser, &row, &layout, &at, dark);
+            if let Some(place) = paint.drop {
+                drop_plate(browser, &row, &layout, place, dark);
+            }
             // The live tab's pill, under every tab, gliding when another is picked.
             if let Some(rect) = self.live_pill(browser, &row, &layout, &at) {
                 live_pill(rect, dark);
@@ -1517,6 +1585,63 @@ impl Strip {
             palette::draw_text(label, text, &palette::MUTED.resolve(dark));
         }
     }
+}
+
+/// The group carried tabs would join if let go now, heading through last tab, on a
+/// plate of its colour under them: the hand covers the heading it is over, so the
+/// whole group says it.
+fn drop_plate(browser: &Browser, row: &[Item], layout: &Layout, place: usize, dark: bool) {
+    let Some(group) = browser.groups().get(place) else {
+        return;
+    };
+    let Some((_, (start, end))) = group_spans(browser, row, &layout.tabs)
+        .into_iter()
+        .find(|(id, _)| *id == group.id)
+    else {
+        return;
+    };
+    let top = (palette::STRIP - palette::ROW) / 2.0;
+    let path = palette::pill_path(NSRect::new(
+        NSPoint::new(start - 3.0, top - 3.0),
+        NSSize::new(end - start + 6.0, palette::ROW + 6.0),
+    ));
+    let colour = palette::group_colour(group.colour.as_deref()).resolve(dark);
+    colour
+        .colorWithAlphaComponent(if dark { 0.22 } else { 0.14 })
+        .setFill();
+    path.fill();
+    colour.colorWithAlphaComponent(0.7).setStroke();
+    path.setLineWidth(1.5);
+    path.stroke();
+}
+
+/// Each group in the row for a drop: its heading's span and its shown tabs'.
+fn drop_spans<'a>(browser: &'a Browser, row: &[Item], rects: &[NSRect]) -> Vec<GroupSpans<'a>> {
+    let mut spans: Vec<GroupSpans<'a>> = Vec::new();
+    for (item, rect) in row.iter().zip(rects) {
+        let span = (rect.origin.x, rect.origin.x + rect.size.width);
+        match item {
+            Item::Heading(place) => {
+                if let Some(group) = browser.groups().get(*place) {
+                    spans.push(GroupSpans {
+                        group: &group.id,
+                        collapsed: group.collapsed,
+                        heading: span,
+                        members: Vec::new(),
+                    });
+                }
+            }
+            Item::Tab(index) => {
+                let tab = &browser.tabs()[*index];
+                if let (Some(group), Some(last)) = (group_of(tab), spans.last_mut())
+                    && last.group == group
+                {
+                    last.members.push((tab.id, span));
+                }
+            }
+        }
+    }
+    spans
 }
 
 /// Each group in the row, by its identity, from its heading's left edge to its last
@@ -1604,11 +1729,12 @@ fn draw_item(browser: &Browser, paint: &Paint, slot: usize, item: &Item, rect: N
     match item {
         Item::Heading(place) => {
             let group = &browser.groups()[*place];
+            let dropping = paint.drop == Some(*place);
             draw_heading(
                 &group.name,
                 group.colour.as_deref(),
                 rect,
-                paint.spot == Spot::Heading(*place),
+                dropping || paint.spot == Spot::Heading(*place),
                 paint.dark,
             );
         }
