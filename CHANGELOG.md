@@ -7,6 +7,12 @@ Info.plist.
 
 ## Unreleased
 
+Chrome polish, no behaviour changes: the tab row's plus always shows, presses land at
+once under Reduce Motion, the live tab keeps a hover wash, narrow-tab letters and the
+load line read better; address-bar progress shows only while loading; tab-menu
+dividers, dimming and the colour tick fixed; Settings rows tint fully, explain
+themselves and line up; the find bar's count, clicks, dimming and pitch fixed.
+
 ## 0.1.8 — 2026-11-05
 
 Picked tabs close together and move together.

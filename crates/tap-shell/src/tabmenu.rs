@@ -138,11 +138,10 @@ fn close_entry(state: &TabState) -> Entry {
 /// The tab's menu, top to bottom, in Search's order where Tap has the operation at
 /// all (Reload Tab is Tap's addition, first as in other browsers).
 #[must_use]
-pub fn tab_entries(state: &TabState) -> Vec<Entry> {
+pub fn tab_entries(state: &TabState, can_copy: bool) -> Vec<Entry> {
     let mut entries = Vec::new();
     if !state.pinned {
         entries.push(move_to_group(state));
-        entries.push(separator());
     }
     entries.extend([
         entry("Reload Tab", Command::TabReload, state.has_page),
@@ -168,14 +167,15 @@ pub fn tab_entries(state: &TabState) -> Vec<Entry> {
     // Right-clicked among picked tabs: all their addresses (Search's Copy Addresses).
     if state.picked > 1 {
         entries.push(separator());
-        let mut copy = entry("", Command::TabCopySelected, true);
+        let mut copy = entry("", Command::TabCopySelected, can_copy);
         copy.title = format!("Copy {} Addresses", state.picked);
         entries.push(copy);
     }
     entries
 }
 
-/// A heading's Color submenu: Chrome's nine, each with its dot, the group's ticked.
+/// A heading's Color submenu: Chrome's nine, each with its dot, the group's ticked
+/// (drawn into its dot: AppKit hides an item's own tick behind its image).
 fn colours(current: Option<&str>) -> Entry {
     let sub = COLOURS
         .iter()
@@ -205,7 +205,9 @@ fn colours(current: Option<&str>) -> Entry {
 pub fn group_entries(collapsed: bool, colour: Option<&str>) -> Vec<Entry> {
     vec![
         entry("Rename Group…", Command::GroupRename, true),
+        separator(),
         colours(colour),
+        separator(),
         entry(
             if collapsed {
                 "Expand Group"
@@ -243,7 +245,8 @@ pub fn show_tab(
 ) {
     TARGET.set(Some(id));
     GROUP.replace(None);
-    pop_up(mtm, commands, event, view, &tab_entries(state));
+    let can_copy = rt::read(Browser::can_copy_selected).unwrap_or(false);
+    pop_up(mtm, commands, event, view, &tab_entries(state, can_copy));
 }
 
 /// The heading's menu, up under the pointer.
@@ -268,7 +271,9 @@ pub fn show_group(
 }
 
 /// A colour's dot for its menu item, drawn as the menu shows it (light or dark).
-fn swatch(colour: &'static str) -> Retained<NSImage> {
+/// The chosen one carries its tick in the image: AppKit hides the item's own
+/// tick behind an image, so only the chosen dot draws one.
+fn swatch(colour: &'static str, ticked: bool) -> Retained<NSImage> {
     let draw = RcBlock::new(move |rect: NSRect| -> Bool {
         let dark = palette::drawing_dark();
         palette::group_colour(Some(colour)).resolve(dark).setFill();
@@ -277,6 +282,24 @@ fn swatch(colour: &'static str) -> Retained<NSImage> {
             NSSize::new(rect.size.width - 2.0, rect.size.height - 2.0),
         ))
         .fill();
+        if ticked {
+            palette::on_group(dark).setStroke();
+            let tick = NSBezierPath::bezierPath();
+            tick.moveToPoint(objc2_foundation::NSPoint::new(
+                rect.origin.x + 3.4,
+                rect.origin.y + 6.1,
+            ));
+            tick.lineToPoint(objc2_foundation::NSPoint::new(
+                rect.origin.x + 5.4,
+                rect.origin.y + 8.1,
+            ));
+            tick.lineToPoint(objc2_foundation::NSPoint::new(
+                rect.origin.x + 8.7,
+                rect.origin.y + 3.9,
+            ));
+            tick.setLineWidth(1.5);
+            tick.stroke();
+        }
         Bool::YES
     });
     NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(12.0, 12.0), false, &draw)
@@ -315,7 +338,7 @@ fn build(
             item.setSubmenu(Some(&build(mtm, commands, &spec.sub)));
         }
         if let Some(colour) = spec.swatch {
-            item.setImage(Some(&swatch(colour)));
+            item.setImage(Some(&swatch(colour, spec.checked)));
         }
         item.setState(if spec.checked {
             NSControlStateValueOn
@@ -470,13 +493,18 @@ fn rename_group(place: usize) {
     .flatten() else {
         return;
     };
-    dialogs::ask_name("Rename Group", "", &name, move |name| {
-        rt::dispatch(move |browser| {
-            if let Some(place) = browser.groups().iter().position(|g| g.id == id) {
-                browser.rename_group(place, &name);
-            }
-        });
-    });
+    dialogs::ask_name(
+        "Rename Group",
+        "Leave it empty to keep the current name.",
+        &name,
+        move |name| {
+            rt::dispatch(move |browser| {
+                if let Some(place) = browser.groups().iter().position(|g| g.id == id) {
+                    browser.rename_group(place, &name);
+                }
+            });
+        },
+    );
 }
 
 /// The picked tabs' addresses on the pasteboard, one to a line, in the row's order
@@ -540,12 +568,11 @@ mod tests {
 
     #[test]
     fn the_tab_menu_is_in_search_order_with_its_separators() {
-        let entries = tab_entries(&state());
+        let entries = tab_entries(&state(), true);
         assert_eq!(
             titles(&entries),
             [
                 "Move to Group",
-                "",
                 "Reload Tab",
                 "Rename…",
                 "Duplicate Tab",
@@ -567,19 +594,23 @@ mod tests {
             picked: 3,
             ..state()
         };
-        let entries = tab_entries(&picked);
+        let entries = tab_entries(&picked, true);
         assert_eq!(
             entries.last().map(|e| e.title.as_str()),
             Some("Copy 3 Addresses")
         );
         assert!(titles(&entries).contains(&"Close 3 Tabs"));
         assert!(!titles(&entries).contains(&"Close Tab"));
-        assert!(!titles(&tab_entries(&state())).contains(&"Copy 3 Addresses"));
+        assert!(!titles(&tab_entries(&state(), true)).contains(&"Copy 3 Addresses"));
+        let off = tab_entries(&picked, false);
+        let copy = off.last().expect("copy");
+        assert_eq!(copy.title, "Copy 3 Addresses", "the title keeps its count");
+        assert!(!copy.enabled, "no picked tab with a page");
     }
 
     #[test]
     fn move_to_group_offers_a_new_one_the_others_and_a_way_out() {
-        let entries = tab_entries(&state());
+        let entries = tab_entries(&state(), true);
         let sub = &entries[0].sub;
         assert_eq!(
             titles(sub),
@@ -592,13 +623,13 @@ mod tests {
             groups: Vec::new(),
             ..state()
         };
-        assert_eq!(titles(&tab_entries(&loose)[0].sub), ["New Group"]);
+        assert_eq!(titles(&tab_entries(&loose, true)[0].sub), ["New Group"]);
         let pin = TabState {
             pinned: true,
             ..state()
         };
         assert_eq!(
-            tab_entries(&pin)[0].title,
+            tab_entries(&pin, true)[0].title,
             "Reload Tab",
             "a pin has no groups"
         );
@@ -606,17 +637,20 @@ mod tests {
 
     #[test]
     fn a_page_less_tab_and_a_lone_tab_disable_what_they_cannot_do() {
-        let entries = tab_entries(&TabState {
-            has_page: false,
-            others: false,
-            right: false,
-            can_reopen: false,
-            pinned: true,
-            group: None,
-            groups: Vec::new(),
-            can_sleep: false,
-            picked: 0,
-        });
+        let entries = tab_entries(
+            &TabState {
+                has_page: false,
+                others: false,
+                right: false,
+                can_reopen: false,
+                pinned: true,
+                group: None,
+                groups: Vec::new(),
+                can_sleep: false,
+                picked: 0,
+            },
+            true,
+        );
         let on: Vec<&str> = entries
             .iter()
             .filter(|e| e.enabled && e.tag.is_some())
@@ -631,20 +665,22 @@ mod tests {
             titles(&group_entries(false, Some("red"))),
             [
                 "Rename Group…",
+                "",
                 "Color",
+                "",
                 "Collapse Group",
                 "",
                 "Ungroup Tabs",
                 "Close Group"
             ]
         );
-        assert_eq!(group_entries(true, None)[2].title, "Expand Group");
+        assert_eq!(group_entries(true, None)[4].title, "Expand Group");
     }
 
     #[test]
     fn the_colour_menu_offers_chrome_s_nine_and_ticks_the_group_s() {
         let entries = group_entries(false, Some("red"));
-        let colours = &entries[1].sub;
+        let colours = &entries[2].sub;
         assert_eq!(colours.len(), 9);
         assert_eq!(colours[0].title, "Blue");
         let ticked: Vec<&str> = colours
