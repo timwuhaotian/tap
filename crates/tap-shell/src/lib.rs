@@ -8,6 +8,7 @@
 mod address_bar;
 mod agents;
 mod bench;
+mod blank;
 mod bring;
 mod crash;
 mod dialogs;

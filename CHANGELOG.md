@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+Chrome refinement, no behaviour change.
+
+- **One card, one pill, one shadow**: every floating card and pill now shares
+  `palette`'s radius, hairline and shadow instead of each drawing its own.
+- **The live tab reads as a plate**: a hairline edge in both themes, and the
+  hovered and picked tabs wear one too.
+
 Chrome polish, no behaviour changes: the tab row's plus always shows, presses land at
 once under Reduce Motion, the live tab keeps a hover wash, narrow-tab letters and the
 load line read better; address-bar progress shows only while loading; tab-menu
@@ -16,6 +23,24 @@ themselves and line up; the find bar's count, clicks, dimming and pitch fixed.
 - **New tabs pile up and close**: +/⌘T and the "new tab" field command always open a
   fresh blank tab instead of reusing the blank one in front; the cross on a new tab
   closes it, and closing the only tab when it is already new closes the window.
+
+A load stops paying for what didn't change: the page-load path is tightened end to
+end, behaviour-preserving (docs/PLAN.md §10 "The page-load path").
+
+- A page that keeps loading no longer rewrites `session.json` on every progress tick;
+  the session and history files are encoded on the writer thread, not the main one.
+- A page that already wears a fresh site icon (kept under 7 days) isn't probed,
+  re-downloaded and redrawn again on every visit, and the PNG is written off the main
+  thread.
+- The web view's observer reads only the property that moved, instead of all seven
+  and calling all five model setters, on each of a load's ticks.
+- Progress counts as change only in steps the drawn line can show; the tab row and the
+  address bar redraw only when something drawn moved, and the reload/stop symbol and
+  the window title are touched only on change.
+- The chrome's text style and the address bar's badge image are made once, not on
+  every draw.
+- History's recency score is worked out once per visit when the file is written, not
+  inside the sort's comparator.
 
 Coding agents browse with Tap.
 

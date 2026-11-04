@@ -141,7 +141,7 @@ define_class!(
             let dark = palette::is_dark(self);
             let bounds = self.bounds();
             CARD.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, 12.0, 12.0).fill();
+            palette::card_path(bounds).fill();
             palette::HAIRLINE.resolve(dark).setFill();
             for y in self.ivars().borrow().iter() {
                 NSBezierPath::fillRect(NSRect::new(
@@ -537,7 +537,7 @@ define_class!(
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             palette::WASH.resolve(palette::is_dark(self)).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.bounds(), 8.0, 8.0).fill();
+            palette::pill_path(self.bounds()).fill();
         }
 
         #[unsafe(method(hitTest:))]

@@ -27,7 +27,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSEventModifierFlags,
-    NSGraphicsContext, NSResponder, NSShadow, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSGraphicsContext, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_core_graphics::CGContext;
 use objc2_foundation::{NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSTimer};
@@ -227,7 +227,7 @@ enum Move {
 /// A click whose meaning waits for the release, so the press can still become a carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Click {
-    /// The live tab: the field opens on it.
+    /// Any tab plainly clicked: the field opens on the tab in front.
     Edit,
     /// A heading: its group folds or opens.
     Fold(String),
@@ -452,11 +452,7 @@ fn faded(alpha: f64, draw: impl FnOnce()) {
 /// Search's lift for a carried tab: a soft shadow under it while the hand has it.
 fn lifted(draw: impl FnOnce()) {
     NSGraphicsContext::saveGraphicsState_class();
-    let shadow = NSShadow::new();
-    shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.14)));
-    shadow.setShadowBlurRadius(12.0);
-    shadow.setShadowOffset(NSSize::new(0.0, -4.0));
-    shadow.set();
+    palette::lift_shadow().set();
     draw();
     NSGraphicsContext::restoreGraphicsState_class();
 }
@@ -915,12 +911,14 @@ impl Strip {
             Spot::Tab(index) => {
                 let Some(id) = tab_at(index) else { return };
                 let live = rt::read(|browser| browser.active() == Some(id)).unwrap_or(false);
-                // Any other tab is picked at once, as it goes into the hand; the live
-                // one becomes the field on release, unless the address bar holds the
-                // field, or the press became a carry.
-                // A plain click lets any picked tabs go, and the page has the keys;
-                // on one of several picked, only once it is let go without a carry,
-                // since a carry takes them all along.
+                // Any other tab is picked at once, as it goes into the hand; any tab
+                // becomes the field on release, unless the press became a carry. Tap
+                // departs from Search's `DragStrip` here, which opens the field on the
+                // live tab alone and only while the address bar is away (docs/PLAN.md).
+                // A plain click lets any picked tabs go, and the page has the keys
+                // until the field opens on release; on one of several picked, only
+                // once it is let go without a carry, since a carry takes them all
+                // along.
                 let (picked, among) = rt::read(|browser| {
                     let count = browser.selection_count();
                     (count > 0, count > 1 && browser.is_selected(id))
@@ -934,7 +932,7 @@ impl Strip {
                 }
                 if among {
                     self.ivars().click.replace(Some(Click::Unpick(id)));
-                } else if live && !self.look_now().bar {
+                } else {
                     self.ivars().click.replace(Some(Click::Edit));
                 }
                 if !live && !among {
@@ -1476,7 +1474,7 @@ impl Strip {
                     }
                     Item::Tab(_) => {
                         palette::WASH.resolve(dark).setFill();
-                        pill(rect).fill();
+                        palette::pill_path(rect).fill();
                     }
                 });
                 draw_item(browser, &paint, slot, item, rect);
@@ -1486,7 +1484,7 @@ impl Strip {
             // The plus is always there to be found; only its wash waits for the pointer.
             if inside && paint.spot == Spot::Plus {
                 palette::HOVER.resolve(dark).setFill();
-                pill(plus_rect).fill();
+                palette::pill_path(plus_rect).fill();
             }
             plus(plus_rect, &palette::MUTED.resolve(dark));
         });
@@ -1644,16 +1642,13 @@ fn draw_heading(name: &str, colour: Option<&str>, rect: NSRect, under: bool, dar
 
 /// The live tab's pill: Search's wash, lifted a little off the row so the tab you
 /// are on reads as the one in front — a soft shadow in a light window, a faint
-/// edge in a dark one, where a shadow wouldn't show.
+/// edge in a dark one, where a shadow wouldn't show — and a hairline round it in
+/// both, so the pill reads as a plate.
 fn live_pill(rect: NSRect, dark: bool) {
-    let path = pill(rect);
+    let path = palette::pill_path(rect);
     NSGraphicsContext::saveGraphicsState_class();
     if !dark {
-        let shadow = NSShadow::new();
-        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.10)));
-        shadow.setShadowBlurRadius(3.0);
-        shadow.setShadowOffset(NSSize::new(0.0, -1.0));
-        shadow.set();
+        palette::live_shadow().set();
     }
     palette::WASH.resolve(dark).setFill();
     path.fill();
@@ -1662,6 +1657,8 @@ fn live_pill(rect: NSRect, dark: bool) {
         NSColor::colorWithWhite_alpha(1.0, 0.07).setStroke();
         path.setLineWidth(1.0);
         path.stroke();
+    } else {
+        palette::stroke_hairline(&path, dark);
     }
 }
 
@@ -1706,20 +1703,29 @@ fn draw_tab(
     // A picked tab wears the accent, lightly; one under the pointer its own grey.
     let picked = !gone && browser.is_selected(tab.id);
     if picked {
-        NSColor::controlAccentColor()
+        let accent = NSColor::controlAccentColor();
+        accent
             .colorWithAlphaComponent(if dark { 0.32 } else { 0.18 })
             .setFill();
-        pill(*rect).fill();
+        let plate = palette::pill_path(*rect);
+        plate.fill();
+        accent
+            .colorWithAlphaComponent(if dark { 0.50 } else { 0.35 })
+            .setStroke();
+        plate.setLineWidth(1.0);
+        plate.stroke();
     } else if under && !live {
         palette::HOVER.resolve(dark).setFill();
-        pill(*rect).fill();
+        let plate = palette::pill_path(*rect);
+        plate.fill();
+        palette::stroke_hairline(&plate, dark);
     } else if under && live {
         // Over the live pill, so only a breath of hover lest it cover the live one.
         palette::HOVER
             .resolve(dark)
             .colorWithAlphaComponent(0.5)
             .setFill();
-        pill(*rect).fill();
+        palette::pill_path(*rect).fill();
     }
     let titled = rect.size.width >= palette::TAB_TITLED;
     // Search's `ReadingFill`: ink at 5.5% over the live pill, from its
@@ -1899,7 +1905,7 @@ fn reading_fill(rect: NSRect, read: f64, dark: bool) {
     // The context is saved and restored around the clip, balanced on this call,
     // so the pill's clip never leaks into what is drawn after the fill.
     NSGraphicsContext::saveGraphicsState_class();
-    pill(rect).addClip();
+    palette::pill_path(rect).addClip();
     NSColor::colorWithWhite_alpha(tone, 0.055).setFill();
     NSBezierPath::fillRect(NSRect::new(
         rect.origin,
@@ -2110,10 +2116,6 @@ fn letter(label: &str) -> String {
         .chars()
         .find(|c| c.is_alphanumeric())
         .map_or_else(|| "•".to_owned(), |c| c.to_uppercase().collect())
-}
-
-fn pill(rect: NSRect) -> Retained<NSBezierPath> {
-    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, palette::RADIUS, palette::RADIUS)
 }
 
 fn cross(square: NSRect, color: &NSColor) {

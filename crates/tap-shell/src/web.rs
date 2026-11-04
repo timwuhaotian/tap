@@ -1005,8 +1005,8 @@ pub fn perform(effect: Effect) {
         Effect::Sleep(tab) => sleep::try_sleep(tab, |_| {}),
         Effect::Retire { tab, since } => sleep::try_retire(tab, since),
         Effect::FocusPage(tab) => window::focus_page(existing(tab).as_deref()),
-        Effect::Save(shape) => store::save_session(&shape),
-        Effect::SaveHistory(data) => store::save_history(data),
+        Effect::Save(shape) => store::save_session(shape),
+        Effect::SaveHistory(history, now) => store::save_history(history, now),
         Effect::Find(ask) => page_find::ask(&ask),
         Effect::ClearFind { tab, generation } => page_find::clear(tab, generation),
     }
@@ -1030,7 +1030,8 @@ fn load(web: &WKWebView, address: &str) {
     }
 }
 
-/// Reads what the observer watches and hands it to the model.
+/// Reads what the observer watches and hands it to the model. For callers without a
+/// key to go by; the observer itself takes the cheaper road below.
 fn sync(web: &WKWebView) {
     let Some(tab) = tab_of(web) else { return };
     // SAFETY: plain property reads on a live web view.
@@ -1055,6 +1056,52 @@ fn sync(web: &WKWebView) {
         browser.page_loading(tab, loading, progress);
         browser.page_history(tab, back, forward);
     });
+}
+
+/// Reads one watched property and hands it to the model. A load fires the observer
+/// many times over, and re-reading all seven properties — five model calls each time
+/// — for every one of them cost the main thread dearly. Loading and progress are read
+/// together: the model takes them as one.
+fn sync_one(web: &WKWebView, key: &str) {
+    let Some(tab) = tab_of(web) else { return };
+    // SAFETY: plain property reads on a live web view, whichever key moved.
+    let reads = || unsafe {
+        match key {
+            "title" => Reads::Title(web.title().map(|t| t.to_string()).unwrap_or_default()),
+            "URL" => Reads::Address(
+                web.URL()
+                    .and_then(|u| u.absoluteString())
+                    .map(|u| u.to_string())
+                    .unwrap_or_default(),
+            ),
+            "loading" | "estimatedProgress" => {
+                Reads::Load(web.isLoading(), web.estimatedProgress())
+            }
+            "canGoBack" | "canGoForward" => Reads::History(web.canGoBack(), web.canGoForward()),
+            "hasOnlySecureContent" => Reads::Secure(web.hasOnlySecureContent()),
+            _ => Reads::All,
+        }
+    };
+    match reads() {
+        Reads::Title(title) => rt::dispatch(move |b| b.page_title(tab, &title)),
+        Reads::Address(url) => rt::dispatch(move |b| b.page_url(tab, &url)),
+        Reads::Load(loading, progress) => {
+            rt::dispatch(move |b| b.page_loading(tab, loading, progress));
+        }
+        Reads::History(back, forward) => rt::dispatch(move |b| b.page_history(tab, back, forward)),
+        Reads::Secure(secure) => rt::dispatch(move |b| b.page_security(tab, secure)),
+        Reads::All => sync(web),
+    }
+}
+
+/// What one key's read brought back.
+enum Reads {
+    Title(String),
+    Address(String),
+    Load(bool, f64),
+    History(bool, bool),
+    Secure(bool),
+    All,
 }
 
 fn process_ended(web: &WKWebView, end: PageEnd) {
@@ -1979,13 +2026,17 @@ define_class!(
         #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
         fn observe(
             &self,
-            _key: Option<&NSString>,
+            key: Option<&NSString>,
             object: Option<&AnyObject>,
             _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
             _context: *mut c_void,
         ) {
-            if let Some(web) = object.and_then(|o| o.downcast_ref::<WKWebView>()) {
-                sync(web);
+            let Some(web) = object.and_then(|o| o.downcast_ref::<WKWebView>()) else {
+                return;
+            };
+            match key {
+                Some(key) => sync_one(web, &key.to_string()),
+                None => sync(web),
             }
         }
     }

@@ -1214,6 +1214,22 @@ client and a few verbs on it, not a server. Delivered as a PR at the user's requ
 - Not in: screenshots (a background tab's WKWebView has nothing drawn to snapshot), a
   mark on agents' tabs, handing a tab back for a sign-in, MCP (a `tap mcp` verb on
   the same client, if an agent without a shell needs one).
+### Unreleased — A click on any tab puts the cursor in the field
+
+At the user's request (2026-11-05: "每当点击任何一个tab，甚至是new tab，自动focus/选中地址栏的url" —
+the cursor, not the pointer), a deliberate departure from Search's `DragStrip`:
+Search opens the field only on the live tab, and only while the address bar is away.
+
+- [x] **Any plain click opens the field** (`strip.rs`): a plain press on any tab —
+  the live one in either mode, or one behind — sets `Click::Edit`, so on release
+  `begin_editing(false)` opens the field on the tab now in front, its address selected
+  (`place_field`'s `makeFirstResponder`); a blank one opens the field empty with the
+  cursor in it, as the plus already does. The press still selects a tab behind at
+  once; a carry clears the click as before, and ⌘/⇧ picks and the unpick release keep
+  the page's keys.
+- Checked: `cargo test` (tap-core 107, tap-import 31, tap-shell 57), clippy
+  `-D warnings`, nightly fmt. Not checked by eye: a real click in a running app
+  (`scripts/bench click` over the tab row, then `field`).
 
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
@@ -1462,6 +1478,49 @@ it).
 |---|---|---|---|---|---|---|
 | 2026-11-04 | M0 first window (placeholder, no browser yet) | — | — | — | — | 337 KB executable, 652 KB app, 448 KB DMG (arm64, release, stripped) |
 
+### The page-load path (audited 2026-11-05)
+
+An audit of everything between Return and the page being drawn found the load's own
+path thin (decide policy, commit, finish) and the waste concentrated where WebKit
+reports progress: every KVO tick paid for work that often changed nothing. Seven
+changes, each behaviour-preserving:
+
+1. **The session's dirty flag is set only by a real change** (`browser.rs`).
+   `page_url`/`page_title` set `session_changed` unconditionally, so each of a
+   load's 20–50 progress ticks cloned every tab and encoded the whole session JSON
+   on the main thread even when the URL and title were the same. `Tab::set` now
+   answers whether it changed.
+2. **Session and history files are encoded on the writer thread** (`store.rs`).
+   `Effect::Save`/`SaveHistory` carry the `Shape`/`History` themselves; the writer
+   thread encodes and replaces, as Search's `Store.swift` does. `save_session_now`
+   still waits for the write before returning.
+3. **A page that already wears a fresh icon isn't asked again** (`icons.rs`).
+   `fetch` now returns early when the index has an icon for the page and its PNG
+   is younger than 7 days (Search's `Favicons.fresh`), instead of re-probing,
+   re-downloading, decoding, drawing and writing on the main thread on every visit.
+   The PNG write goes through the writer thread.
+4. **KVO changes are read per key** (`web.rs`). The observer matched on the key
+   path and read only what it says, instead of re-reading all seven observed
+   properties and calling all five model methods per tick.
+5. **Progress is quantised to 1/128 before it counts as change** (`browser.rs`),
+   and `window::update` marks the strip for redraw only when a drawn thing
+   changed — a background tab's progress line is drawn nowhere. The bar redraws
+   only for window fields or the active tab.
+6. **`window::update` does its always-work only on change** (`window.rs`). The
+   reload/stop symbol is rebuilt and `setTitle` called only when loading or the
+   title moved; the downloads door refresh moved to launch, Settings and download
+   start/end, where it belongs.
+7. **Draw constants are drawn once** (`palette.rs`, `address_bar.rs`). The text
+   font and paragraph style, and the address bar's badge symbol image per
+   (symbol, warns, look), are cached rather than rebuilt in every draw.
+
+History's `encode` also decorates each visit with its score before sorting
+(`score` ran inside the comparator, `O(n log n)` `exp` calls). Not taken, on
+purpose: web view pooling (the shared process pool already measured at 9–10 ms
+per view), WebContent prewarming (a first-navigation win to measure first), the
+keyword and suggest keystroke paths, Shield's per-settings script rebuild, and
+`tab_of`'s pointer scan — all smaller, for a later round.
+
 ## 11. Top technical risks
 
 Each spike's result is written next to its risk.
@@ -1662,6 +1721,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | At the user's request ("tap bring things over 理论上应该是能自动侦测到本地的chrome/search 等类似的profil数据的，但目前没有"), 0.1.4 brings forward the core of M6: Bring things over finds Search and the Chromium browsers on this Mac and brings one's open tabs and groups (#841), history and bookmarks through the profile merge (§8 "0.1.4"). `rusqlite` against the system's libsqlite3 joins `tap-import`, as §5.3 planned. |
 | 2026-11-04 | At the user's request, the empty tab row opens a new tab on a double click (Search's `DragStrip.onDoubleClick`, replacing double-click-to-zoom there; a single press still drags the window), and the strip's layout reserves the downloads door beside the helm and pins the plus before those doors when tabs overflow, so the plus never runs under them (`fixed-deviation` from the overflow running to the helm's edge). Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 | 2026-11-05 | At the user's request (New Tab should open many, and its cross should close it), new tabs pile up: +/⌘T and the "new tab" field command always open a fresh blank tab instead of reusing the blank one in front, and closing the only tab when it is already new closes the window as Search's `close` does (`fixed-deviation` from Search's `newTab` reusing a blank tab). Core asks with a new `Effect::CloseWindow`, carried out by the shell. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
+| 2026-11-05 | The page-load path is audited end to end at the user's request and tightened in seven places (§10 "The page-load path"), all behaviour-preserving, as a PR like the one before it. |
 | 2026-11-05 | At the user's request, agents drive Tap through a `tap` CLI and a skill Tap installs, not MCP (§8 "Agents use Tap"): every agent here has a shell, a skill loads only when a task needs it, and one install in `~/.agents/skills` reaches them all. The bench switch is on by default (`fixed-deviation`). Delivered as a PR at the user's request. |
 
 ## Appendix A — Parity tracker

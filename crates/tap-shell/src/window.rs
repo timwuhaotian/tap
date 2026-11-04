@@ -7,7 +7,7 @@
 //! peek panel, no way to stop WebKit's own swipe (`register` turns its back/forward
 //! gestures on), and no back-forward list to pick from. Both wait on hooks there.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use block2::{DynBlock, RcBlock};
 use objc2::{
@@ -17,8 +17,8 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder, NSShadow,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton,
+    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder,
     NSTextField, NSTextFieldDelegate, NSTextInputClient, NSTextView, NSView,
     NSViewFrameDidChangeNotification, NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidExitFullScreenNotification,
@@ -45,6 +45,7 @@ use tap_core::{
 
 use crate::{
     address_bar::{self, AddressBar},
+    blank::BlankView,
     dialogs, downloads, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
@@ -95,6 +96,8 @@ struct Views {
     /// The address bar under the strip, while Settings has it up.
     bar: Retained<AddressBar>,
     stage: Retained<Stage>,
+    /// The instrument behind a blank tab's field.
+    blank: Retained<BlankView>,
     field: Retained<NSTextField>,
     plate: Retained<Plate>,
     /// The rows under the field, and the grey rest of the address after its text.
@@ -109,6 +112,11 @@ struct Views {
     trouble_text: Retained<NSTextField>,
     helm: [Retained<NSButton>; 3],
     shown: RefCell<Option<TabId>>,
+    /// Whether the helm's third door last showed Stop, so its symbol is rebuilt only
+    /// on change. Starts the other way round, so the first update draws it.
+    stopping: Cell<bool>,
+    /// The window's last title, so AppKit is told only when it moves.
+    title: RefCell<String>,
     _field_delegate: Retained<FieldDelegate>,
 }
 
@@ -169,6 +177,12 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
     root.addSubview(&stage);
+    let blank = BlankView::new(mtm, stage.bounds());
+    blank.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    blank.setHidden(true);
+    stage.addSubview(&blank);
     let bar = AddressBar::new(
         mtm,
         NSRect::new(
@@ -225,6 +239,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             strip,
             bar,
             stage,
+            blank,
             field,
             plate,
             offers,
@@ -235,10 +250,15 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             trouble_text,
             helm,
             shown: RefCell::new(None),
+            stopping: Cell::new(true),
+            title: RefCell::new(String::new()),
             _field_delegate: field_delegate,
         });
     });
     with_views(arrange);
+    // The downloads door's first state; after this, launch-time Settings, a download
+    // starting or ending, and Settings moving tell it what to do.
+    with_views(refresh_fetch_door);
     window.makeKeyAndOrderFront(None);
 }
 
@@ -454,25 +474,39 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         queue_launch_conversion();
     }
     with_views(|views| {
-        refresh_fetch_door(views);
-        if !dirty.is_empty() || !tabs.is_empty() {
+        // The strip draws every tab; the bar, the window's fields and the front tab's.
+        // A background tab's progress is drawn nowhere, so it marks nothing for redraw.
+        let strip_moved = !dirty.is_empty()
+            || tabs.iter().any(|(id, fields)| {
+                Some(*id) == view.active
+                    || fields.intersects(TabFields::all() - TabFields::PROGRESS)
+            });
+        if strip_moved {
             views.strip.setNeedsDisplay(true);
+        }
+        if !dirty.is_empty() || !active_dirty.is_empty() {
             views.bar.setNeedsDisplay(true);
         }
         views.helm[0].setEnabled(view.can_back);
         views.helm[1].setEnabled(view.can_forward);
-        let (symbol, name) = if view.loading {
-            ("xmark", "Stop")
-        } else {
-            ("arrow.clockwise", "Reload")
-        };
-        if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str(symbol),
-            Some(&NSString::from_str(name)),
-        ) {
-            views.helm[2].setImage(Some(&image));
+        // Loading flips twice a load; the SF Symbol lookup ran on every update.
+        if views.stopping.replace(view.loading) != view.loading {
+            let (symbol, name) = if view.loading {
+                ("xmark", "Stop")
+            } else {
+                ("arrow.clockwise", "Reload")
+            };
+            if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str(symbol),
+                Some(&NSString::from_str(name)),
+            ) {
+                views.helm[2].setImage(Some(&image));
+            }
         }
-        views.window.setTitle(&NSString::from_str(&view.title));
+        if views.title.borrow().as_str() != view.title {
+            views.window.setTitle(&NSString::from_str(&view.title));
+            views.title.borrow_mut().clone_from(&view.title);
+        }
 
         if dirty.intersects(BrowserFields::ACTIVE | BrowserFields::TABS)
             || active_dirty.intersects(TabFields::AWAKE | TabFields::FAILURE | TabFields::URL)
@@ -523,6 +557,7 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
 /// The active tab's page in the stage, or what it says in place of the page.
 fn show_page(views: &Views, view: &View) {
     show_own_page(views, view.page);
+    show_blank(views, view);
     let web = view.active.and_then(web::existing);
     let previous = views.shown.replace(view.active);
     if previous != view.active
@@ -561,6 +596,15 @@ fn show_page(views: &Views, view: &View) {
         }
         None => views.trouble.setHidden(true),
     }
+}
+
+/// The instrument behind a blank tab's field, or put away when the tab in
+/// front has a page of its own to show.
+fn show_blank(views: &Views, view: &View) {
+    let show = view.blank && view.page.is_none();
+    views.blank.setFrame(views.stage.bounds());
+    views.blank.setHidden(!show);
+    views.blank.set_animating(show);
 }
 
 /// One of Tap's own pages in the stage, below the find bar and the field like a web page,
@@ -1340,17 +1384,10 @@ impl Suggest {
         if words.is_empty() {
             return;
         }
-        let shadow = NSShadow::new();
-        shadow.setShadowBlurRadius(14.0);
-        shadow.setShadowOffset(NSSize::new(0.0, -3.0));
-        shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(
-            0.0,
-            if dark { 0.5 } else { 0.16 },
-        )));
-        shadow.set();
-        palette::GROUND.resolve(dark).setFill();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.card(), 12.0, 12.0).fill();
-        NSShadow::new().set();
+        palette::shadowed(&palette::float_shadow(dark), || {
+            palette::GROUND.resolve(dark).setFill();
+            palette::card_path(self.card()).fill();
+        });
         let engine = Engine::from_raw(&text(&Kept::new(), "search.engine")).unwrap_or_default();
         let detail = format!(
             "Search {}",
@@ -1759,13 +1796,10 @@ define_class!(
         fn draw_rect(&self, _dirty: NSRect) {
             let dark = palette::is_dark(self);
             let card = NSRect::new(NSPoint::new(20.0, 20.0), NSSize::new(self.bounds().size.width - 40.0, 44.0));
-            let shadow = NSShadow::new();
-            shadow.setShadowBlurRadius(16.0);
-            shadow.setShadowOffset(NSSize::new(0.0, -4.0));
-            shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, if dark { 0.5 } else { 0.18 })));
-            shadow.set();
-            palette::GROUND.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 12.0, 12.0).fill();
+            palette::shadowed(&palette::shadow(16.0, -4.0, 0.18, 0.5, dark), || {
+                palette::GROUND.resolve(dark).setFill();
+                palette::card_path(card).fill();
+            });
         }
     }
 );

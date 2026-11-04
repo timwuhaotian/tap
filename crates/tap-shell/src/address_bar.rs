@@ -6,7 +6,7 @@
 //! the field there; a click on the badge says what the connection is and whose
 //! certificate the site showed. Settings › Show the address bar hides it.
 
-use std::ffi::c_void;
+use std::{collections::HashMap, ffi::c_void};
 
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
@@ -370,11 +370,7 @@ impl AddressBar {
             return;
         };
         let capsule = capsule(bounds.size.width);
-        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-            capsule,
-            palette::RADIUS,
-            palette::RADIUS,
-        );
+        let path = palette::pill_path(capsule);
         if shown.editing {
             palette::GROUND.resolve(dark).setFill();
             path.fill();
@@ -384,14 +380,12 @@ impl AddressBar {
         } else {
             palette::WASH.resolve(dark).setFill();
             path.fill();
+            palette::stroke_hairline(&path, dark);
         }
         let (symbol, warns) = badge(shown.security);
-        let tint = if warns {
-            palette::UNSAFE.resolve(dark)
-        } else {
-            palette::MUTED.resolve(dark)
-        };
-        draw_symbol(symbol, badge_rect(capsule), &tint);
+        if let Some(image) = badge_image(symbol, warns, dark) {
+            draw_symbol(&image, badge_rect(capsule));
+        }
         if !shown.editing {
             draw_address(&shown, text_rect(capsule), dark);
         }
@@ -453,24 +447,48 @@ fn draw_address(shown: &Shown, rect: NSRect, dark: bool) {
     run(tail, &muted);
 }
 
-/// An SF Symbol in `colour`, centred in `rect`.
-fn draw_symbol(name: &str, rect: NSRect, colour: &NSColor) {
-    let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(name),
+// The badge's image, made once per symbol, warning and look: the SF Symbol catalogue
+// lookup and the colour configuration ran on every draw of the bar. A symbol that
+// can't be made is remembered as absent, so it isn't looked for again on each draw.
+type Badges = HashMap<(&'static str, bool, bool), Option<Retained<NSImage>>>;
+
+thread_local! {
+    static BADGES: std::cell::RefCell<Badges> = std::cell::RefCell::new(HashMap::new());
+}
+
+fn badge_image(symbol: &'static str, warns: bool, dark: bool) -> Option<Retained<NSImage>> {
+    BADGES.with_borrow_mut(|kept| {
+        if let Some(image) = kept.get(&(symbol, warns, dark)) {
+            return image.clone();
+        }
+        let made = make_badge(symbol, warns, dark);
+        kept.insert((symbol, warns, dark), made.clone());
+        made
+    })
+}
+
+fn make_badge(symbol: &str, warns: bool, dark: bool) -> Option<Retained<NSImage>> {
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(symbol),
         None,
-    ) else {
-        return;
+    )?;
+    let tint = if warns {
+        palette::UNSAFE.resolve(dark)
+    } else {
+        palette::MUTED.resolve(dark)
     };
     // SAFETY: a valid point size and AppKit's own weight constant.
     let size = unsafe {
         NSImageSymbolConfiguration::configurationWithPointSize_weight(12.0, NSFontWeightMedium)
     };
     let config = size.configurationByApplyingConfiguration(
-        &NSImageSymbolConfiguration::configurationWithHierarchicalColor(colour),
+        &NSImageSymbolConfiguration::configurationWithHierarchicalColor(&tint),
     );
-    let Some(image) = image.imageWithSymbolConfiguration(&config) else {
-        return;
-    };
+    image.imageWithSymbolConfiguration(&config)
+}
+
+/// An SF Symbol, centred in `rect`.
+fn draw_symbol(image: &NSImage, rect: NSRect) {
     let size = image.size();
     let square = NSRect::new(
         NSPoint::new(
