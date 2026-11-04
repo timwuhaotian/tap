@@ -87,6 +87,11 @@ pub fn save_history(data: Vec<u8>) {
     write(file("history.json"), data, false);
 }
 
+/// Writes any of Tap's files on the writer thread, newest winning.
+pub fn save(path: PathBuf, data: Vec<u8>) {
+    write(path, data, false);
+}
+
 /// Writes the session on the writer thread.
 pub fn save_session(shape: &session::Shape) {
     write(session_file(), shape.encode(), false);

@@ -10,6 +10,7 @@ mod crash;
 mod dialogs;
 mod downloads;
 mod findbar;
+mod icons;
 mod menu;
 mod offers;
 mod oslog;

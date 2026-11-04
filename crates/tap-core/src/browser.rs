@@ -35,6 +35,8 @@ bitflags! {
         const HISTORY = 1 << 4;
         const FAILURE = 1 << 5;
         const AWAKE = 1 << 6;
+        /// The site's icon arrived.
+        const ICON = 1 << 7;
     }
 
     /// What changed on the window's model since the views last looked.
@@ -1066,6 +1068,13 @@ impl Browser {
             tab.awake = false;
             tab.loading = false;
             tab.dirty.insert(TabFields::AWAKE | TabFields::LOADING);
+        }
+    }
+
+    /// The tab's site icon arrived: the row draws it.
+    pub fn icon_arrived(&mut self, id: TabId) {
+        if let Some(tab) = self.tab_mut(id) {
+            tab.dirty.insert(TabFields::ICON);
         }
     }
 

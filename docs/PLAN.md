@@ -609,7 +609,20 @@ BookmarksFile, Registrable.
   bench (`sleep` answers why a tab stays awake): asleep with no process left, woken at
   scroll 2400 with Back. Not yet: the picture while a page wakes, pins and spaces,
   sites kept awake, and Search's own typed check (an interim one until forms, M5).
-- [ ] Still to come for M2: icons.
+- [x] Site icons (2026-11-04), from `Icons.swift`: when a page finishes, Tap's own
+  content world reads its `<link rel=…icon…>`; `tap_core::icons::rank` orders them as
+  Search does (a crisp 32–64 px icon, the touch icon, then `/favicon.ico`; the other
+  look's icon skipped) and the first one that is really a PNG, ICO, JPEG, GIF or WebP
+  (its header looked at first, 1 MB at most) is drawn into a 32-pixel square and kept as
+  `icons/<sha256 of its address>.png`. `icons/pages.json` is Search's index (site with
+  its port, then page, then icon; 4000 pages, the oldest forgotten), so a tab restored
+  from yesterday has its icon before its page, and a page with none borrows the nearest
+  of its site's unless one host is several apps. 16 pt in the strip, left of the title,
+  alone in a narrow tab. Checked in a test world: GitHub, Wikipedia and rust-lang.org
+  kept and drawn, example.com (no icon) left plain, all three back after a relaunch.
+  Not yet: SVG and inline icons (Search draws them in a web view), the dark-look icon,
+  the letter before an icon arrives, icons in the field's rows.
+- [ ] Still to come for M2: opening links from other apps (`Links.swift`).
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
 - Address parsing, engines, keywords, site search, history suggestions; the omnibox
   with inline completion (IME-safe, finding 3.5)
@@ -1113,7 +1126,7 @@ added below this one as M1 starts.
 | FullScreenEscape.swift | 396 | s/ui/full_screen_escape | M5 | todo |
 | Hidden.swift | 87 | s/ui/hidden | M5 | todo |
 | History.swift | 639 | c/history | M2 | partial |
-| Icons.swift | 859 | c/icons_index, w/icons, a | M2 | todo |
+| Icons.swift | 859 | c/icons_index, w/icons, a | M2 | partial |
 | ImageMenu.swift | 290 | w/image_menu, a | M5 | todo |
 | Import.swift | 1576 | i/{discovery,chromium,safari,firefox} | M6 | todo |
 | ImportArc.swift | 289 | i/arc | M6 | todo |

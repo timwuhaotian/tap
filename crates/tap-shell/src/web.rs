@@ -34,7 +34,7 @@ use tap_core::{
     identity,
 };
 
-use crate::{dialogs, downloads, oslog, page_find, rt, sleep, store, window};
+use crate::{dialogs, downloads, icons, oslog, page_find, rt, sleep, store, window};
 
 /// What the observer watches on every web view; each change re-reads the lot.
 const OBSERVED: [&str; 6] = [
@@ -214,6 +214,14 @@ pub fn discard_page(tab: TabId) {
     if let Some(mtm) = MainThreadMarker::new() {
         discard(mtm, tab);
     }
+}
+
+/// The address a web view is on.
+pub fn url_of(web: &WKWebView) -> Option<String> {
+    // SAFETY: a plain property read on a live web view.
+    unsafe { web.URL() }
+        .and_then(|u| u.absoluteString())
+        .map(|s| s.to_string())
 }
 
 /// The page's WebContent process, through WebKit's private `_webProcessIdentifier`; 0
@@ -426,6 +434,7 @@ define_class!(
         fn finished(&self, web: &WKWebView, _navigation: Option<&WKNavigation>) {
             if let Some(tab) = tab_of(web) {
                 rt::dispatch(move |browser| browser.page_finished(tab));
+                icons::fetch(tab, web);
             }
         }
 

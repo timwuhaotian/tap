@@ -17,6 +17,7 @@ pub mod fetching;
 pub mod find;
 pub mod fnd;
 pub mod history;
+pub mod icons;
 pub mod identity;
 pub mod keyword;
 pub mod session;

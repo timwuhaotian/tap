@@ -28,6 +28,7 @@ dispatch2 = "0.3"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 tap-core = { path = "crates/tap-core" }
 tap-shell = { path = "crates/tap-shell" }
 

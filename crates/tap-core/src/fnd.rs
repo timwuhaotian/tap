@@ -145,6 +145,12 @@ impl Parts {
     pub fn clear_query(&self) {
         self.0.setPercentEncodedQuery(None);
     }
+    /// The port, when the address names one.
+    #[must_use]
+    pub fn port(&self) -> Option<i64> {
+        self.0.port().map(|p| p.longLongValue())
+    }
+
     #[must_use]
     pub fn path(&self) -> String {
         self.0

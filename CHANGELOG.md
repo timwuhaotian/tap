@@ -39,6 +39,9 @@ Info.plist.
   WebKit can't show goes into Downloads under its own name, numbered if the name is
   taken; the Downloads stack in the Dock bounces when it arrives. A tab opened only for
   a download closes again.
+- **Site icons.** Each tab wears its site's icon, the crispest the page declares or its
+  `favicon.ico`, kept small beside the history in Search's own `icons/` format so a tab
+  brought back from yesterday has its icon before it loads.
 - **Tabs come back.** The session is kept in Search's own format, written as it changes
   and when Tap quits; restored tabs cost nothing until you look at them.
 - **The bench**, for scripts and tests: Search's socket protocol on a test run

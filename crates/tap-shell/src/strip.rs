@@ -11,12 +11,16 @@ use objc2::{
     rc::Retained, runtime::NSObject,
 };
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSEvent, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSResponder, NSTrackingArea,
+    NSTrackingAreaOptions, NSView,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use tap_core::browser::{Browser, TabId};
 
-use crate::{palette, rt};
+use crate::{icons, palette, rt};
+
+/// A site icon's side, in points.
+const ICON: f64 = 16.0;
 
 /// What the pointer is over.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -335,11 +339,41 @@ impl Strip {
                     continue;
                 }
                 let crossed = (under || live) && rect.size.width >= palette::TAB_TITLED;
-                if rect.size.width >= palette::TAB_TITLED {
+                let titled = rect.size.width >= palette::TAB_TITLED;
+                let icon = icons::image_for(tab.url());
+                if let Some(icon) = &icon {
+                    // Beside the title, or alone in the middle of a narrow tab.
+                    let x = if titled {
+                        rect.origin.x + 10.0
+                    } else {
+                        rect.origin.x + (rect.size.width - ICON) / 2.0
+                    };
+                    let square = NSRect::new(
+                        NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
+                        NSSize::new(ICON, ICON),
+                    );
+                    // SAFETY: drawing a decoded image into the view's own context, no hints.
+                    unsafe {
+                        icon.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+                            square,
+                            NSRect::ZERO,
+                            NSCompositingOperation::SourceOver,
+                            1.0,
+                            true,
+                            None,
+                        );
+                    }
+                }
+                if titled {
                     let right = if crossed { 30.0 } else { 12.0 };
+                    let left = if icon.is_some() {
+                        10.0 + ICON + 6.0
+                    } else {
+                        12.0
+                    };
                     let text = NSRect::new(
-                        NSPoint::new(rect.origin.x + 12.0, rect.origin.y + 7.0),
-                        NSSize::new(rect.size.width - 12.0 - right, 17.0),
+                        NSPoint::new(rect.origin.x + left, rect.origin.y + 7.0),
+                        NSSize::new(rect.size.width - left - right, 17.0),
                     );
                     let ink = if live { palette::INK } else { palette::MUTED };
                     palette::draw_text(&tab.label(), text, &ink.resolve(dark));
