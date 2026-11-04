@@ -1811,8 +1811,12 @@ mod tests {
 
     #[test]
     fn closing_the_others_keeps_the_tab_and_the_pins() {
-        let mut browser =
-            with_pages(&["https://a.com", "https://b.com", "https://c.com", "https://d.com"]);
+        let mut browser = with_pages(&[
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+        ]);
         let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
         browser.tab_mut(ids[0]).expect("a tab").entry.pin = Some("A".to_owned());
         assert!(!browser.can_reopen());
@@ -1826,14 +1830,22 @@ mod tests {
 
     #[test]
     fn closing_to_the_right_keeps_pins_and_lands_on_the_tab() {
-        let mut browser =
-            with_pages(&["https://a.com", "https://b.com", "https://c.com", "https://d.com"]);
+        let mut browser = with_pages(&[
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+        ]);
         let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
         browser.tab_mut(ids[3]).expect("a tab").entry.pin = Some("D".to_owned());
         browser.select(ids[2]);
         browser.close_right(ids[1]);
         let left: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
-        assert_eq!(left, vec![ids[0], ids[1], ids[3]], "the pin to the right stays");
+        assert_eq!(
+            left,
+            vec![ids[0], ids[1], ids[3]],
+            "the pin to the right stays"
+        );
         assert_eq!(browser.active(), Some(ids[1]), "off a page that went");
     }
 

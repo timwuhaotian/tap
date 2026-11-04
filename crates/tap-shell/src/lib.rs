@@ -26,6 +26,7 @@ mod settings;
 mod sleep;
 mod store;
 mod strip;
+mod tabmenu;
 mod update;
 mod update_window;
 mod web;

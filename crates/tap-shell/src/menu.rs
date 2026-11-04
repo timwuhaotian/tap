@@ -51,10 +51,25 @@ pub enum Command {
     CloseUpdate,
     /// ⌘1 to ⌘9 are 101 to 109.
     Tab = 100,
+    /// The tab menu's (tabmenu): they act on the tab under the pointer, whose
+    /// identity tabmenu keeps, not on the one in front.
+    TabReload = 200,
+    TabDuplicate,
+    TabCopyAddress,
+    TabCopyMarkdown,
+    TabCloseOthers,
+    TabCloseRight,
+    TabClose,
+    TabReopen,
+    TabGroupToggle,
 }
 
 /// Runs a command as its menu item or button would.
 pub fn run(tag: NSInteger) {
+    // The tab menu's commands are tabmenu's own business.
+    if crate::tabmenu::run(tag) {
+        return;
+    }
     // The options menu is the bar's own business: nothing in the model changes.
     if tag == Command::FindOptions as NSInteger {
         findbar::show_options();
