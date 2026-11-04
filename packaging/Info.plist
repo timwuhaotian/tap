@@ -3,9 +3,8 @@
 <plist version="1.0">
 <dict>
 	<!-- scripts/bundle.sh fills __VERSION__ from Cargo.toml. Search's keys (docs/PLAN.md §12),
-	     with Tap's name; the http/https URL types, the document types and the AppleScript
-	     keys arrive with the milestones that handle them (M2, M8), so a build never claims
-	     what it can't do yet. -->
+	     with Tap's name; the AppleScript keys arrive with M8, so a build never claims what
+	     it can't do yet. -->
 	<key>CFBundleName</key>
 	<string>Tap</string>
 	<key>CFBundleDisplayName</key>
@@ -32,6 +31,69 @@
 	<string>© 2026 Haotian Wu · Tap, ported from Search by Office Commun · MIT</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- Links from other apps (crates/tap-shell/src/links.rs). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Web address</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Web page</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+			</array>
+		</dict>
+		<!-- macOS lists an app under Desktop & Dock › Default web browser only when it
+		     claims public.xhtml as well as public.html; http and https alone are not
+		     enough. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>XHTML page</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.xhtml</string>
+			</array>
+		</dict>
+		<!-- What a browser shows besides pages, offered under the Finder's Open With and
+		     never what opens them on a double-click (Alternate). Pictures by name rather
+		     than public.image, which takes in SVG: an SVG can carry a script, and opened
+		     from the Finder it would run with its folder to read. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+				<string>public.png</string>
+				<string>public.jpeg</string>
+				<string>com.compuserve.gif</string>
+				<string>public.heic</string>
+				<string>org.webmproject.webp</string>
+				<string>public.tiff</string>
+				<string>public.plain-text</string>
+				<string>public.json</string>
+			</array>
+		</dict>
+	</array>
 	<!-- A browser goes wherever it is pointed, including http sites and localhost. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -41,13 +103,13 @@
 	<!-- Pages ask for these, not Tap itself. macOS still wants a sentence for its prompt, and
 	     touching the APIs without one is a crash rather than a refusal. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Websites you visit can ask to use your camera. Tap asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+	<string>Websites you visit can ask to use your camera.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Websites you visit can ask to use your microphone. Tap asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+	<string>Websites you visit can ask to use your microphone.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>Websites you visit can ask for your location. Tap asks you each time a site does, unless you choose Always allow for it; Settings › Privacy forgets those choices.</string>
+	<string>Websites you visit can ask for your location.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Websites you visit can ask for your location. Tap asks you each time a site does, unless you choose Always allow for it; Settings › Privacy forgets those choices.</string>
+	<string>Websites you visit can ask for your location.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Files you download are saved to your Downloads folder.</string>
 </dict>

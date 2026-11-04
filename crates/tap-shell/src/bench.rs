@@ -39,7 +39,7 @@ use tap_core::{
 };
 
 use crate::{
-    dialogs, downloads,
+    dialogs, downloads, links,
     menu::{self, Command},
     rt, sleep, store, web, window,
 };
@@ -242,6 +242,18 @@ fn handle(request: &Value, reply: Reply) {
             };
             rt::settle();
             reply.say(describe_id(id));
+        }
+        "link" => {
+            // A link as another app would hand it over (Search's `Links.arrived`).
+            let Some(url) = text("url") else {
+                return reply.say(json!({ "error": "link needs a url" }));
+            };
+            if !links::take(&url) {
+                return reply.say(json!({ "error": "not a link Tap opens" }));
+            }
+            rt::settle();
+            let active = rt::read(Browser::active).flatten();
+            reply.say(active.map_or(Value::Null, describe_id));
         }
         "go" => {
             let (Some(id), Some(url)) = (

@@ -839,6 +839,23 @@ impl Browser {
         self.effects.push(Effect::FocusPage(id));
     }
 
+    /// An address another app handed over (Search's `Browser.arrive`): into the new tab
+    /// in front if nothing has been typed in it, else into a tab of its own, in front.
+    pub fn arrive(&mut self, url: &Url) {
+        let typed = self.editing.as_ref().is_some_and(|e| !e.typed.is_empty());
+        match self.active {
+            Some(id) if !typed && self.active_tab().is_some_and(Tab::is_blank) => {
+                if self.editing.take().is_some() {
+                    self.dirty.insert(BrowserFields::EDITING);
+                }
+                self.go(id, url);
+            }
+            _ => {
+                self.open(Some(url), true, None);
+            }
+        }
+    }
+
     // MARK: find on page
 
     #[must_use]
@@ -1210,6 +1227,33 @@ mod tests {
         browser.reopen();
         assert_eq!(browser.tabs().len(), 1, "the empty tab gives way");
         assert_eq!(browser.active_tab().map(Tab::url), Some("https://a.com"));
+    }
+
+    #[test]
+    fn a_link_from_another_app_uses_the_new_tab_unless_something_is_typed_in_it() {
+        let mut browser = Browser::new();
+        browser.begin_editing(true);
+        let blank = browser.active().expect("a tab");
+        browser.arrive(&url("https://a.com/"));
+        assert_eq!(browser.tabs().len(), 1);
+        assert_eq!(browser.active(), Some(blank));
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://a.com/"));
+        assert!(browser.editing().is_none());
+
+        browser.arrive(&url("https://b.com/"));
+        assert_eq!(browser.tabs().len(), 2, "a page in front keeps its tab");
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://b.com/"));
+
+        browser.open(None, true, None);
+        browser.begin_editing(true);
+        browser.set_typed("half a thou", false);
+        browser.arrive(&url("https://c.com/"));
+        assert_eq!(
+            browser.tabs().len(),
+            4,
+            "what you were typing isn't thrown away"
+        );
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://c.com/"));
     }
 
     #[test]

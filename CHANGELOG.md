@@ -39,6 +39,10 @@ Info.plist.
   WebKit can't show goes into Downloads under its own name, numbered if the name is
   taken; the Downloads stack in the Dock bounces when it arrives. A tab opened only for
   a download closes again.
+- **Tap can be your Mac's browser.** It is listed under Desktop & Dock › Default web
+  browser; links clicked in other apps open in Tap, in the new tab if one is in front,
+  and HTML files open from the Finder. PDFs, pictures and text files offer Tap under
+  Open With.
 - **Site icons.** Each tab wears its site's icon, the crispest the page declares or its
   `favicon.ico`, kept small beside the history in Search's own `icons/` format so a tab
   brought back from yesterday has its icon before it loads.

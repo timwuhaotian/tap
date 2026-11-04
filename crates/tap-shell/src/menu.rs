@@ -10,10 +10,10 @@ use objc2::{
 use objc2_app_kit::{
     NSApplication, NSApplicationDelegate, NSEventModifierFlags, NSMenu, NSMenuItem,
 };
-use objc2_foundation::{NSInteger, NSNotification, NSString};
+use objc2_foundation::{NSArray, NSInteger, NSNotification, NSString, NSURL};
 use tap_core::browser::Browser;
 
-use crate::{findbar, rt, store};
+use crate::{findbar, links, rt, store};
 
 /// What a menu item or a door asks for, carried as its tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +106,11 @@ define_class!(
             if let Some(shape) = rt::read(Browser::shape) {
                 store::save_session_now(&shape);
             }
+        }
+
+        #[unsafe(method(application:openURLs:))]
+        fn open_urls(&self, _app: &NSApplication, urls: &NSArray<NSURL>) {
+            links::opened(urls);
         }
 
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]

@@ -11,6 +11,7 @@ mod dialogs;
 mod downloads;
 mod findbar;
 mod icons;
+mod links;
 mod menu;
 mod offers;
 mod oslog;

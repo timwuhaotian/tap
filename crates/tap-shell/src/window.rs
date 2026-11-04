@@ -600,6 +600,16 @@ pub fn first_responder() -> String {
     .unwrap_or_default()
 }
 
+/// The window in front, out of the Dock if it was put there.
+pub fn bring_forward() {
+    with_views(|views| {
+        if views.window.isMiniaturized() {
+            views.window.deminiaturize(None);
+        }
+        views.window.makeKeyAndOrderFront(None);
+    });
+}
+
 /// The window's number, for events made for it.
 pub fn number() -> Option<isize> {
     with_views(|views| views.window.windowNumber())

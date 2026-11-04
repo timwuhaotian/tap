@@ -622,7 +622,20 @@ BookmarksFile, Registrable.
   kept and drawn, example.com (no icon) left plain, all three back after a relaunch.
   Not yet: SVG and inline icons (Search draws them in a web view), the dark-look icon,
   the letter before an icon arrives, icons in the field's rows.
-- [ ] Still to come for M2: opening links from other apps (`Links.swift`).
+- [x] Links from other apps (2026-11-04), from `Links.swift`: `Info.plist` claims http
+  and https, `public.html` and `public.xhtml` (what macOS asks before it lists a default
+  web browser), and Search's Alternate list (PDF, pictures by name, plain text, JSON) for
+  Open With. `application:openURLs:` takes http, https and file addresses; the model's
+  `arrive` puts the first into the new tab in front unless something is typed in it,
+  else a tab of its own; the window comes out of the Dock and Tap in front, asking again
+  the pre-macOS 14 way when the app that asked didn't hand the front over. A test run
+  takes nothing from outside; the bench's `link` hands one in. Checked through the bench
+  (`ftp:` and `javascript:` refused) and, outside a test run with HOME pointed at a
+  scratch folder, by `open -a`: a cold launch with a link, a second link, and an HTML
+  file. Not yet: the small window for links, the Dock menu's New Window, staying open
+  with no window (Tap quits with its window), Settings' "Make Tap the default browser",
+  `.webloc` files, and the crash log (`watchForTrouble`).
+- M2 is done for 0.1.0; what each slice leaves out is listed with it.
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
 - Address parsing, engines, keywords, site search, history suggestions; the omnibox
   with inline completion (IME-safe, finding 3.5)
@@ -1140,7 +1153,7 @@ added below this one as M1 starts.
 | KeyLayout.swift | 65 | sys/key_layout | M1 | todo |
 | Keyword.swift | 73 | c/keyword | M2 | partial |
 | Lights.swift | 154 | s/ui/lights | M0 | ported |
-| Links.swift | 372 | s/app/delegate | M2 | partial |
+| Links.swift | 372 | s/app/delegate, s/links | M2 | partial |
 | Little.swift | 480 | s/ui/little | M3 | todo |
 | LiveRate.swift | 59 | a/live-rate, c/live_rate | M5 | todo |
 | LocalText.swift | 23 | c/local_text | M2 | todo |
