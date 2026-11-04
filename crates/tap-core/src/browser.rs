@@ -95,6 +95,74 @@ pub enum Effect {
     /// The tab has been left alone long enough: if nothing the page is doing keeps it,
     /// it gives its page back (`slept`).
     Sleep(TabId),
+    /// The tab has been left alone past Settings › Close tabs you leave alone: if nothing
+    /// the page is doing keeps it, it closes as ⌘W would (`retire`).
+    Retire {
+        tab: TabId,
+        since: f64,
+    },
+}
+
+/// How tabs open and close: Settings › Tabs (Search's `Preferences`), set by the shell
+/// from the kept settings whenever they change.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // one switch per row of Settings, as Search's `Preferences`
+pub struct Behaviour {
+    /// `tabs.newPlace`: where a link from another app and ⌘T's tab go.
+    pub new_place: NewPlace,
+    /// `tabs.newAfterLast`: the last tab that isn't a pin, closed, leaves a new tab.
+    pub new_after_last: bool,
+    /// `tabs.closeGoesBack`: closing the tab in front goes to the one viewed before it.
+    pub close_goes_back: bool,
+    /// `tabs.lazy`: a link opened behind its page waits until its tab is shown.
+    pub lazy: bool,
+    /// `commandbar`: "settings" or "new tab", alone in the field, go there.
+    pub commands: bool,
+    /// `tabs.close.after`, in seconds: how long a tab may be left alone before it
+    /// closes. `None`: never.
+    pub close_after: Option<f64>,
+}
+
+/// Words alone in the field that mean a place in Tap rather than on the web (Search's
+/// `AddressCommand`), with Settings › Address bar commands on. Only the whole of what
+/// was typed: "settings for gmail" still searches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Command {
+    Settings,
+    NewTab,
+}
+
+impl Command {
+    fn matching(typed: &str) -> Option<Command> {
+        match typed.trim().to_lowercase().as_str() {
+            "settings" | "preferences" => Some(Command::Settings),
+            "new tab" => Some(Command::NewTab),
+            _ => None,
+        }
+    }
+}
+
+/// Settings › Tabs › New tab position (Search's `NewTabPlace`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NewPlace {
+    /// After current: beside the tab in front, ⌘T's at the end.
+    #[default]
+    Next,
+    /// Leftmost: first after the pins.
+    Top,
+    /// Rightmost.
+    End,
+}
+
+impl NewPlace {
+    #[must_use]
+    pub fn from_raw(raw: &str) -> NewPlace {
+        match raw {
+            "top" => NewPlace::Top,
+            "end" => NewPlace::End,
+            _ => NewPlace::Next,
+        }
+    }
 }
 
 /// What was done about a page whose process ended, as the log says it.
@@ -297,6 +365,9 @@ pub struct Browser {
     pub engine: Engine,
     pub custom_engine: String,
     pub keywords: Vec<Keyword>,
+    pub behaviour: Behaviour,
+    /// The tabs left, the latest last: where closing the one in front goes back to.
+    viewed: Vec<TabId>,
     /// Closed tabs, newest last, with where they were: ⇧⌘T brings them back.
     closed: Vec<(usize, session::Entry)>,
     link_run: Option<LinkRun>,
@@ -331,6 +402,8 @@ impl Browser {
             engine: Engine::default(),
             custom_engine: String::new(),
             keywords: Vec::new(),
+            behaviour: Behaviour::default(),
+            viewed: Vec::new(),
             closed: Vec::new(),
             link_run: None,
             refusals: 0,
@@ -662,6 +735,10 @@ impl Browser {
             if let Some(left) = left.and_then(|l| self.tab_mut(l)) {
                 left.touched = history::now();
             }
+            if let Some(left) = left {
+                self.viewed.retain(|v| *v != left);
+                self.viewed.push(left);
+            }
             self.active = Some(id);
             self.dirty.insert(BrowserFields::ACTIVE);
             self.session_changed = true;
@@ -704,6 +781,46 @@ impl Browser {
     /// Opens an address in a new tab: after a run of links from `opener`, or at the
     /// end of the row.
     pub fn open(&mut self, url: Option<&Url>, foreground: bool, opener: Option<TabId>) -> TabId {
+        self.open_at(url, foreground, opener, None)
+    }
+
+    /// Where a new tab from another app goes (Search's `placeForNew`): beside the tab in
+    /// front, but never among the pins; or first after them; or at the end.
+    fn place_for_new(&self) -> usize {
+        let pins = self.pins();
+        match self.behaviour.new_place {
+            NewPlace::Top => pins,
+            NewPlace::End => self.tabs.len(),
+            NewPlace::Next => self
+                .active
+                .and_then(|id| self.index(id))
+                .map_or(self.tabs.len(), |here| (here + 1).max(pins)),
+        }
+    }
+
+    /// Where ⌘T's tab goes (Search's `placeForFront`): the end of the row, as always,
+    /// unless the top was chosen. After current is for links.
+    fn place_for_front(&self) -> usize {
+        match self.behaviour.new_place {
+            NewPlace::Top => self.pins(),
+            _ => self.tabs.len(),
+        }
+    }
+
+    fn pins(&self) -> usize {
+        self.tabs
+            .iter()
+            .take_while(|t| t.entry.pin.is_some())
+            .count()
+    }
+
+    fn open_at(
+        &mut self,
+        url: Option<&Url>,
+        foreground: bool,
+        opener: Option<TabId>,
+        place: Option<usize>,
+    ) -> TabId {
         let id = TabId(self.next);
         self.next += 1;
         let mut tab = Tab::new(id);
@@ -715,23 +832,30 @@ impl Browser {
             .and_then(|from| from.entry.group_id.clone());
         if let Some(url) = url {
             url.as_str().clone_into(&mut tab.url);
-            tab.awake = true;
-            if !tab.is_internal() {
+            // A link opened behind its page waits for its tab to be shown, asleep
+            // (Search's `tabs.lazy`); ⇧⌘-click still loads it at once.
+            let waits = self.behaviour.lazy && opener.is_some() && !foreground;
+            tab.awake = !waits;
+            if !waits && !tab.is_internal() {
                 self.effects.push(Effect::Load {
                     tab: id,
                     url: tab.url.clone(),
                 });
             }
         }
-        let place = opener
-            .and_then(|from| {
-                let after = match self.link_run {
-                    Some(run) if run.opener == from && self.index(run.last).is_some() => run.last,
-                    _ => from,
-                };
-                self.index(after).map(|i| i + 1)
-            })
-            .unwrap_or(self.tabs.len());
+        let place = place.unwrap_or_else(|| {
+            opener
+                .and_then(|from| {
+                    let after = match self.link_run {
+                        Some(run) if run.opener == from && self.index(run.last).is_some() => {
+                            run.last
+                        }
+                        _ => from,
+                    };
+                    self.index(after).map(|i| i + 1)
+                })
+                .unwrap_or(self.tabs.len())
+        });
         self.tabs.insert(place, tab);
         self.order();
         self.link_run = opener.map(|from| LinkRun {
@@ -760,19 +884,32 @@ impl Browser {
     }
 
     /// ⌘W, as Search closes: the neighbour on the right takes its place, or the last
-    /// tab. The only tab is replaced by a new one, unless it is already new.
+    /// tab; with Settings › Closing a tab goes back, the tab viewed before it. The only
+    /// tab is replaced by a new one, unless it is already new, and so is the last loose
+    /// tab beside groups, and the last but pins when Settings says so: landing on a pin
+    /// or a grouped page you hadn't asked for wakes it and opens its group.
     pub fn close(&mut self, id: TabId) {
         let Some(index) = self.index(id) else { return };
-        if self.tabs.len() == 1 {
-            if self.tabs[0].is_blank() {
+        let closing = &self.tabs[index];
+        let kept = |t: &Tab| t.entry.pin.is_some() || t.entry.group_id.is_some();
+        let mut others = self.tabs.iter().filter(|t| t.id != id);
+        let beside_groups = others
+            .clone()
+            .any(|t| t.entry.pin.is_none() && t.entry.group_id.is_some());
+        let only_pins =
+            self.behaviour.new_after_last && !others.clone().any(|t| t.entry.pin.is_none());
+        let only_kept = beside_groups && !kept(closing) && !others.any(|t| !kept(t));
+        let internal = closing.is_internal();
+        if self.tabs.len() == 1 || (self.active == Some(id) && (only_pins || only_kept)) {
+            if closing.is_blank() {
                 return;
             }
             self.remember(index);
             self.effects.push(Effect::Discard(id));
             let fresh = TabId(self.next);
             self.next += 1;
-            self.tabs[0] = Tab::new(fresh);
-            self.groups.clear();
+            self.tabs[index] = Tab::new(fresh);
+            self.order();
             self.active = Some(fresh);
             self.dirty
                 .insert(BrowserFields::TABS | BrowserFields::ACTIVE);
@@ -786,8 +923,17 @@ impl Browser {
         self.prune();
         self.dirty.insert(BrowserFields::TABS);
         self.session_changed = true;
+        self.viewed.retain(|v| *v != id);
         if self.active == Some(id) {
-            let next = self.tabs[index.min(self.tabs.len() - 1)].id;
+            // Tap's own pages go back whatever the switch says: Settings is called up
+            // over what you were doing.
+            let before = (self.behaviour.close_goes_back || internal)
+                .then(|| {
+                    let viewed = self.viewed.iter().rev();
+                    viewed.copied().find(|v| self.index(*v).is_some())
+                })
+                .flatten();
+            let next = before.unwrap_or(self.tabs[index.min(self.tabs.len() - 1)].id);
             self.active = None;
             self.select(next);
         }
@@ -999,6 +1145,24 @@ impl Browser {
         let Some(editing) = self.editing.clone() else {
             return;
         };
+        if self.behaviour.commands
+            && editing.picked.is_none()
+            && let Some(command) = Command::matching(&editing.typed)
+        {
+            self.editing = None;
+            self.dirty.insert(BrowserFields::EDITING);
+            match command {
+                Command::Settings => self.open_page(Page::Settings),
+                Command::NewTab => {
+                    if !self.active_tab().is_some_and(Tab::is_blank) {
+                        let place = self.place_for_front();
+                        self.open_at(None, true, None, Some(place));
+                    }
+                    self.begin_editing(false);
+                }
+            }
+            return;
+        }
         // The row the arrow keys chose, or else the address the field was finishing,
         // or else where the words go.
         let target = if let Some(row) = editing.picked.and_then(|i| editing.offers.get(i)) {
@@ -1017,7 +1181,8 @@ impl Browser {
         self.dirty.insert(BrowserFields::EDITING);
         let blank_in_front = self.active_tab().is_some_and(Tab::is_blank);
         if editing.launching && !blank_in_front {
-            self.open(Some(&url), true, None);
+            let place = self.place_for_front();
+            self.open_at(Some(&url), true, None, Some(place));
         } else if let Some(id) = self.active {
             self.go(id, &url);
         }
@@ -1059,7 +1224,8 @@ impl Browser {
                 self.go(id, url);
             }
             _ => {
-                self.open(Some(url), true, None);
+                let place = self.place_for_new();
+                self.open_at(Some(url), true, None, Some(place));
             }
         }
     }
@@ -1289,6 +1455,57 @@ impl Browser {
         idle.sort_by(|a, b| a.0.total_cmp(&b.0));
         self.effects
             .extend(idle.into_iter().map(|(_, id)| Effect::Sleep(id)));
+    }
+
+    /// Why a tab stays open however long it is left (Search's `stays(because:)`), or
+    /// `None` when nothing here keeps it: what you said to keep, a pinned, named or
+    /// grouped tab, stays. What only the page knows the shell asks.
+    #[must_use]
+    pub fn stays_because(&self, id: TabId) -> Option<&'static str> {
+        let Some(tab) = self.tab(id) else {
+            return Some("no such tab");
+        };
+        if self.active == Some(id) {
+            return Some("on screen");
+        }
+        if tab.entry.pin.is_some() {
+            return Some("pinned");
+        }
+        if tab.entry.name.is_some() {
+            return Some("named");
+        }
+        if tab.entry.group_id.is_some() {
+            return Some("in a group");
+        }
+        if tab.is_blank() {
+            return Some("blank");
+        }
+        None
+    }
+
+    /// Every tab left alone past Settings › Close tabs you leave alone that nothing here
+    /// keeps (Search's `closeLeftAlone`): each is asked to close.
+    pub fn close_left_alone(&mut self, now: f64) {
+        let Some(wait) = self.behaviour.close_after else {
+            return;
+        };
+        let since = now - wait;
+        let due: Vec<Effect> = self
+            .tabs
+            .iter()
+            .filter(|t| t.touched <= since && self.stays_because(t.id).is_none())
+            .map(|t| Effect::Retire { tab: t.id, since })
+            .collect();
+        self.effects.extend(due);
+    }
+
+    /// The page had nothing to keep it: the tab closes as ⌘W would, ⇧⌘T bringing it
+    /// back, if it is still left alone since `since` and nothing keeps it.
+    pub fn retire(&mut self, id: TabId, since: f64) {
+        let left = self.tab(id).is_some_and(|t| t.touched <= since);
+        if left && self.behaviour.close_after.is_some() && self.stays_because(id).is_none() {
+            self.close(id);
+        }
     }
 
     /// The tab gave its page back: it wakes, where it was, the next time it is shown.
@@ -2077,5 +2294,263 @@ mod tests {
             browser.awake_because(opener),
             Some("the page on screen came from it")
         );
+    }
+
+    // MARK: Settings › Tabs
+
+    fn behaving(pages: &[&str], behaviour: Behaviour) -> Browser {
+        let mut browser = with_pages(pages);
+        browser.behaviour = behaviour;
+        browser
+    }
+
+    #[test]
+    fn a_link_from_another_app_goes_where_new_tab_position_says() {
+        for (place, expected) in [
+            (
+                NewPlace::Next,
+                [
+                    "https://a.com",
+                    "https://in.com",
+                    "https://b.com",
+                    "https://c.com",
+                ],
+            ),
+            (
+                NewPlace::Top,
+                [
+                    "https://in.com",
+                    "https://a.com",
+                    "https://b.com",
+                    "https://c.com",
+                ],
+            ),
+            (
+                NewPlace::End,
+                [
+                    "https://a.com",
+                    "https://b.com",
+                    "https://c.com",
+                    "https://in.com",
+                ],
+            ),
+        ] {
+            let mut browser = behaving(
+                &["https://a.com", "https://b.com", "https://c.com"],
+                Behaviour {
+                    new_place: place,
+                    ..Behaviour::default()
+                },
+            );
+            browser.arrive(&url("https://in.com/"));
+            let shown: Vec<&str> = urls(&browser)
+                .into_iter()
+                .map(|u| u.trim_end_matches('/'))
+                .collect();
+            assert_eq!(shown, expected, "{place:?}");
+            assert_eq!(browser.active_tab().map(Tab::url), Some("https://in.com/"));
+        }
+    }
+
+    #[test]
+    fn new_tabs_tab_goes_at_the_end_unless_leftmost_is_chosen() {
+        for (place, at) in [(NewPlace::Next, 2), (NewPlace::Top, 0)] {
+            let mut browser = behaving(
+                &["https://a.com", "https://b.com"],
+                Behaviour {
+                    new_place: place,
+                    ..Behaviour::default()
+                },
+            );
+            browser.begin_editing(true);
+            browser.set_typed("https://new.com", false);
+            browser.submit();
+            assert_eq!(browser.tabs()[at].url(), "https://new.com", "{place:?}");
+        }
+    }
+
+    #[test]
+    fn a_background_link_waits_for_its_tab_when_asked() {
+        let mut browser = behaving(
+            &["https://a.com"],
+            Behaviour {
+                lazy: true,
+                ..Behaviour::default()
+            },
+        );
+        let opener = browser.tabs()[0].id;
+        let link = browser.open(Some(&url("https://later.com")), false, Some(opener));
+        assert!(!browser.tab(link).is_some_and(Tab::awake));
+        assert!(
+            !browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Load { .. })),
+            "nothing loads behind the page"
+        );
+        browser.select(link);
+        assert!(
+            browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Load { tab, .. } if *tab == link)),
+            "it loads when shown"
+        );
+
+        let now = browser.open(Some(&url("https://now.com")), true, Some(opener));
+        assert!(
+            browser.tab(now).is_some_and(Tab::awake),
+            "⇧⌘-click loads at once"
+        );
+    }
+
+    #[test]
+    fn closing_goes_back_to_the_tab_viewed_before_when_asked() {
+        let pages = [
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+        ];
+        let mut browser = behaving(&pages, Behaviour::default());
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[3]);
+        browser.select(ids[1]);
+        browser.close(ids[1]);
+        assert_eq!(browser.active(), Some(ids[2]), "the neighbour, as before");
+
+        let mut browser = behaving(
+            &pages,
+            Behaviour {
+                close_goes_back: true,
+                ..Behaviour::default()
+            },
+        );
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[3]);
+        browser.select(ids[1]);
+        browser.close(ids[1]);
+        assert_eq!(browser.active(), Some(ids[3]), "the one viewed before");
+        browser.close(ids[3]);
+        assert_eq!(browser.active(), Some(ids[0]), "and the one before that");
+    }
+
+    #[test]
+    fn settings_closed_goes_back_whatever_the_switch_says() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com", "https://c.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[0]);
+        browser.open_page(Page::Settings);
+        let settings = browser.active().expect("settings");
+        browser.close(settings);
+        assert_eq!(browser.active(), Some(ids[0]));
+    }
+
+    #[test]
+    fn the_last_loose_tab_beside_groups_leaves_a_new_tab() {
+        let mut browser = Browser::restored(grouped());
+        let loose: Vec<TabId> = browser
+            .tabs()
+            .iter()
+            .filter(|t| t.group().is_none())
+            .map(|t| t.id)
+            .collect();
+        browser.close(loose[1]);
+        browser.select(loose[0]);
+        browser.close(loose[0]);
+        assert!(
+            browser.active_tab().is_some_and(Tab::is_blank),
+            "a new tab, not a group's page"
+        );
+        assert_eq!(browser.groups().len(), 2, "the groups stay as they were");
+        assert!(browser.editing().is_some());
+    }
+
+    #[test]
+    fn a_new_tab_is_left_when_only_pins_would_be_when_asked() {
+        let shape = r#"{"tabs":[{"url":"https://pin.com","title":"P","pin":"P"},{"url":"https://a.com","title":"A"}],"active":1}"#;
+        for (after_last, blank) in [(false, false), (true, true)] {
+            let mut browser =
+                Browser::restored(session::Shape::decode(shape.as_bytes()).expect("decodes"));
+            browser.behaviour.new_after_last = after_last;
+            let last = browser.active().expect("a tab");
+            browser.close(last);
+            assert_eq!(browser.active_tab().is_some_and(Tab::is_blank), blank);
+        }
+    }
+
+    #[test]
+    fn settings_or_new_tab_alone_in_the_field_go_there_when_asked() {
+        let mut browser = with_pages(&["https://a.com"]);
+        browser.begin_editing(false);
+        browser.set_typed("settings", false);
+        browser.submit();
+        assert_ne!(
+            browser.active_tab().and_then(Tab::page),
+            Some(Page::Settings),
+            "off: it searches"
+        );
+
+        let mut browser = behaving(
+            &["https://a.com"],
+            Behaviour {
+                commands: true,
+                ..Behaviour::default()
+            },
+        );
+        browser.begin_editing(false);
+        browser.set_typed("Settings ", false);
+        browser.submit();
+        assert_eq!(
+            browser.active_tab().and_then(Tab::page),
+            Some(Page::Settings)
+        );
+
+        browser.begin_editing(false);
+        browser.set_typed("new tab", false);
+        browser.submit();
+        assert!(browser.active_tab().is_some_and(Tab::is_blank));
+        assert_eq!(browser.tabs().len(), 3);
+
+        browser.set_typed("settings for gmail", false);
+        browser.submit();
+        assert_ne!(
+            browser.active_tab().and_then(Tab::page),
+            Some(Page::Settings),
+            "only the whole"
+        );
+    }
+
+    #[test]
+    fn tabs_left_alone_close_unless_kept_and_reopen_brings_them_back() {
+        let mut browser = Browser::restored(grouped());
+        browser.take_effects();
+        browser.close_left_alone(history::now() + 1e9);
+        assert!(browser.take_effects().is_empty(), "never, unless chosen");
+
+        browser.behaviour.close_after = Some(12.0 * 3600.0);
+        let later = history::now() + 13.0 * 3600.0;
+        browser.close_left_alone(later);
+        let due: Vec<TabId> = browser
+            .take_effects()
+            .into_iter()
+            .filter_map(|e| match e {
+                Effect::Retire { tab, .. } => Some(tab),
+                _ => None,
+            })
+            .collect();
+        let loose: Vec<TabId> = browser
+            .tabs()
+            .iter()
+            .filter(|t| t.group().is_none())
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(due, loose, "grouped tabs and the one in front stay");
+        for tab in due {
+            browser.retire(tab, later - 12.0 * 3600.0);
+        }
+        assert_eq!(browser.tabs().len(), 3);
+        browser.reopen();
+        assert_eq!(browser.tabs().len(), 4);
     }
 }

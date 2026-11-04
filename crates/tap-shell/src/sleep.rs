@@ -61,8 +61,15 @@ pub fn start(mtm: MainThreadMarker) {
     let every = (wait() / 4.0).clamp(5.0, 60.0);
     let block = RcBlock::new(|_timer: std::ptr::NonNull<NSTimer>| {
         let wait = wait();
-        rt::dispatch(move |browser| browser.sleep_idle(history::now(), wait));
+        rt::dispatch(move |browser| {
+            let now = history::now();
+            browser.sleep_idle(now, wait);
+            // With each look for tabs to sleep, tabs left alone past their time close.
+            browser.close_left_alone(now);
+        });
     });
+    // And at launch: last night's tabs count the hours Tap was quit.
+    rt::dispatch(|browser| browser.close_left_alone(history::now()));
     // SAFETY: a repeating timer on the main run loop, its block kept by the timer.
     let timer =
         unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(every, true, &block) };
@@ -184,6 +191,29 @@ pub fn try_sleep(tab: TabId, done: impl FnOnce(String) + 'static) {
         web::discard_page(tab);
         rt::dispatch(move |browser| browser.slept(tab));
         done("asleep".to_owned());
+    });
+}
+
+/// Closes a tab left alone past Settings › Close tabs you leave alone, if nothing the
+/// page is doing keeps it (Search's `retire`): a sleeping tab has nothing to keep it; an
+/// awake one is asked as a tab going to sleep is.
+pub fn try_retire(tab: TabId, since: f64) {
+    let Some(page) = web::existing(tab) else {
+        rt::dispatch(move |browser| browser.retire(tab, since));
+        return;
+    };
+    if busy(tab, &page).is_some() {
+        return;
+    }
+    web::evaluate_in_world(&page, UNSAVED, move |value| {
+        if value == Some(Value::Bool(true)) {
+            return;
+        }
+        // Looked at again: you may have gone back to the tab in the meantime.
+        if web::existing(tab).is_some_and(|page| busy(tab, &page).is_some()) {
+            return;
+        }
+        rt::dispatch(move |browser| browser.retire(tab, since));
     });
 }
 

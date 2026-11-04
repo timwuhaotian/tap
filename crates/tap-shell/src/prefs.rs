@@ -14,6 +14,7 @@ use objc2_foundation::{
 };
 use serde_json::{Map, Number, Value};
 use tap_core::{
+    browser::{Behaviour, NewPlace},
     engine::Engine,
     identity,
     keyword::Keyword,
@@ -110,11 +111,14 @@ pub fn apply(mtm: MainThreadMarker) {
         Engine::from_raw(&settings_index::text(&kept, "search.engine")).unwrap_or_default();
     let custom = settings_index::text(&kept, "search.custom");
     let keywords = keywords(&kept);
+    let behaviour = behaviour(&kept);
     rt::dispatch(move |browser| {
         browser.engine = engine;
         browser.custom_engine = custom;
         browser.keywords = keywords;
+        browser.behaviour = behaviour;
     });
+    crate::web::apply_prefs(&kept);
     let look = settings_index::text(&kept, "look");
     // SAFETY: AppKit's own appearance names.
     let name = unsafe {
@@ -126,6 +130,31 @@ pub fn apply(mtm: MainThreadMarker) {
     };
     let appearance = name.and_then(NSAppearance::appearanceNamed);
     NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
+}
+
+/// How tabs open and close, from Settings › Tabs and › Address bar commands.
+fn behaviour(kept: &Kept) -> Behaviour {
+    let hours = settings_index::value(kept, "tabs.close.after")
+        .as_f64()
+        .unwrap_or(0.0);
+    // `close.after` in seconds stands in for the chosen time on a test run, as Search's.
+    let seconds = kept
+        .get("close.after")
+        .and_then(|v| v.as_f64())
+        .filter(|s| *s > 0.0);
+    Behaviour {
+        new_place: NewPlace::from_raw(&settings_index::text(kept, "tabs.newPlace")),
+        new_after_last: settings_index::flag(kept, "tabs.newAfterLast"),
+        close_goes_back: settings_index::flag(kept, "tabs.closeGoesBack"),
+        lazy: settings_index::flag(kept, "tabs.lazy"),
+        commands: settings_index::flag(kept, "commandbar"),
+        close_after: (hours > 0.0).then(|| seconds.unwrap_or(hours * 3600.0)),
+    }
+}
+
+/// Settings › Tabs › Start with a fresh window, read once at launch.
+pub fn starts_fresh() -> bool {
+    settings_index::flag(&Kept::new(), "start.fresh")
 }
 
 /// The site shortcuts: Search keeps them as JSON in a `Data`.

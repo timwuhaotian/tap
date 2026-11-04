@@ -447,7 +447,8 @@ across NSUserDefaults (done in 0.1.1, §8).
 - Tap **reads** `.searchprofile` and Safari zips, and **writes** `.tapprofile` with the
   identical layout and `format: 1`.
 
-**"Bring things over from Search"** (`tap_import::from_search`, new). If
+**"Bring things over from Search"** (`tap_import::from_search`, new; its file half is
+in: `from_search::pack` and `cargo xtask search-profile`, §8 "After 0.1.1"). If
 `~/Library/Application Support/Search` exists, Search is offered as an import source.
 - It builds the same `IncomingProfile` that #845's import reads, from the live folder
   plus `CFPreferencesCopyMultiple("com.officecommun.search")`, so both paths share all
@@ -737,6 +738,65 @@ that asks:
   of spaces listed in `spaces.json`, and Search writes no `spaces.json` while Personal
   has one space. So a profile from this Mac's Search would bring no tabs into Search.
   Tap reads `session.json` as the first space's whether or not the list is there.
+  Fixed on both sides after 0.1.1 (below).
+
+### After 0.1.1 — Settings that work, #845's space list, Search's profile brought over
+
+At the user's request (2026-11-04: fix #845's `spaces.json`; export this Mac's Search
+profile in Tap's format and bring it into the installed Tap, groups and all; "most of
+Settings can't really be used: fix it"). Unreleased.
+
+- [x] **#845's space list, fixed in Search** (branch `export-search-profile`, commit
+  `0df6942`, local, not pushed): the export stages the list `Spaces.read` makes on the
+  spot when there is no `spaces.json`, and the import reads a file without one as
+  Personal's one space, so files already written bring their tabs too.
+  `SearchProfileTests` (2 tests) fail without it and pass with it; the ImportFile and
+  Profiles tests stay green. **Tap's export does the same** (`profile::pack` always
+  writes `spaces.json`, Personal's `Space.first()` when the store has none), so a
+  `.tapprofile` renamed `.searchprofile` comes into the fixed Search with its tabs.
+- [x] **Search's own profile as a Tap profile file**: `tap_import::from_search::pack`
+  reads Search's store folder as `collectCurrentProfile` does (Personal's first
+  space, history, bookmarks, the shared files, extension ids, every file byte for
+  byte) and packs it with `profile::pack`; `prefs::for_profile_of` reads Search's own
+  defaults domain under the same allowlist; `cargo xtask search-profile <file>` writes
+  it. This Mac's Search went into the installed Tap 0.1.1 through File › Import's
+  path (opened from the Finder, Bring In): 27 tabs in 3 groups (软件开发 and 娱乐
+  folded, AI Providers open, as in Search), 2,000 places, 368 bookmarks, 14 settings;
+  the strip checked by eye. Still to come with M6: the in-app "Bring things over from
+  Search" (§7) without a file, other spaces and profiles, pins as pins.
+- [x] **Settings shows only what Tap does.** 0.1.1 showed Search's whole index with
+  every row Tap didn't act on dimmed; most of the page couldn't be used. Now the page,
+  the rail and the find field show only `settings_index::live` rows (27 of 81), and the
+  two privacy rows only where this Mac's WebKit has the feature (macOS 27, as Search
+  hides them). Pages with none (Passwords, Extensions, Keyboard & Mouse) leave the rail.
+  The other rows' keys still travel in profiles (`profile_keys` is the whole index).
+  `fixed`, `FIXED` and `NOT_YET` are gone. Newly live, each ported from Search:
+  - `tabs.newPlace` (`placeForNew`/`placeForFront`: a link from another app beside the
+    tab in front, first after pins, or at the end; ⌘T's at the end unless Leftmost;
+    ⌘-click links after their page whatever it says), `tabs.newAfterLast` (with
+    Search's rule that the last loose tab beside groups always leaves a new tab),
+    `tabs.closeGoesBack` (the tab viewed before, from a list of tabs left this run;
+    Tap's own pages always go back), `tabs.lazy` (a background link waits asleep),
+    `commandbar` ("settings"/"preferences", "new tab"; the rest of Search's commands
+    need pages Tap hasn't got), all in `Browser::behaviour`, set by `prefs::apply`.
+  - `tabs.close.after` (`Closing.swift`): `close_left_alone` on the sleep timer and at
+    launch; a tab that isn't on screen, pinned, named, grouped or blank closes as ⌘W
+    would once the shell finds it idle (`sleep::try_retire`: sound, call, download,
+    question, something typed). `close.after` in seconds for the bench.
+  - `start.fresh`: `Shape::fresh` (Search's `Session.fresh`) at launch.
+  - `downloads.ask`: a save panel per download (never on a test run); closing it
+    cancels the download.
+  - `media.click` (`.all`, else `.audio`, as Search) and `pageZoom` (every view, at
+    once on change; per-site ⌘+/⌘− isn't in Tap yet), `privacy.clickIDs` (WebKit's
+    `FilterLinkDecorationByDefaultEnabled` flag on each view's preferences, reaching
+    open tabs on their next load) and `privacy.gpc` (`setGlobalPrivacyControlEnabled:`
+    on the configuration a view is made from: tabs made or woken from then on).
+- Checked: model tests for each (`tap-core`, 86); through the bench in a test world,
+  gclid stripped with utm_ kept and kept again with the switch off, zoom 125% (1263 →
+  1011 CSS px) and back, `navigator.globalPrivacyControl` true then false in a new tab,
+  idle tabs closing in under a minute with `close.after` 5 and ⇧⌘T bringing one back,
+  "settings" in the field, a fresh start keeping the imported 22 grouped and 2 named
+  tabs; the Tabs page by eye. Not checked on a real video: `media.click`.
 
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
@@ -1154,6 +1214,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-04 | Browsing came before M1's foundations, at the user's request: the core model, runtime, window, tabs, field and web views are in (M2 progress). The bench moves up next: driving the UI with synthetic keystrokes is unreliable and can reach other apps. |
 | 2026-11-04 | The GitHub repo `timwuhaotian/tap` is public from day one, not only from 1.0. Nothing is downloadable until `releases/` is first committed at 1.0. |
 | 2026-11-04 | At the user's request, 0.1.1 brings forward Settings (Search's whole index, the rows Tap acts on live, the rest dimmed with their values), #845 profile files (export, import, opened from the Finder), tab groups in the row, and Kil's updater (§8 "0.1.1"), then ships as a patch release. Profile files are read in memory with the `zip` crate in a new `tap-import` crate, as §4 and §7 planned. |
+| 2026-11-04 | At the user's request ("为什么settings里面的大部分选项都没办法真实的使用，修复优化"), Settings shows only the rows Tap acts on, replacing 0.1.1's dimmed rows, and twelve more rows are made live (§8 "After 0.1.1"). The rest come back as their features land; their values are kept and travel meanwhile. |
 | 2026-11-04 | At the user's request ("全部完成后，发布0.1.0版本"), 0.1.0 is released once M2 is done, rather than waiting for full parity at 1.0: browsing, the field, history, page questions, downloads, find, sleeping tabs, session, site icons, links from other apps and #849. `releases/` is committed from 0.1.0; the README says what isn't in yet. Full parity stays the bar for 1.0. Not in 0.1.0 and needed before people rely on it: the updater (M8 in the plan, ported from Kil). |
 
 ## Appendix A — Parity tracker
@@ -1177,7 +1238,7 @@ added below this one as M1 starts.
 |---|---:|---|---|---|
 | Accounts.swift | 172 | s/ui/accounts | M5 | todo |
 | Address.swift | 137 | c/address | M2 | tested |
-| AddressCommands.swift | 70 | c/address_commands | M2 | todo |
+| AddressCommands.swift | 70 | c/browser (`Command`: settings, new tab) | M2 | partial |
 | AI.swift | 187 | c/ai, s/ai_keys | M8 | todo |
 | AIAssist.swift | 616 | c/ai/assist, s/ui/ai_assist | M8 | todo |
 | AIClient.swift | 312 | c/ai/client | M8 | todo |
@@ -1199,7 +1260,7 @@ added below this one as M1 starts.
 | BookmarksFile.swift | 165 | c/bookmarks_file | M1 | todo |
 | Browser.swift | 7518 | c/browser/*, w/delegate, w/downloads, w/print | M2→M5 | partial |
 | CleanLink.swift | 75 | c/clean_link | M2 | todo |
-| Closing.swift | 108 | c/closing | M3 | todo |
+| Closing.swift | 108 | c/browser (`close_left_alone`, `retire`), s/sleep | M3 | ported |
 | Crx.swift | 240 | c/crx | M1 | todo |
 | Curtain.swift | 379 | c/curtain, a/curtain, w/relays | M5 | todo |
 | Design.swift | 474 | ui/design, c/mark | M0 | partial |
@@ -1265,14 +1326,14 @@ added below this one as M1 starts.
 | Plate.swift | 271 | ui/plate | M3 | todo |
 | PopupGesture.swift | 156 | c/popup_gesture, w/relays, a | M5 | todo |
 | Prefs.swift | 818 | c/settings_index (keys, defaults, merged), s/prefs | M1 | partial |
-| Privacy.swift | 108 | c/privacy, w/privacy | M5 | todo |
+| Privacy.swift | 108 | s/web (`Pages`, `set_feature`, `offers`) | M5 | partial |
 | Profiles.swift | 343 | c/profiles, w/stores, s/ui/profiles | M4 | todo |
 | Reader.swift | 594 | a/reader, c/reader, s/ui/reader_look | M5 | todo |
 | Recall.swift | 482 | s/ui/history_page | M3 | todo |
 | RecordingIndicator.swift | 217 | s/ui/recording_indicator | M5 | todo |
 | Registrable.swift | 25 | c/registrable | M1 | todo |
 | Scripting.swift | 80 | s/app/scripting | M8 | todo |
-| SearchProfile.swift (#845 branch) | 350 | i/profile, s/profile (#845) | M6 | partial |
+| SearchProfile.swift (#845 branch) | 350 | i/profile, i/from_search, s/profile (#845) | M6 | partial |
 | Session.swift | 195 | c/session | M1/M2 | partial |
 | Settings.swift | 1454 | s/settings | M3 | partial |
 | SettingsIndex.swift | 656 | c/settings_index | M3 | tested |

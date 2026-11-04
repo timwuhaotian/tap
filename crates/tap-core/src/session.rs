@@ -124,6 +124,64 @@ impl Shape {
     pub fn encode(&self) -> Vec<u8> {
         serde_json::to_vec(self).unwrap_or_default()
     }
+
+    /// The row as Settings › Start with a fresh window leaves it at launch (Search's
+    /// `Session.fresh`): what you said to keep, as tabs that close themselves count it —
+    /// pins, named tabs, and the tabs in groups with their groups — and nothing else. A
+    /// Split View pair stays only when both its pages do. No tab is in front, so the
+    /// window opens on a new tab beside them.
+    #[must_use]
+    pub fn fresh(self) -> Shape {
+        let groups = self.groups.unwrap_or_default();
+        let mut places = std::collections::HashMap::new();
+        let mut tabs = Vec::new();
+        for (index, entry) in self.tabs.into_iter().enumerate() {
+            let grouped = entry
+                .group_id
+                .as_deref()
+                .is_some_and(|id| groups.iter().any(|g| g.id == id));
+            if entry.pin.is_some() || entry.name.is_some() || grouped {
+                places.insert(index, tabs.len());
+                tabs.push(entry);
+            }
+        }
+        let groups: Vec<TabGroup> = groups
+            .into_iter()
+            .filter(|g| tabs.iter().any(|t| t.group_id.as_deref() == Some(&g.id)))
+            .collect();
+        let moved = |value: &serde_json::Value| {
+            value
+                .as_u64()
+                .and_then(|i| usize::try_from(i).ok())
+                .and_then(|i| places.get(&i))
+                .map(|&i| serde_json::Value::from(i))
+        };
+        let splits = self
+            .splits
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|pair| {
+                let pages = pair.get("tabs")?.as_array()?;
+                let kept: Vec<serde_json::Value> = pages.iter().filter_map(moved).collect();
+                if kept.len() != pages.len() {
+                    return None;
+                }
+                let mut pair = pair.clone();
+                pair["tabs"] = kept.into();
+                if let Some(focused) = pair.get("focused").cloned() {
+                    pair["focused"] = moved(&focused).unwrap_or_default();
+                }
+                Some(pair)
+            })
+            .collect();
+        Shape {
+            tabs,
+            active: -1,
+            groups: (!groups.is_empty()).then_some(groups),
+            splits: serde_json::Value::Array(splits),
+        }
+    }
 }
 
 fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -204,5 +262,35 @@ mod tests {
     fn a_file_that_wont_decode_is_not_an_empty_session() {
         assert!(Shape::decode(b"{\"tabs\": 3}").is_none());
         assert!(Shape::decode(b"not json").is_none());
+    }
+
+    #[test]
+    fn a_fresh_start_keeps_pins_named_and_grouped_tabs_only() {
+        let written = br#"{"tabs":[
+            {"url":"https://loose.com","title":"Loose"},
+            {"url":"https://pin.com","title":"Pin","pin":"P"},
+            {"url":"https://g.com","title":"G","groupID":"G1"},
+            {"url":"https://named.com","title":"N","name":"Mine"},
+            {"url":"https://orphan.com","title":"O","groupID":"GONE"}],
+          "active":0,
+          "groups":[{"id":"G1","name":"Work"},{"id":"G2","name":"Empty"}],
+          "splits":[{"tabs":[1,2],"focused":2},{"tabs":[0,3]}]}"#;
+        let fresh = Shape::decode(written).expect("decodes").fresh();
+        let urls: Vec<&str> = fresh.tabs.iter().map(|t| t.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            ["https://pin.com", "https://g.com", "https://named.com"]
+        );
+        assert_eq!(
+            fresh.active, -1,
+            "no tab in front: a new one opens beside them"
+        );
+        let groups = fresh.groups.expect("its group");
+        assert_eq!(groups.len(), 1, "a group with no tab left goes");
+        assert_eq!(
+            fresh.splits,
+            serde_json::json!([{"tabs":[0,1],"focused":1}]),
+            "a pair stays only whole"
+        );
     }
 }

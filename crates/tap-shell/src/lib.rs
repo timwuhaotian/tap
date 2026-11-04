@@ -58,7 +58,14 @@ pub fn run() {
     app.setMainMenu(Some(&bar));
     update_window::install(commands.clone());
 
-    let mut browser = Browser::restored(store::read_session());
+    // Settings › Start with a fresh window: only what you said to keep comes back.
+    let session = store::read_session();
+    let session = if prefs::starts_fresh() {
+        session.fresh()
+    } else {
+        session
+    };
+    let mut browser = Browser::restored(session);
     let (history, rewrite) = store::read_history();
     browser.set_history(history, rewrite);
     rt::install(browser);

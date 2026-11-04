@@ -3,9 +3,10 @@
 //! field over them, and the page down the middle of the rest, group by group, each row
 //! with its icon, its words and its control.
 //!
-//! Every row of Search's is here, reading and writing Search's keys. A row Tap acts on
-//! changes things at once; one it doesn't act on yet shows what is kept, dimmed, and says
-//! so. The page is built again whenever something changes; it is a few dozen views.
+//! Search's rows that Tap acts on, reading and writing Search's keys; a change takes
+//! effect at once. Rows Tap doesn't act on yet aren't shown: their values are still kept
+//! and still travel in a profile, and a page with none of them isn't in the rail. The
+//! page is built again whenever something changes; it is a few dozen views.
 
 use std::{
     cell::{Cell, RefCell},
@@ -295,6 +296,7 @@ pub fn describe() -> Value {
                 "title": item.title,
                 "keys": item.keys,
                 "live": index::live(item.id),
+                "shown": shown(item),
                 "findOnly": item.find_only,
                 "value": shown_value(item, &kept),
             })
@@ -304,11 +306,14 @@ pub fn describe() -> Value {
     serde_json::json!({ "page": page, "rows": rows })
 }
 
+/// Whether the page shows a row: Tap acts on it, and this Mac's WebKit can do what it
+/// asks.
+fn shown(item: &Item) -> bool {
+    index::live(item.id) && crate::web::offers(item.id)
+}
+
 /// What a row's control says, as the bench reads it back.
 fn shown_value(item: &Item, kept: &prefs::Kept) -> Value {
-    if let Some(fixed) = index::fixed(item.id) {
-        return fixed.into();
-    }
     match item.control {
         Control::Switch(key) => index::flag(kept, key).into(),
         Control::SwitchOff(key) => (!index::flag(kept, key)).into(),
@@ -450,7 +455,7 @@ fn build_rail(mtm: MainThreadMarker, state: &State) {
     y += 38.0;
     let searching = !state.query.borrow().trim().is_empty();
     for block in Page::BLOCKS {
-        for page in block.iter().copied() {
+        for page in block.iter().copied().filter(|p| index::has_rows(*p)) {
             // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
             let button = unsafe {
                 NSButton::buttonWithTitle_image_target_action(
@@ -571,7 +576,7 @@ fn build_column(mtm: MainThreadMarker, state: &State) {
         for group in index::groups_of(page) {
             let rows: Vec<&'static Item> = index::items_in(group.id)
                 .into_iter()
-                .filter(|item| index::applies(item, &kept))
+                .filter(|item| shown(item) && index::applies(item, &kept))
                 .collect();
             if rows.is_empty() {
                 continue;
@@ -587,7 +592,10 @@ fn build_column(mtm: MainThreadMarker, state: &State) {
             y = card_of(mtm, state, &column, &rows, &kept, left, width, y);
         }
     } else {
-        let found = index::find(&query);
+        let found: Vec<&'static Item> = index::find(&query)
+            .into_iter()
+            .filter(|item| shown(item))
+            .collect();
         if found.is_empty() {
             let none = label(
                 mtm,
@@ -680,8 +688,6 @@ fn row(
     width: f64,
     top: f64,
 ) -> f64 {
-    let acts = index::live(item.id);
-    let fixed = index::fixed(item.id);
     let counts = index::applies(item, kept);
     let ink = palette::INK.dynamic();
     let muted = palette::MUTED.dynamic();
@@ -696,14 +702,6 @@ fn row(
     let mut detail = detail_of(item, kept);
     if !counts {
         index::needs(item).clone_into(&mut detail);
-    } else if fixed.is_some() {
-        detail = format!("{detail}. {}", index::FIXED);
-    } else if !acts {
-        detail = if detail.is_empty() {
-            index::NOT_YET.to_owned()
-        } else {
-            format!("{detail}. {}", index::NOT_YET)
-        };
     }
     let icon = symbol(mtm, item.icon, 17.0);
     let title = label(mtm, &title_of(item), 13.0, medium(), &ink);
@@ -736,8 +734,7 @@ fn row(
                 top + (height - size.height) / 2.0,
             ));
         }
-        let enabled = acts && counts && fixed.is_none();
-        set_enabled(&control, enabled);
+        set_enabled(&control, counts);
         card.addSubview(&control);
     }
     // What goes under a row's words: the custom engine's address, the site shortcuts.
@@ -919,19 +916,13 @@ fn make_control(
     item: &'static Item,
     kept: &prefs::Kept,
 ) -> Option<Retained<NSView>> {
-    let fixed = index::fixed(item.id);
     Some(match item.control {
-        Control::Switch(key) => switch(
-            mtm,
-            state,
-            fixed.map_or_else(|| index::flag(kept, key), |f| f == "true"),
-            Binding::Switch(key),
-        ),
+        Control::Switch(key) => switch(mtm, state, index::flag(kept, key), Binding::Switch(key)),
         Control::SwitchOff(key) => {
             switch(mtm, state, !index::flag(kept, key), Binding::SwitchOff(key))
         }
         Control::Segments(key, options) => {
-            let chosen = fixed.map_or_else(|| index::text(kept, key), str::to_owned);
+            let chosen = index::text(kept, key);
             segments(
                 mtm,
                 state,
@@ -976,7 +967,7 @@ fn make_control(
             Binding::Merged(Merged::PinsKeep),
         ),
         Control::Merged(which) => {
-            let chosen = fixed.map_or_else(|| index::merged(kept, which), str::to_owned);
+            let chosen = index::merged(kept, which);
             if which.is_menu() {
                 let titles: Vec<String> = which
                     .options()

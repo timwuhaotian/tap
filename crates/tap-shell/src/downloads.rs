@@ -5,8 +5,11 @@
 //! the test world's own `Downloads` folder, so a script never writes into yours. A
 //! finished file bounces the Downloads stack in the Dock, as Safari's do.
 //!
+//! With Settings › Ask where to save each file, a save panel names each one instead, and
+//! closing it cancels the download.
+//!
 //! Not yet: the list of downloads (⇧⌘J) and `downloads.json`, progress in the strip,
-//! cancel and resume, asking where to save, and the PDF bar's own save button.
+//! cancel and resume, and the PDF bar's own save button.
 
 use std::{cell::RefCell, path::PathBuf, ptr};
 
@@ -16,6 +19,7 @@ use objc2::{
     rc::Retained,
     runtime::{NSObject, NSObjectProtocol, ProtocolObject},
 };
+use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
 use objc2_foundation::{
     NSData, NSDistributedNotificationCenter, NSError, NSString, NSURL, NSURLResponse,
 };
@@ -34,6 +38,29 @@ thread_local! {
     /// Finished files, newest last (bench `downloads`).
     static DONE: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     static DELEGATE: RefCell<Option<Retained<DownloadDelegate>>> = const { RefCell::new(None) };
+}
+
+/// Where a download is written: a free name in the folder, or wherever the save panel
+/// says when Settings asks for it (Search's `whereToSave`). `None`: the panel was closed.
+fn where_to_save(mtm: MainThreadMarker, name: &str) -> Option<PathBuf> {
+    let asks = tap_core::settings_index::flag(&crate::prefs::Kept::new(), "downloads.ask");
+    // A test run never waits on a panel nobody is there to answer.
+    if !asks || testing() {
+        return Some(fetching::free(name, &folder()));
+    }
+    let panel = NSSavePanel::savePanel(mtm);
+    panel.setNameFieldStringValue(&NSString::from_str(name));
+    panel.setDirectoryURL(Some(&NSURL::fileURLWithPath(&NSString::from_str(
+        &folder().display().to_string(),
+    ))));
+    panel.setCanCreateDirectories(true);
+    if panel.runModal() != NSModalResponseOK {
+        return None;
+    }
+    panel
+        .URL()
+        .and_then(|url| url.path())
+        .map(|path| PathBuf::from(path.to_string()))
 }
 
 fn testing() -> bool {
@@ -107,7 +134,12 @@ define_class!(
             suggested: &NSString,
             handler: &DynBlock<dyn Fn(*mut NSURL)>,
         ) {
-            let file = fetching::free(&fetching::file_name(&suggested.to_string()), &folder());
+            let name = fetching::file_name(&suggested.to_string());
+            let Some(file) = where_to_save(self.mtm(), &name) else {
+                // Cancelled in the panel: no file, so WebKit cancels the download.
+                handler.call((ptr::null_mut(),));
+                return;
+            };
             GOING.with_borrow_mut(|going| {
                 if let Some(entry) = going.iter_mut().find(|(d, _, _)| same(d, download)) {
                     entry.1 = Some(file.clone());

@@ -20,10 +20,10 @@ use objc2_foundation::{
 #[allow(deprecated)]
 use objc2_web_kit::WKProcessPool;
 use objc2_web_kit::{
-    WKContentWorld, WKDownload, WKFrameInfo, WKNavigation, WKNavigationAction,
-    WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationResponse,
-    WKNavigationResponsePolicy, WKNavigationType, WKOpenPanelParameters, WKUIDelegate, WKWebView,
-    WKWebViewConfiguration, WKWindowFeatures,
+    WKAudiovisualMediaTypes, WKContentWorld, WKDownload, WKFrameInfo, WKNavigation,
+    WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationResponse,
+    WKNavigationResponsePolicy, WKNavigationType, WKOpenPanelParameters, WKPreferences,
+    WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWindowFeatures,
 };
 use serde_json::Value;
 use tap_core::{
@@ -49,6 +49,161 @@ const OBSERVED: [&str; 6] = [
 thread_local! {
     static WEBS: RefCell<HashMap<TabId, Retained<WKWebView>>> = RefCell::new(HashMap::new());
     static SHARED: RefCell<Option<Shared>> = const { RefCell::new(None) };
+    static PAGES: std::cell::Cell<Pages> = const { std::cell::Cell::new(Pages::DEFAULT) };
+}
+
+/// What Settings says every page does (Search's `Web.configuration` and `Privacy.swift`):
+/// set at launch and whenever a setting changes.
+#[derive(Clone, Copy, Debug)]
+struct Pages {
+    /// `pageZoom`: where every site starts.
+    zoom: f64,
+    /// `media.click`: videos wait for a click, with sound or without.
+    waits: bool,
+    /// `privacy.clickIDs`: WebKit takes gclid, fbclid and the like off an address.
+    click_ids: bool,
+    /// `privacy.gpc`: Global Privacy Control with every request.
+    gpc: bool,
+}
+
+impl Pages {
+    const DEFAULT: Pages = Pages {
+        zoom: 1.0,
+        waits: false,
+        click_ids: true,
+        gpc: true,
+    };
+}
+
+/// Settings changed: every page made from now on follows them, and the open ones take
+/// the zoom and the click-ID switch at once (WebKit reads that one on each navigation).
+/// Autoplay and GPC are fixed when a page's view is made: a tab woken or opened from now
+/// on has them.
+pub fn apply_prefs(kept: &crate::prefs::Kept) {
+    use tap_core::settings_index as index;
+    let pages = Pages {
+        zoom: index::value(kept, "pageZoom")
+            .as_f64()
+            .filter(|z| *z > 0.0)
+            .unwrap_or(1.0),
+        waits: index::flag(kept, "media.click"),
+        click_ids: index::flag(kept, "privacy.clickIDs"),
+        gpc: index::flag(kept, "privacy.gpc"),
+    };
+    PAGES.set(pages);
+    WEBS.with_borrow(|webs| {
+        for web in webs.values() {
+            take_prefs(web, pages);
+        }
+    });
+}
+
+/// Whether this Mac's WebKit can do what a row of Settings asks (Search hides the switch
+/// otherwise): Global Privacy Control and WebKit's click-ID filter come with macOS 27.
+pub fn offers(row: &str) -> bool {
+    match row {
+        "privacy.gpc" => {
+            let gpc = objc2::sel!(setGlobalPrivacyControlEnabled:);
+            // SAFETY: a class method asking whether instances answer a selector.
+            unsafe {
+                msg_send![
+                    <objc2_web_kit::WKWebpagePreferences as objc2::ClassType>::class(),
+                    instancesRespondToSelector: gpc
+                ]
+            }
+        }
+        "privacy.clickIDs" => {
+            let at_least = objc2_foundation::NSOperatingSystemVersion {
+                majorVersion: 27,
+                minorVersion: 0,
+                patchVersion: 0,
+            };
+            feature("FilterLinkDecorationByDefaultEnabled").is_some()
+                && objc2_foundation::NSProcessInfo::processInfo()
+                    .isOperatingSystemAtLeastVersion(at_least)
+        }
+        _ => true,
+    }
+}
+
+/// The settings a view takes after it is made.
+fn take_prefs(web: &WKWebView, pages: Pages) {
+    // SAFETY: plain property calls on a live web view and its own preferences.
+    unsafe {
+        if (web.pageZoom() - pages.zoom).abs() > 0.004 {
+            web.setPageZoom(pages.zoom);
+        }
+        set_feature(
+            &web.configuration().preferences(),
+            "FilterLinkDecorationByDefaultEnabled",
+            pages.click_ids,
+        );
+    }
+}
+
+/// The settings a view has to be made with, put on the configuration it is made from.
+fn make_with(configuration: &WKWebViewConfiguration, pages: Pages) {
+    // SAFETY: plain property setters on a configuration not yet used to make a view.
+    unsafe {
+        configuration.setMediaTypesRequiringUserActionForPlayback(if pages.waits {
+            WKAudiovisualMediaTypes::All
+        } else {
+            WKAudiovisualMediaTypes::Audio
+        });
+        let webpage = configuration.defaultWebpagePreferences();
+        let gpc = objc2::sel!(setGlobalPrivacyControlEnabled:);
+        // From macOS 27; on a WebKit without it nothing is sent.
+        let answers: bool = msg_send![&*webpage, respondsToSelector: gpc];
+        if answers {
+            let _: () = msg_send![&*webpage, setGlobalPrivacyControlEnabled: Bool::new(pages.gpc)];
+        }
+    }
+}
+
+/// One of WebKit's feature flags, by its key, on `preferences` (Search's `ClickIDs.set`):
+/// not in the public framework, so each step is asked first.
+fn set_feature(preferences: &WKPreferences, key: &str, on: bool) {
+    let Some(feature) = feature(key) else {
+        return;
+    };
+    let set = objc2::sel!(_setEnabled:forFeature:);
+    // SAFETY: asked first whether the preferences answer the selector, which takes a BOOL
+    // and one of WebKit's own feature objects.
+    unsafe {
+        let answers: bool = msg_send![preferences, respondsToSelector: set];
+        if answers {
+            let _: () = msg_send![preferences, _setEnabled: Bool::new(on), forFeature: &*feature];
+        }
+    }
+}
+
+/// WebKit's feature object for a key, looked up once.
+fn feature(key: &str) -> Option<Retained<AnyObject>> {
+    thread_local! {
+        static FEATURES: RefCell<HashMap<String, Option<Retained<AnyObject>>>> = RefCell::new(HashMap::new());
+    }
+    FEATURES.with_borrow_mut(|known| {
+        known
+            .entry(key.to_owned())
+            .or_insert_with(|| {
+                let list = objc2::sel!(_features);
+                let class = <WKPreferences as objc2::ClassType>::class();
+                // SAFETY: asked first whether the class answers `_features`, an array of
+                // `_WKFeature`s, each with a string `key`.
+                unsafe {
+                    let answers: bool = msg_send![class, respondsToSelector: list];
+                    if !answers {
+                        return None;
+                    }
+                    let all: Option<Retained<NSArray<AnyObject>>> = msg_send![class, _features];
+                    all?.iter().find(|f| {
+                        let name: Option<Retained<NSString>> = msg_send![&**f, key];
+                        name.is_some_and(|n| n.to_string() == key)
+                    })
+                }
+            })
+            .clone()
+    })
 }
 
 struct Shared {
@@ -120,6 +275,7 @@ fn web_view(mtm: MainThreadMarker, tab: TabId) -> Retained<WKWebView> {
         return web;
     }
     let web = shared(mtm, |shared| {
+        make_with(&shared.configuration, PAGES.get());
         // SAFETY: a fresh allocation, initialised once with a valid configuration.
         unsafe {
             WKWebView::initWithFrame_configuration(
@@ -154,6 +310,7 @@ fn register(mtm: MainThreadMarker, tab: TabId, web: &Retained<WKWebView>) {
             }
         }
     });
+    take_prefs(web, PAGES.get());
     WEBS.with_borrow_mut(|webs| webs.insert(tab, web.clone()));
 }
 
@@ -306,6 +463,7 @@ pub fn perform(effect: Effect) {
             discard(mtm, tab);
         }
         Effect::Sleep(tab) => sleep::try_sleep(tab, |_| {}),
+        Effect::Retire { tab, since } => sleep::try_retire(tab, since),
         Effect::FocusPage(tab) => window::focus_page(existing(tab).as_deref()),
         Effect::Save(shape) => store::save_session(&shape),
         Effect::SaveHistory(data) => store::save_history(data),

@@ -7,6 +7,28 @@ Info.plist.
 
 ## Unreleased
 
+- **Settings shows only what works.** Every row on it now changes what Tap does, at
+  once; rows for what Tap can't do yet are no longer shown (their values are still kept
+  and still travel in a profile), and pages with none left (Passwords, Extensions,
+  Keyboard & Mouse) are out of the rail. Newly working, as Search has them:
+  - Tabs: New tab position (a link from another app beside the tab you're on, at the
+    start or at the end; ⌘T's at the end unless Leftmost), Leave a new tab when the
+    last tab closes, Closing a tab goes back to the one before, Load background tabs
+    when you go to them, Close tabs you leave alone (pinned, named and grouped tabs
+    stay; ⇧⌘T brings one back).
+  - Start with a fresh window: pins, named tabs and tab groups come back, nothing else.
+  - Address bar commands: "settings" or "new tab" alone in the field go there.
+  - Ask where to save each file.
+  - Videos wait for a click, and Page zoom, where every site starts.
+  - Remove click trackers from links (gclid, fbclid and the like; utm_ tags stay) and
+    Tell sites not to sell or share your data (Global Privacy Control), on macOS 27.
+- The last tab that isn't in a group, closed beside groups, leaves a new tab rather than
+  opening a group's page, as in Search.
+- A profile file now always lists its spaces, so Search's import (#845) brings its
+  tabs in too; before, a profile from a Mac with one space came into Search empty.
+- `cargo xtask search-profile <file.tapprofile>` packs Search's own profile on this Mac
+  (tabs and groups, history, bookmarks, settings) as a Tap profile file to bring in.
+
 ## 0.1.1 — 2026-11-04
 
 Settings, profiles you can carry to your other Mac with their tab groups, and Tap

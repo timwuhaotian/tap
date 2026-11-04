@@ -7,8 +7,9 @@
 //! settings read as they are.
 //!
 //! Every row of Search's is here but translation's (dropped, docs/PLAN.md §2). Each says
-//! whether Tap acts on it yet ([`live`]); a row Tap doesn't act on yet still shows what is
-//! kept under its keys, dimmed.
+//! whether Tap acts on it yet ([`live`]). Settings shows only the rows Tap acts on; the
+//! others' values are still kept under their keys and still travel in a profile, ready
+//! for the feature behind them.
 
 use std::sync::OnceLock;
 
@@ -761,17 +762,29 @@ pub fn items() -> &'static [Item] {
     })
 }
 
-/// The rows Tap acts on today. Every other row shows what is kept under its keys,
-/// dimmed, until the feature behind it lands; the value still travels in a profile.
-const LIVE: [&str; 15] = [
+/// The rows Tap acts on today, the only ones Settings shows. Every other row's value is
+/// kept under its keys, and travels in a profile, until the feature behind it lands.
+const LIVE: [&str; 27] = [
     "general.default",
     "general.import",
     "quit.confirm",
     "downloads.folder",
+    "downloads.ask",
     "look",
+    "tabs.newPlace",
+    "tabs.newAfterLast",
+    "tabs.closeGoesBack",
+    "tabs.lazy",
     "tabs.sleep",
+    "tabs.close.after",
     "search.engine",
     "search.keywords",
+    "media.click",
+    "pageZoom",
+    "commandbar",
+    "start.fresh",
+    "privacy.clickIDs",
+    "privacy.gpc",
     "clear.history",
     "clear.cookies",
     "clear.cache",
@@ -787,22 +800,13 @@ pub fn live(id: &str) -> bool {
     LIVE.contains(&id)
 }
 
-/// The rows where Tap does one thing for now, whatever is kept: what it does. Shown, not
-/// changeable, until the other ways land.
+/// Whether a page has a row Tap acts on, for the rail.
 #[must_use]
-pub fn fixed(id: &str) -> Option<&'static str> {
-    match id {
-        "tabs.layout" => Some("top"),
-        "glyph" => Some("icons"),
-        "newtab.floating" => Some("true"),
-        _ => None,
-    }
+pub fn has_rows(page: Page) -> bool {
+    groups_of(page)
+        .iter()
+        .any(|g| items_in(g.id).iter().any(|i| live(i.id)))
 }
-
-/// What a row Tap doesn't act on yet says under its title.
-pub const NOT_YET: &str = "Not in Tap yet; kept for when it is";
-/// What a row Tap does one way for now says.
-pub const FIXED: &str = "Tap does it this way for now";
 
 /// What every key holds until something is set (Search's `Preferences.init`).
 #[must_use]
@@ -1153,5 +1157,23 @@ mod tests {
         assert!(find("  ").is_empty());
         assert!(find("tabs sleep").iter().all(|i| i.page() == Page::Tabs));
         assert!(find("translate").is_empty(), "translation isn't in Tap");
+    }
+
+    /// Settings shows what Tap does: a page with no row Tap acts on isn't in the rail.
+    #[test]
+    fn only_pages_with_rows_tap_acts_on_are_shown() {
+        let shown: Vec<Page> = Page::all().filter(|p| has_rows(*p)).collect();
+        assert_eq!(
+            shown,
+            [
+                Page::General,
+                Page::Appearance,
+                Page::Tabs,
+                Page::Browsing,
+                Page::Spaces,
+                Page::Privacy,
+                Page::About
+            ]
+        );
     }
 }
