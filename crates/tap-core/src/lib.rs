@@ -14,6 +14,7 @@ pub mod browser;
 pub mod crash;
 pub mod engine;
 pub mod fnd;
+pub mod history;
 pub mod identity;
 pub mod keyword;
 pub mod session;

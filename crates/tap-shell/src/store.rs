@@ -16,7 +16,7 @@ use std::{
     thread,
 };
 
-use tap_core::{identity, session};
+use tap_core::{history::History, identity, session};
 
 /// The store folder, made on first use.
 pub fn folder() -> &'static Path {
@@ -67,6 +67,24 @@ fn quarantine(path: &Path) {
         path,
         path.with_file_name(format!("{name}.unreadable-{stamp}")),
     );
+}
+
+/// Where you have been. A file that won't decode is moved aside, as the session is. The
+/// second value says it was cleaned on the way in and should be written again now.
+pub fn read_history() -> (History, bool) {
+    let path = file("history.json");
+    let Ok(data) = std::fs::read(&path) else {
+        return (History::default(), false);
+    };
+    History::load(&data).unwrap_or_else(|| {
+        quarantine(&path);
+        (History::default(), false)
+    })
+}
+
+/// Writes `history.json` on the writer thread.
+pub fn save_history(data: Vec<u8>) {
+    write(file("history.json"), data, false);
 }
 
 /// Writes the session on the writer thread.

@@ -554,7 +554,18 @@ BookmarksFile, Registrable.
   opens a tab only on Return; ⌘W lands on the right-hand neighbour; ⇧⌘T brings the tab
   back in its place; ⌃Tab and ⌃⇧Tab walk round the row; ⌘1, ⌘2 and ⌘9 (last); the
   page has the keyboard at launch; the lights' centres are 26 pt from the top.
-- [ ] Still to come for M2: history and suggestions, find on page, downloads, dialogs
+- [x] History and the field's offers (2026-11-04): `tap_core::history` ports
+  `History.swift` (identity, front-door credits, frecency, ranking, the known sites,
+  completion, `history.json` in Search's format, capped at 2,000, passwords never
+  kept), with Search's `HistoryRegression` cases as tests. The field offers three
+  places and a search, with the grey ending after the caret; ↓/↑ pick a row, Tab takes
+  the ending, Return goes to the picked row, the ending or the words, a click on a row
+  goes there. Nothing is completed while an input method composes (fixes Search's own
+  gap, §3.5). Checked through the bench, including marked text (`field marked=true`,
+  `unmark`). Not yet: bookmark and open-tab rows, address commands, engine suggestions,
+  site search, the History page (⌘Y), per-profile files, and moving pre-1.0.4 Search
+  front-door credits (`rehomeCredits`).
+- [ ] Still to come for M2: find on page, downloads, dialogs
   (alert/confirm/prompt, uploads, sign-in), sleeping tabs, icons, the os_log line for
   #849 (now on stderr).
 - Tab model and host, KVO, `TapWebDelegate`, dialogs, downloads
@@ -1056,7 +1067,7 @@ added below this one as M1 starts.
 | FrameRate.swift | 156 | sys/power, w/frame_rate | M5 | todo |
 | FullScreenEscape.swift | 396 | s/ui/full_screen_escape | M5 | todo |
 | Hidden.swift | 87 | s/ui/hidden | M5 | todo |
-| History.swift | 639 | c/history | M2 | todo |
+| History.swift | 639 | c/history | M2 | partial |
 | Icons.swift | 859 | c/icons_index, w/icons, a | M2 | todo |
 | ImageMenu.swift | 290 | w/image_menu, a | M5 | todo |
 | Import.swift | 1576 | i/{discovery,chromium,safari,firefox} | M6 | todo |

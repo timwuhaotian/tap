@@ -203,6 +203,9 @@ fn handle(request: &Value, reply: Reply) {
                     "tabs": browser.tabs().len(),
                     "active": browser.active().map(|id| id.0.to_string()),
                     "refusals": browser.refusals(),
+                    "offers": browser.editing().map(|e| e.offers.iter().map(|o| o.key.clone()).collect::<Vec<_>>()),
+                    "ending": browser.editing().and_then(|e| e.ending.clone()),
+                    "picked": browser.editing().and_then(|e| e.picked),
                 })
             })
             .unwrap_or_else(|| json!({}));
@@ -277,6 +280,38 @@ fn handle(request: &Value, reply: Reply) {
             evaluate(id, "document.body ? document.body.innerText : ''", reply);
         }
         "field" => field(request, reply),
+        "fieldkey" => {
+            // A key the field's editor turns into a command (↓ ↑ Tab Return Esc), sent
+            // through the same path, so the field's delegate answers it.
+            let command =
+                match text("key").as_deref() {
+                    Some("down") => sel!(moveDown:),
+                    Some("up") => sel!(moveUp:),
+                    Some("tab") => sel!(insertTab:),
+                    Some("return") => sel!(insertNewline:),
+                    Some("escape") => sel!(cancelOperation:),
+                    _ => return reply.say(
+                        json!({ "error": "fieldkey needs key: down, up, tab, return or escape" }),
+                    ),
+                };
+            let Some(editor) = window::field_editor().and_then(|e| e.downcast::<NSTextView>().ok())
+            else {
+                return reply.say(json!({ "error": "the field doesn't have the keyboard" }));
+            };
+            // SAFETY: a standard text command sent to the field editor.
+            unsafe { editor.doCommandBySelector(command) };
+            reply.say(json!({ "field": window::field_text() }));
+        }
+        "unmark" => {
+            // An input method committing what it was composing.
+            let Some(editor) = window::field_editor().and_then(|e| e.downcast::<NSTextView>().ok())
+            else {
+                return reply.say(json!({ "error": "the field doesn't have the keyboard" }));
+            };
+            editor.unmarkText();
+            reply.say(json!({ "field": window::field_text() }));
+        }
+        "history" => reply.say(json!({ "visits": rt::read(|b| b.history().len()) })),
         "keyeq" => {
             let Some(key) = text("key") else {
                 return reply.say(json!({ "error": "keyeq needs a key" }));
@@ -378,6 +413,11 @@ fn field(request: &Value, reply: Reply) {
         .get("launching")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // As an input method puts text in while still composing: marked, not committed.
+    let marked = request
+        .get("marked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     rt::dispatch(move |browser| {
         if browser.editing().is_none() {
             browser.begin_editing(launching);
@@ -392,16 +432,37 @@ fn field(request: &Value, reply: Reply) {
         };
         // As an input method inserts text: in place of the selection (NSNotFound).
         let selection = NSRange::new(usize::try_from(NSNotFound).unwrap_or(usize::MAX), 0);
-        // SAFETY: the field editor takes a string to insert in place of the selection.
-        unsafe { editor.insertText_replacementRange(&NSString::from_str(&text), selection) };
-        let typed = rt::read(|b| b.editing().map(|e| e.typed.clone())).flatten();
+        let string = NSString::from_str(&text);
+        if marked {
+            let caret = NSRange::new(text.encode_utf16().count(), 0);
+            // SAFETY: the field editor takes marked text in place of the selection.
+            unsafe {
+                editor.setMarkedText_selectedRange_replacementRange(&string, caret, selection);
+            }
+        } else {
+            // SAFETY: the field editor takes a string to insert in place of the selection.
+            unsafe { editor.insertText_replacementRange(&string, selection) };
+        }
+        // What the field holds and offers, read before Return puts it away.
+        let state = rt::read(|b| {
+            b.editing().map(|e| {
+                json!({
+                    "typed": e.typed,
+                    "offers": e.offers.iter().map(|o| o.key.clone()).collect::<Vec<_>>(),
+                    "ending": e.ending,
+                })
+            })
+        })
+        .flatten()
+        .unwrap_or_else(|| json!({}));
         if go {
             let enter: Sel = sel!(insertNewline:);
             // SAFETY: the standard command the field's delegate answers for Return.
             unsafe { editor.doCommandBySelector(enter) };
         }
         let active = rt::read(Browser::active).flatten();
-        let mut out = json!({ "typed": typed, "field": window::field_text() });
+        let mut out = state;
+        out["field"] = json!(window::field_text());
         if let Some(id) = active {
             out["tab"] = describe_id(id);
         }

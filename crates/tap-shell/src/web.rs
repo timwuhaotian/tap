@@ -209,6 +209,7 @@ pub fn perform(effect: Effect) {
         Effect::Discard(tab) => discard(mtm, tab),
         Effect::FocusPage(tab) => window::focus_page(existing(tab).as_deref()),
         Effect::Save(shape) => store::save_session(&shape),
+        Effect::SaveHistory(data) => store::save_history(data),
     }
 }
 
@@ -290,6 +291,13 @@ define_class!(
             handler: &DynBlock<dyn Fn(WKNavigationActionPolicy)>,
         ) {
             handler.call((decide(web, action),));
+        }
+
+        #[unsafe(method(webView:didFinishNavigation:))]
+        fn finished(&self, web: &WKWebView, _navigation: Option<&WKNavigation>) {
+            if let Some(tab) = tab_of(web) {
+                rt::dispatch(move |browser| browser.page_finished(tab));
+            }
         }
 
         #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]

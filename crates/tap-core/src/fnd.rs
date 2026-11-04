@@ -105,6 +105,69 @@ impl Url {
     }
 }
 
+/// An address taken apart to change some of it, as Swift's `URLComponents` does: the
+/// parts not touched keep their spelling and percent-encoding.
+pub struct Parts(Retained<NSURLComponents>);
+
+impl Parts {
+    #[must_use]
+    pub fn of(url: &str) -> Option<Parts> {
+        NSURLComponents::componentsWithString(&NSString::from_str(url)).map(Parts)
+    }
+
+    #[must_use]
+    pub fn scheme(&self) -> Option<String> {
+        self.0.scheme().map(|s| s.to_string())
+    }
+    pub fn set_scheme(&self, scheme: Option<&str>) {
+        self.0.setScheme(scheme.map(NSString::from_str).as_deref());
+    }
+    /// Decoded, as `URLComponents.host` reads it.
+    #[must_use]
+    pub fn host(&self) -> Option<String> {
+        self.0.host().map(|s| s.to_string())
+    }
+    pub fn set_host(&self, host: Option<&str>) {
+        self.0.setHost(host.map(NSString::from_str).as_deref());
+    }
+    #[must_use]
+    pub fn has_credentials(&self) -> bool {
+        self.0.user().is_some() || self.0.password().is_some()
+    }
+    /// Takes off a name and password written into the address.
+    pub fn clear_credentials(&self) {
+        self.0.setUser(None);
+        self.0.setPassword(None);
+    }
+    pub fn clear_fragment(&self) {
+        self.0.setFragment(None);
+    }
+    pub fn clear_query(&self) {
+        self.0.setPercentEncodedQuery(None);
+    }
+    #[must_use]
+    pub fn path(&self) -> String {
+        self.0
+            .percentEncodedPath()
+            .map(|p| p.to_string())
+            .unwrap_or_default()
+    }
+    pub fn set_path(&self, path: &str) {
+        self.0
+            .setPercentEncodedPath(Some(&NSString::from_str(path)));
+    }
+    /// `URLComponents.string`.
+    #[must_use]
+    pub fn string(&self) -> Option<String> {
+        self.0.string().map(|s| s.to_string())
+    }
+    /// `URLComponents.url`, as an address.
+    #[must_use]
+    pub fn url(&self) -> Option<Url> {
+        Some(Url(self.0.URL()?.absoluteString()?.to_string()))
+    }
+}
+
 /// `URLComponents(string:)`'s host, decoded, as Search's `Engine.host(of:)` reads it.
 #[must_use]
 pub fn components_host(text: &str) -> Option<String> {

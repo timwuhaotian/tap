@@ -8,16 +8,12 @@ use std::cell::{Cell, RefCell};
 
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
-    rc::Retained,
-    runtime::{AnyObject, NSObject},
+    rc::Retained, runtime::NSObject,
 };
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSEvent, NSFont, NSFontAttributeName, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSLineBreakMode, NSMutableParagraphStyle,
-    NSParagraphStyleAttributeName, NSResponder, NSStringDrawing, NSTrackingArea,
-    NSTrackingAreaOptions, NSView,
+    NSBezierPath, NSColor, NSEvent, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
-use objc2_foundation::{NSAttributedStringKey, NSDictionary, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use tap_core::browser::{Browser, TabId};
 
 use crate::{palette, rt};
@@ -346,7 +342,7 @@ impl Strip {
                         NSSize::new(rect.size.width - 12.0 - right, 17.0),
                     );
                     let ink = if live { palette::INK } else { palette::MUTED };
-                    draw_text(&tab.label(), text, &ink.resolve(dark));
+                    palette::draw_text(&tab.label(), text, &ink.resolve(dark));
                 }
                 if crossed {
                     let square = close_rect(*rect);
@@ -425,25 +421,6 @@ fn progress(rect: NSRect, done: f64, color: &NSColor) {
         1.0,
     )
     .fill();
-}
-
-fn draw_text(text: &str, rect: NSRect, color: &NSColor) {
-    // SAFETY: the system font at a valid size and weight.
-    let font = unsafe { NSFont::systemFontOfSize_weight(13.0, NSFontWeightRegular) };
-    let paragraph = NSMutableParagraphStyle::new();
-    paragraph.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-    // SAFETY: AppKit's own attribute names, read as the constants they are.
-    let keys: [&NSAttributedStringKey; 3] = unsafe {
-        [
-            NSFontAttributeName,
-            NSForegroundColorAttributeName,
-            NSParagraphStyleAttributeName,
-        ]
-    };
-    let values: [&AnyObject; 3] = [font.as_ref(), color.as_ref(), paragraph.as_ref()];
-    let attributes = NSDictionary::from_slices(&keys, &values);
-    // SAFETY: each attribute holds the type AppKit expects for its name.
-    unsafe { NSString::from_str(text).drawInRect_withAttributes(rect, Some(&attributes)) };
 }
 
 #[cfg(test)]

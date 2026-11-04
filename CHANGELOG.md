@@ -13,6 +13,12 @@ Info.plist.
   type an address or a search; ⌘T floats the field over the page and opens a tab only
   when you press Return. ⌘W, ⇧⌘T, ⌃Tab, ⌘1–⌘9, ⌘[ and ⌘] work as in Search. ⌘-click
   opens a link behind the page; a page's new window becomes a tab beside it.
+- **The field finishes addresses from your own history**, as Search's does: places you
+  have been, ranked by how often and how lately, and a search last when what you typed
+  isn't an address. The rest of the best address is drawn grey after the caret, and Tab
+  takes it; ↓ and ↑ pick a row, and Return or a click goes there. Nothing is completed
+  while an input method is still composing, so pinyin and kana typing are left alone.
+  History is kept in Search's own `history.json` format, and never with a password.
 - **Tabs come back.** The session is kept in Search's own format, written as it changes
   and when Tap quits; restored tabs cost nothing until you look at them.
 - **The bench**, for scripts and tests: Search's socket protocol on a test run

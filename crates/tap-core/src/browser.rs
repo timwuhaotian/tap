@@ -14,6 +14,7 @@ use crate::{
     crash::{CrashCount, PageEnd},
     engine::{self, Engine},
     fnd::Url,
+    history::{self, History, Suggestion},
     keyword::{self, Keyword},
     session,
 };
@@ -47,6 +48,11 @@ bitflags! {
         const TYPED = 1 << 3;
         /// Return gave nothing to go to.
         const REFUSED = 1 << 4;
+        /// The rows under the field, the grey ending, or the picked row.
+        const OFFERS = 1 << 5;
+        /// The model rewrote the field's text itself (Tab took the ending), so the
+        /// field has to be told; what the keyboard typed the field already shows.
+        const RETYPED = 1 << 6;
     }
 }
 
@@ -68,6 +74,8 @@ pub enum Effect {
     FocusPage(TabId),
     /// Write the session (debounced by the shell's disk writer).
     Save(session::Shape),
+    /// Write `history.json`, already encoded.
+    SaveHistory(Vec<u8>),
 }
 
 /// One page.
@@ -189,6 +197,13 @@ pub struct Editing {
     /// ⌘T: what is typed gets a tab of its own on Return, and the page the field was
     /// raised over stays as it was. Nothing is opened if it is put away.
     pub launching: bool,
+    /// What the field offers, best first: places from history, then a search when what
+    /// is typed can't be a place (Search's `placeOffers`).
+    pub offers: Vec<Suggestion>,
+    /// The rest of the best match, drawn grey after the caret. Tab takes it.
+    pub ending: Option<String>,
+    /// The row the arrow keys have walked to.
+    pub picked: Option<usize>,
 }
 
 /// A run of links opened from one tab land one after another beside it.
@@ -214,6 +229,9 @@ pub struct Browser {
     effects: Vec<Effect>,
     dirty: BrowserFields,
     session_changed: bool,
+    /// Where you have been (Search's per-window `history`, the profile's).
+    history: History,
+    history_changed: bool,
     next: u64,
 }
 
@@ -240,6 +258,8 @@ impl Browser {
             effects: Vec::new(),
             dirty: BrowserFields::all(),
             session_changed: false,
+            history: History::default(),
+            history_changed: false,
             next: 1,
         };
         let id = browser.make_tab();
@@ -341,7 +361,22 @@ impl Browser {
         if std::mem::take(&mut self.session_changed) {
             effects.push(Effect::Save(self.shape()));
         }
+        if std::mem::take(&mut self.history_changed) {
+            effects.push(Effect::SaveHistory(self.history.encode(history::now())));
+        }
         effects
+    }
+
+    /// Hands over the history read at launch. `rewrite`: it was cleaned on the way in (a
+    /// password an older version kept), and goes back to the disk now.
+    pub fn set_history(&mut self, history: History, rewrite: bool) {
+        self.history = history;
+        self.history_changed |= rewrite;
+    }
+
+    #[must_use]
+    pub fn history(&self) -> &History {
+        &self.history
     }
 
     /// The session as Search writes it.
@@ -545,16 +580,111 @@ impl Browser {
                 .map(|u| address::editable(&u))
                 .unwrap_or_default()
         };
-        self.editing = Some(Editing { typed, launching });
+        // The field opens on the page's own address, selected: nothing to offer for it
+        // until a key changes it.
+        self.editing = Some(Editing {
+            typed,
+            launching,
+            offers: Vec::new(),
+            ending: None,
+            picked: None,
+        });
         self.dirty
-            .insert(BrowserFields::EDITING | BrowserFields::TYPED);
+            .insert(BrowserFields::EDITING | BrowserFields::TYPED | BrowserFields::OFFERS);
     }
 
-    pub fn set_typed(&mut self, text: &str) {
-        if let Some(editing) = self.editing.as_mut().filter(|e| e.typed != text) {
-            text.clone_into(&mut editing.typed);
-            self.dirty.insert(BrowserFields::TYPED);
+    /// What the keyboard put in the field. `composing`: an input method is still
+    /// composing (pinyin, kana), so nothing is completed: an ending drawn after marked
+    /// text, or text written back into the field under it, breaks the composition
+    /// (Search's own gap, docs/PLAN.md §3.5).
+    pub fn set_typed(&mut self, text: &str, composing: bool) {
+        if self.editing.is_none() {
+            return;
         }
+        let (offers, ending) = self.place_offers(text, composing);
+        let Some(editing) = self.editing.as_mut() else {
+            return;
+        };
+        text.clone_into(&mut editing.typed);
+        editing.offers = offers;
+        editing.ending = ending;
+        editing.picked = None;
+        self.dirty
+            .insert(BrowserFields::TYPED | BrowserFields::OFFERS);
+    }
+
+    /// What the field offers for `typed`, and the rest of the address it would complete
+    /// to (Search's `Browser.placeOffers`): three places from history, and a search last
+    /// when what is typed cannot be a place.
+    fn place_offers(&self, typed: &str, composing: bool) -> (Vec<Suggestion>, Option<String>) {
+        let mut offers = self.history.suggestions(typed, 3, history::now());
+        let ending = if composing {
+            None
+        } else {
+            History::completion(typed, &offers)
+        };
+        if !typed.trim().is_empty() && address::url(typed).is_none() {
+            let search = match keyword::find(typed, &self.keywords) {
+                Some((keyword, rest)) => engine::url_for(&rest, &keyword.template).map(|url| {
+                    (
+                        url,
+                        engine::bare_host(&keyword.template).unwrap_or_default(),
+                    )
+                }),
+                None => engine::url_for(typed, &self.engine.template(&self.custom_engine))
+                    .map(|url| (url, self.engine.name(&self.custom_engine))),
+            };
+            if let Some((url, name)) = search {
+                offers.push(Suggestion {
+                    key: typed.to_owned(),
+                    title: name,
+                    url: url.as_str().to_owned(),
+                    kind: history::Kind::Search,
+                });
+            }
+        }
+        (offers, ending)
+    }
+
+    /// ↓ and ↑ walk the rows: down from the field into the first, up from the first back
+    /// into the field.
+    pub fn pick(&mut self, down: bool) {
+        let Some(editing) = self.editing.as_mut() else {
+            return;
+        };
+        let count = editing.offers.len();
+        if count == 0 {
+            return;
+        }
+        editing.picked = match (editing.picked, down) {
+            (None, true) => Some(0),
+            (Some(row), true) => Some((row + 1).min(count - 1)),
+            (Some(0) | None, false) => None,
+            (Some(row), false) => Some(row - 1),
+        };
+        self.dirty.insert(BrowserFields::OFFERS);
+    }
+
+    /// A row chosen by the pointer.
+    pub fn pick_row(&mut self, row: usize) {
+        if let Some(editing) = self.editing.as_mut().filter(|e| row < e.offers.len()) {
+            editing.picked = Some(row);
+            self.dirty.insert(BrowserFields::OFFERS);
+        }
+    }
+
+    /// Tab takes the grey ending into the field. Answers whether there was one.
+    pub fn accept_ending(&mut self) -> bool {
+        let Some(editing) = self.editing.as_ref() else {
+            return false;
+        };
+        let Some(ending) = editing.ending.clone() else {
+            return false;
+        };
+        let typed = format!("{}{ending}", editing.typed);
+        self.set_typed(&typed, false);
+        self.dirty.insert(BrowserFields::RETYPED);
+        true
     }
 
     /// Esc, or a click away: the field closes and nothing is opened.
@@ -587,7 +717,16 @@ impl Browser {
         let Some(editing) = self.editing.clone() else {
             return;
         };
-        let Some(url) = self.destination(&editing.typed) else {
+        // The row the arrow keys chose, or else the address the field was finishing,
+        // or else where the words go.
+        let target = if let Some(row) = editing.picked.and_then(|i| editing.offers.get(i)) {
+            Url::parse(&row.url)
+        } else if let Some(ending) = &editing.ending {
+            address::url(&format!("{}{ending}", editing.typed))
+        } else {
+            self.destination(&editing.typed)
+        };
+        let Some(url) = target else {
             self.refusals += 1;
             self.dirty.insert(BrowserFields::REFUSED);
             return;
@@ -688,7 +827,20 @@ impl Browser {
             &mut tab.dirty,
             TabFields::TITLE,
         );
+        let url = tab.url.clone();
         self.session_changed = true;
+        if !url.is_empty() && self.history.retitle(&url, title) {
+            self.history_changed = true;
+        }
+    }
+
+    /// A page finished loading in the tab: a visit, kept in history.
+    pub fn page_finished(&mut self, id: TabId) {
+        let Some(tab) = self.tab(id) else { return };
+        let (url, title) = (tab.url.clone(), tab.title.clone());
+        if self.history.record(&url, &title, history::now()) {
+            self.history_changed = true;
+        }
     }
 
     pub fn page_loading(&mut self, id: TabId, loading: bool, progress: f64) {
@@ -822,7 +974,7 @@ mod tests {
     fn return_goes_to_an_address_or_searches() {
         let mut browser = Browser::new();
         browser.begin_editing(false);
-        browser.set_typed("example.com");
+        browser.set_typed("example.com", false);
         browser.submit();
         assert_eq!(
             browser.active_tab().map(Tab::url),
@@ -835,7 +987,7 @@ mod tests {
             browser.editing().map(|e| e.typed.as_str()),
             Some("example.com")
         );
-        browser.set_typed("rust ownership");
+        browser.set_typed("rust ownership", false);
         browser.submit();
         assert_eq!(
             browser.active_tab().map(Tab::url),
@@ -851,7 +1003,7 @@ mod tests {
         assert_eq!(browser.tabs().len(), 1, "put away, nothing is opened");
 
         browser.begin_editing(true);
-        browser.set_typed("b.com");
+        browser.set_typed("b.com", false);
         browser.submit();
         assert_eq!(browser.tabs().len(), 2);
         assert_eq!(browser.active_tab().map(Tab::url), Some("https://b.com"));
@@ -933,5 +1085,113 @@ mod tests {
             !effects.iter().any(|e| matches!(e, Effect::Save(_))),
             "restoring changes nothing to save"
         );
+    }
+
+    fn visited(pages: &[(&str, &str)]) -> Browser {
+        let mut browser = Browser::new();
+        let id = browser.active().expect("a tab");
+        for (address, title) in pages {
+            browser.go(id, &url(address));
+            browser.page_title(id, title);
+            browser.page_finished(id);
+        }
+        browser.take_effects();
+        browser
+    }
+
+    #[test]
+    fn a_finished_page_is_a_visit_and_history_is_written() {
+        let mut browser = Browser::new();
+        let id = browser.active().expect("a tab");
+        browser.go(id, &url("https://example.com/"));
+        browser.page_title(id, "Example Domain");
+        browser.page_finished(id);
+        assert_eq!(browser.history().len(), 1);
+        let effects = browser.take_effects();
+        assert!(effects.iter().any(|e| matches!(e, Effect::SaveHistory(data) if String::from_utf8_lossy(data).contains("Example Domain"))));
+    }
+
+    #[test]
+    fn typing_offers_places_and_finishes_the_address_return_goes_there() {
+        let mut browser = visited(&[
+            ("https://github.com/timwuhaotian/tap", "tap"),
+            ("https://example.com/", "Example"),
+        ]);
+        browser.begin_editing(true);
+        browser.set_typed("git", false);
+        let editing = browser.editing().expect("editing");
+        assert_eq!(
+            editing.ending.as_deref(),
+            Some("hub.com"),
+            "the front door the deep page credited"
+        );
+        assert_eq!(
+            editing.offers.first().map(|o| o.key.as_str()),
+            Some("github.com")
+        );
+        browser.submit();
+        assert_eq!(
+            browser.active_tab().map(Tab::url),
+            Some("https://github.com")
+        );
+    }
+
+    #[test]
+    fn nothing_is_finished_while_an_input_method_composes() {
+        let mut browser = visited(&[("https://example.com/", "Example")]);
+        browser.begin_editing(false);
+        browser.set_typed("exa", true);
+        let editing = browser.editing().expect("editing");
+        assert_eq!(editing.ending, None);
+        assert!(!editing.offers.is_empty(), "rows are still offered");
+        browser.set_typed("exa", false);
+        assert_eq!(
+            browser.editing().and_then(|e| e.ending.clone()).as_deref(),
+            Some("mple.com")
+        );
+    }
+
+    #[test]
+    fn arrows_walk_the_rows_and_return_takes_the_picked_one() {
+        let mut browser = visited(&[("https://docs.example.test/a", "A")]);
+        browser.begin_editing(false);
+        browser.set_typed("rust ownership", false);
+        let offers = browser
+            .editing()
+            .map(|e| e.offers.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            offers.last().map(|o| o.kind),
+            Some(history::Kind::Search),
+            "words end with a search"
+        );
+        browser.pick(false);
+        assert_eq!(
+            browser.editing().and_then(|e| e.picked),
+            None,
+            "up from the field stays in it"
+        );
+        browser.pick(true);
+        assert_eq!(browser.editing().and_then(|e| e.picked), Some(0));
+        browser.submit();
+        assert_eq!(
+            browser.active_tab().map(Tab::url),
+            Some(offers[0].url.as_str())
+        );
+    }
+
+    #[test]
+    fn tab_takes_the_ending_into_the_field() {
+        let mut browser = visited(&[("https://example.com/", "Example")]);
+        browser.begin_editing(false);
+        browser.set_typed("ex", false);
+        browser.take_dirty();
+        assert!(browser.accept_ending());
+        assert_eq!(
+            browser.editing().map(|e| e.typed.as_str()),
+            Some("example.com")
+        );
+        assert!(browser.take_dirty().0.contains(BrowserFields::RETYPED));
+        assert!(!browser.accept_ending(), "nothing left to take");
     }
 }

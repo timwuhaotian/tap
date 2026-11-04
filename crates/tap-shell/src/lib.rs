@@ -8,6 +8,7 @@
 mod bench;
 mod crash;
 mod menu;
+mod offers;
 mod palette;
 mod rt;
 mod store;
@@ -33,7 +34,10 @@ pub fn run() {
     app.setDelegate(Some(ProtocolObject::from_ref(&*commands)));
     app.setMainMenu(Some(&menu::main_menu(mtm, &commands)));
 
-    rt::install(Browser::restored(store::read_session()));
+    let mut browser = Browser::restored(store::read_session());
+    let (history, rewrite) = store::read_history();
+    browser.set_history(history, rewrite);
+    rt::install(browser);
     window::open(mtm, &commands);
     bench::start();
     // A window that opens on a new tab opens with the keys in its field.

@@ -13,8 +13,8 @@ use objc2::{
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton, NSColor,
     NSControlTextEditingDelegate, NSFocusRingType, NSFont, NSImage, NSResponder, NSShadow,
-    NSTextField, NSTextFieldDelegate, NSTextView, NSView, NSViewFrameDidChangeNotification,
-    NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
+    NSTextField, NSTextFieldDelegate, NSTextInputClient, NSTextView, NSView,
+    NSViewFrameDidChangeNotification, NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidExitFullScreenNotification,
     NSWindowDidResignKeyNotification, NSWindowDidResizeNotification, NSWindowStyleMask,
     NSWindowTitleVisibility,
@@ -25,6 +25,7 @@ use tap_core::browser::{Browser, BrowserFields, Editing, TabFields, TabId};
 
 use crate::{
     menu::{Command, Commands},
+    offers::{self, Offers},
     palette, rt,
     strip::Strip,
     web,
@@ -62,6 +63,9 @@ struct Views {
     stage: Retained<Stage>,
     field: Retained<NSTextField>,
     plate: Retained<Plate>,
+    /// The rows under the field, and the grey rest of the address after its text.
+    offers: Retained<Offers>,
+    ending: Retained<NSTextField>,
     trouble: Retained<NSView>,
     trouble_text: Retained<NSTextField>,
     helm: [Retained<NSButton>; 3],
@@ -145,6 +149,13 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     );
     plate.setHidden(true);
     root.addSubview(&plate);
+    let offers = Offers::new(mtm);
+    offers.setHidden(true);
+    root.addSubview(&offers);
+    let ending = NSTextField::labelWithString(&NSString::from_str(""), mtm);
+    ending.setFont(Some(&palette::font()));
+    ending.setTextColor(Some(&palette::MUTED.dynamic()));
+    ending.setHidden(true);
 
     let (trouble, trouble_text) = trouble(mtm, commands);
     stage.addSubview(&trouble);
@@ -159,6 +170,8 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             stage,
             field,
             plate,
+            offers,
+            ending,
             trouble,
             trouble_text,
             helm,
@@ -309,6 +322,27 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         if dirty.intersects(BrowserFields::EDITING | BrowserFields::TABS | BrowserFields::ACTIVE) {
             place_field(views, view, dirty.contains(BrowserFields::EDITING));
         }
+        if dirty.contains(BrowserFields::RETYPED)
+            && let Some(editing) = &view.editing
+        {
+            // Tab took the ending: the field shows it, the caret at its end.
+            views
+                .field
+                .setStringValue(&NSString::from_str(&editing.typed));
+            if let Some(editor) = views.field.currentEditor() {
+                let end = editing.typed.encode_utf16().count();
+                editor.setSelectedRange(objc2_foundation::NSRange::new(end, 0));
+            }
+        }
+        if dirty.intersects(
+            BrowserFields::EDITING
+                | BrowserFields::OFFERS
+                | BrowserFields::TYPED
+                | BrowserFields::TABS
+                | BrowserFields::ACTIVE,
+        ) {
+            place_offers(views, view);
+        }
     });
 }
 
@@ -361,6 +395,7 @@ fn place_field(views: &Views, view: &View, opened: bool) {
         None => {
             views.plate.setHidden(true);
             field.removeFromSuperview();
+            views.ending.removeFromSuperview();
         }
         Some(editing) => {
             if editing.launching {
@@ -405,6 +440,79 @@ fn place_field(views: &Views, view: &View, opened: bool) {
             }
         }
     }
+}
+
+/// The rows under the field, and the grey ending after the text in it. The card lines
+/// up with the live tab's pill, or with the floating field's card.
+fn place_offers(views: &Views, view: &View) {
+    let Some(editing) = view.editing.as_ref().filter(|_| view_has_field(views)) else {
+        views.offers.setHidden(true);
+        views.ending.setHidden(true);
+        return;
+    };
+    // The card's left edge and width, in the window's content.
+    let (x, top, width) = if editing.launching {
+        let plate = views.plate.frame();
+        (
+            plate.origin.x + 20.0,
+            plate.origin.y + 20.0 + 44.0 + 4.0,
+            plate.size.width - 40.0,
+        )
+    } else {
+        let field = views.field.frame();
+        (
+            field.origin.x - 10.0,
+            palette::STRIP + 4.0,
+            field.size.width + 20.0,
+        )
+    };
+    if editing.offers.is_empty() {
+        views.offers.setHidden(true);
+    } else {
+        views.offers.setFrame(NSRect::new(
+            NSPoint::new(x - offers::SHADOW, top - offers::SHADOW),
+            NSSize::new(
+                width + 2.0 * offers::SHADOW,
+                offers::height(editing.offers.len()),
+            ),
+        ));
+        views.offers.setHidden(false);
+        views.offers.setNeedsDisplay(true);
+    }
+
+    // The ending sits right after the typed text, in the field's own font; a label and
+    // a borderless field put their text at the same inset. Not while a row is picked,
+    // and not once the text runs past the field.
+    let field = views.field.frame();
+    let typed = palette::text_width(&editing.typed);
+    match editing
+        .ending
+        .as_deref()
+        .filter(|_| editing.picked.is_none())
+    {
+        Some(ending) if typed + palette::text_width(ending) < field.size.width - 4.0 => {
+            // SAFETY: a plain read of a live view's superview.
+            if let Some(holder) = unsafe { views.field.superview() }
+                // SAFETY: as above.
+                && unsafe { views.ending.superview() }.as_deref() != Some(&*holder)
+            {
+                views.ending.removeFromSuperview();
+                holder.addSubview(&views.ending);
+            }
+            views.ending.setStringValue(&NSString::from_str(ending));
+            views.ending.setFrame(NSRect::new(
+                NSPoint::new(field.origin.x + typed, field.origin.y),
+                NSSize::new(field.size.width - typed, field.size.height),
+            ));
+            views.ending.setHidden(false);
+        }
+        _ => views.ending.setHidden(true),
+    }
+}
+
+fn view_has_field(views: &Views) -> bool {
+    // SAFETY: a plain read of a live view's superview.
+    unsafe { views.field.superview() }.is_some()
 }
 
 /// The traffic lights for the bench: each one's left edge and its centre's height from
@@ -743,7 +851,13 @@ define_class!(
                 return;
             };
             let typed = field.stringValue().to_string();
-            rt::dispatch(move |browser| browser.set_typed(&typed));
+            // An input method still composing (pinyin, kana) leaves marked text: nothing
+            // is completed under it.
+            let composing = field
+                .currentEditor()
+                .and_then(|editor| editor.downcast::<NSTextView>().ok())
+                .is_some_and(|editor| editor.hasMarkedText());
+            rt::dispatch(move |browser| browser.set_typed(&typed, composing));
         }
 
         #[unsafe(method(control:textView:doCommandBySelector:))]
@@ -760,6 +874,17 @@ define_class!(
             if selector == sel!(cancelOperation:) {
                 rt::dispatch(Browser::cancel_editing);
                 return Bool::YES;
+            }
+            if selector == sel!(moveDown:) || selector == sel!(moveUp:) {
+                let down = selector == sel!(moveDown:);
+                rt::dispatch(move |browser| browser.pick(down));
+                return Bool::YES;
+            }
+            if selector == sel!(insertTab:) {
+                // Tab takes the grey ending; with none, Tab does what Tab does.
+                let took = rt::update(Browser::accept_ending).unwrap_or(false);
+                rt::settle();
+                return Bool::new(took);
             }
             Bool::NO
         }

@@ -5,12 +5,14 @@
 use std::ptr::NonNull;
 
 use block2::RcBlock;
-use objc2::rc::Retained;
+use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSColor, NSView,
+    NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular, NSForegroundColorAttributeName,
+    NSLineBreakMode, NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSStringDrawing,
+    NSView,
 };
-use objc2_foundation::NSArray;
+use objc2_foundation::{NSArray, NSAttributedStringKey, NSDictionary, NSRect, NSString};
 
 /// A grey for a light window and one for a dark.
 #[derive(Clone, Copy, Debug)]
@@ -90,4 +92,50 @@ fn is_dark_appearance(appearance: &NSAppearance) -> bool {
 #[must_use]
 pub fn is_dark(view: &NSView) -> bool {
     is_dark_appearance(&view.effectiveAppearance())
+}
+
+/// The one text style of the chrome: the system font at 13 points, the field's too.
+#[must_use]
+pub fn font() -> Retained<NSFont> {
+    // SAFETY: the system font at a valid size and weight.
+    unsafe { NSFont::systemFontOfSize_weight(13.0, NSFontWeightRegular) }
+}
+
+fn attributes(color: Option<&NSColor>) -> Retained<NSDictionary<NSAttributedStringKey, AnyObject>> {
+    let font = font();
+    let paragraph = NSMutableParagraphStyle::new();
+    paragraph.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    // SAFETY: AppKit's own attribute names, read as the constants they are.
+    let (font_key, color_key, paragraph_key) = unsafe {
+        (
+            NSFontAttributeName,
+            NSForegroundColorAttributeName,
+            NSParagraphStyleAttributeName,
+        )
+    };
+    match color {
+        Some(color) => NSDictionary::from_slices(
+            &[font_key, color_key, paragraph_key],
+            &[font.as_ref(), color.as_ref(), paragraph.as_ref()],
+        ),
+        None => NSDictionary::from_slices(
+            &[font_key, paragraph_key],
+            &[font.as_ref(), paragraph.as_ref()],
+        ),
+    }
+}
+
+/// Draws one line of chrome text in `rect`, cut short with an ellipsis if it won't fit.
+pub fn draw_text(text: &str, rect: NSRect, color: &NSColor) {
+    // SAFETY: each attribute holds the type AppKit expects for its name.
+    unsafe {
+        NSString::from_str(text).drawInRect_withAttributes(rect, Some(&attributes(Some(color))));
+    }
+}
+
+/// How wide a line of chrome text is, in points.
+#[must_use]
+pub fn text_width(text: &str) -> f64 {
+    // SAFETY: as above.
+    unsafe { NSString::from_str(text).sizeWithAttributes(Some(&attributes(None))) }.width
 }
