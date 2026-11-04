@@ -297,6 +297,12 @@ impl Tab {
         self.entry.group_id.as_deref()
     }
 
+    /// Kept rather than opened: bulk closes leave it standing.
+    #[must_use]
+    pub fn is_pinned(&self) -> bool {
+        self.entry.pin.is_some()
+    }
+
     /// What the tab says: the name you gave it, the page's title, the address until
     /// there is a title, or "New Tab" (Search's `Tab.label`).
     #[must_use]
@@ -939,6 +945,73 @@ impl Browser {
         }
     }
 
+    /// The same page beside itself, in front (Search's `duplicate`, from the tab
+    /// menu as much as ⌘D). A new tab or one of Tap's own pages has nothing to copy.
+    pub fn duplicate(&mut self, id: TabId) -> Option<TabId> {
+        let tab = self.tab(id)?;
+        if tab.is_blank() || tab.is_internal() {
+            return None;
+        }
+        let url = Url::parse(tab.url())?;
+        Some(self.open(Some(&url), true, Some(id)))
+    }
+
+    /// Everything but this one goes, as ⌘W would close it. Pinned tabs stay:
+    /// Search puts a pin down rather than removing it, and Tap has no put-down
+    /// yet, so leaving it standing is the same promise.
+    pub fn close_others(&mut self, keep: TabId) {
+        if self.tab(keep).is_none() {
+            return;
+        }
+        let going: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| t.id != keep && !t.is_pinned())
+            .map(|t| t.id)
+            .collect();
+        if going.is_empty() {
+            return;
+        }
+        // Off a page that is going before walking the row, so its neighbours do
+        // not wake only to be closed in turn.
+        if self.active.is_some_and(|active| going.contains(&active)) {
+            self.select(keep);
+        }
+        for id in going {
+            self.close(id);
+        }
+        if self.active != Some(keep) && self.tab(keep).is_some() {
+            self.select(keep);
+        }
+    }
+
+    /// Everything to this tab's right goes, pins again excepted (Search's
+    /// `closeTabsBelow`, the top row's wording). Closed from the bottom, so
+    /// ⇧⌘T brings them back in their order.
+    pub fn close_right(&mut self, id: TabId) {
+        let Some(index) = self.index(id) else { return };
+        let going: Vec<TabId> = self.tabs[index + 1..]
+            .iter()
+            .filter(|t| !t.is_pinned())
+            .map(|t| t.id)
+            .collect();
+        if going.is_empty() {
+            return;
+        }
+        if self.active.is_some_and(|active| going.contains(&active)) {
+            self.select(id);
+        }
+        for going_id in going.iter().rev() {
+            self.close(*going_id);
+        }
+    }
+
+    /// Whether ⇧⌘T has anything to bring back.
+    #[must_use]
+    pub fn can_reopen(&self) -> bool {
+        !self.closed.is_empty()
+    }
+
     fn remember(&mut self, index: usize) {
         let tab = &self.tabs[index];
         if !tab.is_blank() {
@@ -1324,7 +1397,13 @@ impl Browser {
     }
     /// ⌘R, or Try again over a page that said why it isn't there.
     pub fn reload(&mut self) {
-        let Some(id) = self.active else { return };
+        if let Some(id) = self.active {
+            self.reload_tab(id);
+        }
+    }
+
+    /// Reloads one tab, whichever is in front: the tab menu's Reload Tab.
+    pub fn reload_tab(&mut self, id: TabId) {
         let Some(tab) = self.tab_mut(id) else { return };
         if tab.url.is_empty() || tab.is_internal() {
             return;
@@ -1698,6 +1777,64 @@ mod tests {
             "what you were typing isn't thrown away"
         );
         assert_eq!(browser.active_tab().map(Tab::url), Some("https://c.com/"));
+    }
+
+    #[test]
+    fn duplicating_a_tab_puts_the_same_page_beside_it_in_front() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com", "https://c.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        let copy = browser.duplicate(ids[0]).expect("a copy");
+        assert_eq!(browser.tabs().len(), 4);
+        assert_eq!(browser.tabs()[1].id, copy, "beside the tab it copies");
+        assert_eq!(browser.tabs()[1].url(), "https://a.com");
+        assert_eq!(browser.active(), Some(copy), "the copy comes to the front");
+    }
+
+    #[test]
+    fn a_new_tab_cannot_be_duplicated_and_reloading_is_by_tab() {
+        let mut browser = Browser::new();
+        let blank = browser.active().expect("a tab");
+        assert_eq!(browser.duplicate(blank), None);
+        assert_eq!(browser.tabs().len(), 1);
+        browser.take_effects();
+        browser.reload_tab(blank);
+        assert!(browser.take_effects().is_empty(), "nothing to reload");
+
+        let mut browser = with_pages(&["https://a.com", "https://b.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.select(ids[0]);
+        browser.take_effects();
+        browser.reload_tab(ids[1]);
+        assert_eq!(browser.take_effects(), vec![Effect::Reload(ids[1])]);
+        assert_eq!(browser.active(), Some(ids[0]), "the front tab is untouched");
+    }
+
+    #[test]
+    fn closing_the_others_keeps_the_tab_and_the_pins() {
+        let mut browser =
+            with_pages(&["https://a.com", "https://b.com", "https://c.com", "https://d.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.tab_mut(ids[0]).expect("a tab").entry.pin = Some("A".to_owned());
+        assert!(!browser.can_reopen());
+        browser.select(ids[3]);
+        browser.close_others(ids[2]);
+        let left: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        assert_eq!(left, vec![ids[0], ids[2]], "the pin and the kept tab stay");
+        assert_eq!(browser.active(), Some(ids[2]));
+        assert!(browser.can_reopen(), "what was closed can come back");
+    }
+
+    #[test]
+    fn closing_to_the_right_keeps_pins_and_lands_on_the_tab() {
+        let mut browser =
+            with_pages(&["https://a.com", "https://b.com", "https://c.com", "https://d.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.tab_mut(ids[3]).expect("a tab").entry.pin = Some("D".to_owned());
+        browser.select(ids[2]);
+        browser.close_right(ids[1]);
+        let left: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        assert_eq!(left, vec![ids[0], ids[1], ids[3]], "the pin to the right stays");
+        assert_eq!(browser.active(), Some(ids[1]), "off a page that went");
     }
 
     #[test]

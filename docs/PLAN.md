@@ -870,6 +870,27 @@ privacy rows included).
 - Shortcuts and the menu table
 - Tab drag within the strip and column (pins, groups, PinDrop)
 
+#### Tab context menu (from scratch, Search's `TabMenu` as reference)
+
+Tap's strip has no right-click at all; Search's menu (`TabBar.swift:1213`) has
+30+ items, most riding on subsystems Tap hasn't got. First cut, only what Tap
+can do honestly today:
+
+- [ ] `tap-core`: `reload_tab(id)` (⌘R delegates), `duplicate(id)` (the same
+  page beside itself, in its group), `close_others(keep)` / `close_right(id)`
+  (pinned tabs are kept, not closed — Search puts pins down, Tap has no put-down
+  yet, so leaving them is the analogue), `can_reopen()`, `Tab::is_pinned()`.
+  Each with a test that fails without it.
+- [ ] `tap-shell`: `rightMouseDown:` on the strip builds an `NSMenu` for the tab
+  under the pointer (Reload Tab, Duplicate Tab · Copy Address, Copy as Markdown
+  Link · Close Tabs to the Right, Close Other Tabs · Close Tab, Reopen Closed
+  Tab), items enabled from the tab's state, dispatched by tag against a pending
+  target tab; a group heading gets Collapse/Expand Group. No `NSMenuDelegate`:
+  the menu is built fresh per click, as the find bar's is.
+- [ ] Left for later, when their subsystems land: Pin/Unpin (no pin drawing
+  yet), Mute (`muted` is only carried in the session, never applied), Rename,
+  Move to/New Group, Spaces, Split, windows, multi-select, Site Information.
+
 **Done when:**
 - The PinDrag, PinCross, SharedPins, TabGroupDrop, BookmarksBarMenu, SettingsIndex and
   Shortcut ports pass.
