@@ -62,6 +62,16 @@ pub enum Command {
     TabClose,
     TabReopen,
     TabGroupToggle,
+    TabRename,
+    TabSleep,
+    /// Move to Group › New Group, and › Remove from Group.
+    TabNewGroup,
+    TabOutOfGroup,
+    GroupRename,
+    GroupUngroup,
+    GroupClose,
+    /// Move to Group › a group: 300 and its place among the groups.
+    TabIntoGroup = 300,
 }
 
 /// Runs a command as its menu item or button would.

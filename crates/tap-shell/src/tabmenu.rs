@@ -1,12 +1,11 @@
-//! Right-click on the strip (Search's `TabMenu`, `TabBar.swift:1213`): a menu
-//! for the tab under the pointer, built fresh at each click from that tab's
-//! state, the find bar's way. First cut (docs/PLAN.md, M3): only what Tap can
-//! do today — no Pin, Mute, Rename or group moves, whose subsystems aren't
-//! here yet. The menu's items act on the tab that was clicked, not the one in
-//! front, so its identity waits here while the menu is up; there is only ever
-//! one menu at a time.
+//! Right-click on the strip (Search's `TabMenu`, `TabBar.swift:1213`, and the group
+//! heading's menu, `TabGroups.swift`): a menu for the tab or heading under the pointer,
+//! built fresh at each click from its state, the find bar's way. Only what Tap can do
+//! today: no Pin, Mute, spaces, Split View or windows, whose subsystems aren't here
+//! yet. The items act on the tab (or group) that was clicked, not the one in front, so
+//! its identity waits here while the menu is up; there is only ever one menu at a time.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use objc2::{MainThreadMarker, MainThreadOnly, sel};
 use objc2_app_kit::{NSEvent, NSMenu, NSMenuItem, NSPasteboard, NSPasteboardTypeString, NSView};
@@ -14,6 +13,7 @@ use objc2_foundation::{NSInteger, NSString};
 use tap_core::browser::{Browser, TabId};
 
 use crate::{
+    dialogs,
     menu::{Command, Commands},
     rt,
 };
@@ -21,13 +21,14 @@ use crate::{
 thread_local! {
     /// The tab the open menu is about, and the group, for a heading's menu.
     static TARGET: Cell<Option<TabId>> = const { Cell::new(None) };
-    static GROUP: Cell<Option<usize>> = const { Cell::new(None) };
+    /// The group by its identity: its place may change while the menu is up.
+    static GROUP: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// What the menu needs to know about the tab under the pointer, read from the
 /// model in one borrow before the menu is built.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)] // four independent menu facts, read together
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // independent menu facts, read together
 pub struct TabState {
     /// A page you can reload, copy or duplicate: not a new tab, not Tap's own.
     pub has_page: bool,
@@ -37,71 +38,122 @@ pub struct TabState {
     pub right: bool,
     /// ⇧⌘T has something to bring back.
     pub can_reopen: bool,
+    /// A pin stays out of groups.
+    pub pinned: bool,
+    /// Its group's place among the groups.
+    pub group: Option<usize>,
+    /// Every group's name, in order, for Move to Group.
+    pub groups: Vec<String>,
+    /// Nothing keeps it awake: Put to Sleep can let its page go.
+    pub can_sleep: bool,
 }
 
-/// One line of the menu: a command, or a separator when it has none.
+/// One line of the menu: a command, a submenu, or a separator when it has neither.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub title: String,
-    pub command: Option<Command>,
+    pub tag: Option<NSInteger>,
     pub enabled: bool,
+    pub sub: Vec<Entry>,
 }
 
 fn entry(title: &str, command: Command, enabled: bool) -> Entry {
     Entry {
         title: title.to_owned(),
-        command: Some(command),
+        tag: Some(command as NSInteger),
         enabled,
+        sub: Vec::new(),
     }
 }
 
 fn separator() -> Entry {
     Entry {
         title: String::new(),
-        command: None,
+        tag: None,
         enabled: false,
+        sub: Vec::new(),
     }
 }
 
-/// The tab's menu, top to bottom, as Search's order has it where Tap has the
-/// operation at all.
+/// Move to Group's submenu (Search's): New Group, each group (the tab's own off),
+/// and Remove from Group for a tab in one.
+fn move_to_group(state: &TabState) -> Entry {
+    let mut sub = vec![entry("New Group", Command::TabNewGroup, true)];
+    if !state.groups.is_empty() {
+        sub.push(separator());
+    }
+    for (place, name) in state.groups.iter().enumerate() {
+        let place = NSInteger::try_from(place).unwrap_or(0);
+        sub.push(Entry {
+            title: name.clone(),
+            tag: Some(Command::TabIntoGroup as NSInteger + place),
+            enabled: state.group != usize::try_from(place).ok(),
+            sub: Vec::new(),
+        });
+    }
+    if state.group.is_some() {
+        sub.push(separator());
+        sub.push(entry("Remove from Group", Command::TabOutOfGroup, true));
+    }
+    Entry {
+        title: "Move to Group".to_owned(),
+        tag: None,
+        enabled: true,
+        sub,
+    }
+}
+
+/// The tab's menu, top to bottom, in Search's order where Tap has the operation at
+/// all (Reload Tab is Tap's addition, first as in other browsers).
 #[must_use]
-pub fn tab_entries(state: TabState) -> Vec<Entry> {
-    vec![
+pub fn tab_entries(state: &TabState) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    if !state.pinned {
+        entries.push(move_to_group(state));
+        entries.push(separator());
+    }
+    entries.extend([
         entry("Reload Tab", Command::TabReload, state.has_page),
+        entry("Rename…", Command::TabRename, true),
         entry("Duplicate Tab", Command::TabDuplicate, state.has_page),
-        separator(),
         entry("Copy Address", Command::TabCopyAddress, state.has_page),
         entry(
             "Copy as Markdown Link",
             Command::TabCopyMarkdown,
             state.has_page,
         ),
+        entry("Put to Sleep", Command::TabSleep, state.can_sleep),
         separator(),
+        entry("Close Tab", Command::TabClose, true),
+        entry("Close Other Tabs", Command::TabCloseOthers, state.others),
         entry(
             "Close Tabs to the Right",
             Command::TabCloseRight,
             state.right,
         ),
-        entry("Close Other Tabs", Command::TabCloseOthers, state.others),
-        separator(),
-        entry("Close Tab", Command::TabClose, true),
         entry("Reopen Closed Tab", Command::TabReopen, state.can_reopen),
-    ]
+    ]);
+    entries
 }
 
-/// A heading's menu: the click it already answers, said as a menu item.
+/// A heading's menu, Search's: rename, fold, then ungroup or close the lot.
 #[must_use]
 pub fn group_entries(collapsed: bool) -> Vec<Entry> {
-    vec![entry(
-        if collapsed {
-            "Expand Group"
-        } else {
-            "Collapse Group"
-        },
-        Command::TabGroupToggle,
-        true,
-    )]
+    vec![
+        entry("Rename Group…", Command::GroupRename, true),
+        entry(
+            if collapsed {
+                "Expand Group"
+            } else {
+                "Collapse Group"
+            },
+            Command::TabGroupToggle,
+            true,
+        ),
+        separator(),
+        entry("Ungroup Tabs", Command::GroupUngroup, true),
+        entry("Close Group", Command::GroupClose, true),
+    ]
 }
 
 /// A page as a Markdown link, its title the text (Search's `markdownLink`): a
@@ -122,10 +174,10 @@ pub fn show_tab(
     event: &NSEvent,
     view: &NSView,
     id: TabId,
-    state: TabState,
+    state: &TabState,
 ) {
     TARGET.set(Some(id));
-    GROUP.set(None);
+    GROUP.replace(None);
     pop_up(mtm, commands, event, view, &tab_entries(state));
 }
 
@@ -139,8 +191,46 @@ pub fn show_group(
     collapsed: bool,
 ) {
     TARGET.set(None);
-    GROUP.set(Some(place));
+    GROUP.replace(rt::read(|browser| browser.groups().get(place).map(|g| g.id.clone())).flatten());
     pop_up(mtm, commands, event, view, &group_entries(collapsed));
+}
+
+fn build(
+    mtm: MainThreadMarker,
+    commands: &Commands,
+    entries: &[Entry],
+) -> objc2::rc::Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    // The entries' enabled flags are the model's verdict at this click; the
+    // menu's own auto-enabling would undo them, every item's target answering.
+    menu.setAutoenablesItems(false);
+    for spec in entries {
+        if spec.tag.is_none() && spec.sub.is_empty() {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            continue;
+        }
+        let action = spec.tag.map(|_| sel!(run:));
+        // SAFETY: a fresh allocation; `run:` takes the sender.
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&spec.title),
+                action,
+                &NSString::from_str(""),
+            )
+        };
+        if let Some(tag) = spec.tag {
+            item.setTag(tag);
+            // SAFETY: the commands object lives for the app's life, longer than the menu.
+            unsafe { item.setTarget(Some(commands)) };
+        }
+        if !spec.sub.is_empty() {
+            item.setSubmenu(Some(&build(mtm, commands, &spec.sub)));
+        }
+        item.setEnabled(spec.enabled);
+        menu.addItem(&item);
+    }
+    menu
 }
 
 fn pop_up(
@@ -150,48 +240,83 @@ fn pop_up(
     view: &NSView,
     entries: &[Entry],
 ) {
-    let menu = NSMenu::new(mtm);
-    // The entries' enabled flags are the model's verdict at this click; the
-    // menu's own auto-enabling would undo them, every item's target answering.
-    menu.setAutoenablesItems(false);
-    for spec in entries {
-        let Some(command) = spec.command else {
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
-            continue;
-        };
-        // SAFETY: a fresh allocation; `run:` takes the sender.
-        let item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str(&spec.title),
-                Some(sel!(run:)),
-                &NSString::from_str(""),
-            )
-        };
-        item.setTag(command as isize);
-        item.setEnabled(spec.enabled);
-        // SAFETY: the commands object lives for the app's life, longer than the menu.
-        unsafe { item.setTarget(Some(commands)) };
-        menu.addItem(&item);
-    }
+    let menu = build(mtm, commands, entries);
     NSMenu::popUpContextMenu_withEvent_forView(&menu, event, view);
+}
+
+/// The group the open menu is about, by its place now.
+fn group_place() -> Option<usize> {
+    let id = GROUP.with_borrow(Clone::clone)?;
+    rt::read(|browser| browser.groups().iter().position(|g| g.id == id)).flatten()
 }
 
 /// Runs one of the tab menu's commands. Answers whether the tag was one.
 pub fn run(tag: NSInteger) -> bool {
     let target = TARGET.get();
+    if tag >= Command::TabIntoGroup as NSInteger {
+        let place = usize::try_from(tag - Command::TabIntoGroup as NSInteger).ok();
+        if let Some(id) = target {
+            rt::dispatch(move |browser| browser.move_to_group(id, place));
+        }
+        return true;
+    }
     match tag {
         t if t == Command::TabReopen as NSInteger => {
             rt::dispatch(Browser::reopen);
         }
         t if t == Command::TabGroupToggle as NSInteger => {
-            let Some(place) = GROUP.get() else {
-                return true;
-            };
-            rt::dispatch(move |browser| browser.toggle_group(place));
+            if let Some(place) = group_place() {
+                rt::dispatch(move |browser| browser.toggle_group(place));
+            }
+        }
+        t if t == Command::GroupUngroup as NSInteger => {
+            if let Some(place) = group_place() {
+                rt::dispatch(move |browser| browser.ungroup(place));
+            }
+        }
+        t if t == Command::GroupClose as NSInteger => {
+            if let Some(place) = group_place() {
+                rt::dispatch(move |browser| browser.close_group(place));
+            }
+        }
+        t if t == Command::GroupRename as NSInteger => {
+            if let Some(place) = group_place() {
+                rename_group(place);
+            }
         }
         t if t == Command::TabCopyAddress as NSInteger => copy(false),
         t if t == Command::TabCopyMarkdown as NSInteger => copy(true),
+        t if t == Command::TabNewGroup as NSInteger => {
+            let Some(id) = target else { return true };
+            let made = rt::update(|browser| browser.add_group(id)).flatten();
+            rt::settle();
+            // Named as you make it, as Search opens its name for editing.
+            if let Some(place) = made {
+                rename_group(place);
+            }
+        }
+        t if t == Command::TabOutOfGroup as NSInteger => {
+            let Some(id) = target else { return true };
+            rt::dispatch(move |browser| browser.move_to_group(id, None));
+        }
+        t if t == Command::TabRename as NSInteger => {
+            let Some(id) = target else { return true };
+            let Some(label) =
+                rt::read(|browser| browser.tab(id).map(tap_core::browser::Tab::label)).flatten()
+            else {
+                return true;
+            };
+            dialogs::ask_name(
+                "Rename Tab",
+                "Leave it empty to show the page's own title again.",
+                &label,
+                move |name| rt::dispatch(move |browser| browser.rename_tab(id, &name)),
+            );
+        }
+        t if t == Command::TabSleep as NSInteger => {
+            let Some(id) = target else { return true };
+            rt::dispatch(move |browser| browser.put_to_sleep(id));
+        }
         t if t == Command::TabReload as NSInteger => {
             let Some(id) = target else { return true };
             rt::dispatch(move |browser| browser.reload_tab(id));
@@ -217,6 +342,26 @@ pub fn run(tag: NSInteger) -> bool {
         _ => return false,
     }
     true
+}
+
+/// Rename Group: the sheet, then the name, if it says anything.
+fn rename_group(place: usize) {
+    let Some((id, name)) = rt::read(|browser| {
+        browser
+            .groups()
+            .get(place)
+            .map(|g| (g.id.clone(), g.name.clone()))
+    })
+    .flatten() else {
+        return;
+    };
+    dialogs::ask_name("Rename Group", "", &name, move |name| {
+        rt::dispatch(move |browser| {
+            if let Some(place) = browser.groups().iter().position(|g| g.id == id) {
+                browser.rename_group(place, &name);
+            }
+        });
+    });
 }
 
 fn copy(markdown: bool) {
@@ -252,51 +397,100 @@ mod tests {
             others: true,
             right: true,
             can_reopen: true,
+            pinned: false,
+            group: Some(1),
+            groups: vec!["Work".to_owned(), "Reading".to_owned()],
+            can_sleep: true,
         }
+    }
+
+    fn titles(entries: &[Entry]) -> Vec<&str> {
+        entries.iter().map(|e| e.title.as_str()).collect()
     }
 
     #[test]
     fn the_tab_menu_is_in_search_order_with_its_separators() {
-        let entries = tab_entries(state());
-        let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
+        let entries = tab_entries(&state());
         assert_eq!(
-            titles,
+            titles(&entries),
             [
-                "Reload Tab",
-                "Duplicate Tab",
+                "Move to Group",
                 "",
+                "Reload Tab",
+                "Rename…",
+                "Duplicate Tab",
                 "Copy Address",
                 "Copy as Markdown Link",
-                "",
-                "Close Tabs to the Right",
-                "Close Other Tabs",
+                "Put to Sleep",
                 "",
                 "Close Tab",
+                "Close Other Tabs",
+                "Close Tabs to the Right",
                 "Reopen Closed Tab",
             ]
         );
     }
 
     #[test]
+    fn move_to_group_offers_a_new_one_the_others_and_a_way_out() {
+        let entries = tab_entries(&state());
+        let sub = &entries[0].sub;
+        assert_eq!(
+            titles(sub),
+            ["New Group", "", "Work", "Reading", "", "Remove from Group"]
+        );
+        assert!(sub[2].enabled && !sub[3].enabled, "its own group is off");
+        assert_eq!(sub[3].tag, Some(Command::TabIntoGroup as NSInteger + 1));
+        let loose = TabState {
+            group: None,
+            groups: Vec::new(),
+            ..state()
+        };
+        assert_eq!(titles(&tab_entries(&loose)[0].sub), ["New Group"]);
+        let pin = TabState {
+            pinned: true,
+            ..state()
+        };
+        assert_eq!(
+            tab_entries(&pin)[0].title,
+            "Reload Tab",
+            "a pin has no groups"
+        );
+    }
+
+    #[test]
     fn a_page_less_tab_and_a_lone_tab_disable_what_they_cannot_do() {
-        let entries = tab_entries(TabState {
+        let entries = tab_entries(&TabState {
             has_page: false,
             others: false,
             right: false,
             can_reopen: false,
+            pinned: true,
+            group: None,
+            groups: Vec::new(),
+            can_sleep: false,
         });
         let on: Vec<&str> = entries
             .iter()
-            .filter(|e| e.enabled)
+            .filter(|e| e.enabled && e.tag.is_some())
             .map(|e| e.title.as_str())
             .collect();
-        assert_eq!(on, ["Close Tab"], "only closing is always possible");
+        assert_eq!(on, ["Rename…", "Close Tab"]);
     }
 
     #[test]
-    fn the_heading_menu_says_the_other_way_round() {
-        assert_eq!(group_entries(false)[0].title, "Collapse Group");
-        assert_eq!(group_entries(true)[0].title, "Expand Group");
+    fn a_group_can_be_renamed_folded_ungrouped_or_closed() {
+        assert_eq!(
+            titles(&group_entries(false)),
+            [
+                "Rename Group…",
+                "Collapse Group",
+                "",
+                "Ungroup Tabs",
+                "Close Group"
+            ]
+        );
+        assert_eq!(group_entries(true)[1].title, "Expand Group");
     }
 
     #[test]

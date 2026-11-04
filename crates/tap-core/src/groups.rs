@@ -8,6 +8,59 @@
 
 use crate::session::{Entry, TabGroup};
 
+/// The colours a group can wear, in the order new groups are handed them: Chrome's
+/// nine, grey last rather than first.
+pub const COLOURS: [&str; 9] = [
+    "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange", "grey",
+];
+
+/// A colour by Chrome's own number for it (`TabGroupColorId`), for its sessions.
+#[must_use]
+pub fn chrome_colour(id: u32) -> Option<&'static str> {
+    Some(match id {
+        0 => "grey",
+        1 => "blue",
+        2 => "red",
+        3 => "yellow",
+        4 => "green",
+        5 => "pink",
+        6 => "purple",
+        7 => "cyan",
+        8 => "orange",
+        _ => return None,
+    })
+}
+
+/// The colour a new group gets: one no group has yet, else the one fewest have,
+/// earliest first (Chrome's `GetNextColor`).
+#[must_use]
+pub fn next_colour(groups: &[TabGroup]) -> &'static str {
+    COLOURS
+        .iter()
+        .copied()
+        .min_by_key(|c| {
+            groups
+                .iter()
+                .filter(|g| g.colour.as_deref() == Some(*c))
+                .count()
+        })
+        .unwrap_or(COLOURS[0])
+}
+
+/// Every group gets a colour it can keep: the ones that came without (Search's, an
+/// older Tap's) are handed theirs in order, so no two near each other look alike.
+pub fn colour_all(groups: &mut [TabGroup]) {
+    for at in 0..groups.len() {
+        let known = groups[at]
+            .colour
+            .as_deref()
+            .is_some_and(|c| COLOURS.contains(&c));
+        if !known {
+            groups[at].colour = Some(next_colour(&groups[..at]).to_owned());
+        }
+    }
+}
+
 /// One thing in the row, left to right.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
@@ -82,6 +135,7 @@ mod tests {
             id: id.to_owned(),
             name: id.to_lowercase(),
             collapsed,
+            colour: None,
         }
     }
 
@@ -141,6 +195,26 @@ mod tests {
                 Item::Tab(3)
             ]
         );
+    }
+
+    #[test]
+    fn groups_are_handed_colours_nobody_has_then_the_least_used() {
+        let mut groups: Vec<TabGroup> = (0..11).map(|i| group(&i.to_string(), false)).collect();
+        groups[1].colour = Some("green".to_owned());
+        colour_all(&mut groups);
+        let colours: Vec<&str> = groups.iter().filter_map(|g| g.colour.as_deref()).collect();
+        assert_eq!(
+            colours[..3],
+            ["blue", "green", "red"],
+            "a kept colour stays"
+        );
+        let mut sorted = colours[..9].to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 9, "nine groups, nine colours");
+        assert_eq!(colours[9], "blue", "then round again, fewest first");
+        assert_eq!(chrome_colour(1), Some("blue"));
+        assert_eq!(chrome_colour(9), None);
     }
 
     #[test]

@@ -22,5 +22,6 @@ pub mod icons;
 pub mod identity;
 pub mod internal;
 pub mod keyword;
+pub mod location;
 pub mod session;
 pub mod settings_index;

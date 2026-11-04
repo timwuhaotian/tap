@@ -5,6 +5,7 @@
 //! Split into `tap-ui`, `tap-web` and `tap-shell` crates once each part has the weight to
 //! make incremental builds worth it (plan §4); the modules already follow those lines.
 
+mod address_bar;
 mod bench;
 mod bring;
 mod crash;
@@ -17,6 +18,7 @@ mod icons;
 mod keychain;
 mod links;
 mod menu;
+mod motion;
 mod offers;
 mod oslog;
 mod page_find;

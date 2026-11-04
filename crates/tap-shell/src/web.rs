@@ -42,13 +42,14 @@ use crate::{dialogs, downloads, forms, icons, oslog, page_find, rt, signin, slee
 mod shield;
 
 /// What the observer watches on every web view; each change re-reads the lot.
-const OBSERVED: [&str; 6] = [
+const OBSERVED: [&str; 7] = [
     "title",
     "URL",
     "loading",
     "estimatedProgress",
     "canGoBack",
     "canGoForward",
+    "hasOnlySecureContent",
 ];
 
 thread_local! {
@@ -1027,7 +1028,7 @@ fn load(web: &WKWebView, address: &str) {
 fn sync(web: &WKWebView) {
     let Some(tab) = tab_of(web) else { return };
     // SAFETY: plain property reads on a live web view.
-    let (title, url, loading, progress, back, forward) = unsafe {
+    let (title, url, loading, progress, back, forward, secure) = unsafe {
         (
             web.title().map(|t| t.to_string()).unwrap_or_default(),
             web.URL()
@@ -1038,10 +1039,12 @@ fn sync(web: &WKWebView) {
             web.estimatedProgress(),
             web.canGoBack(),
             web.canGoForward(),
+            web.hasOnlySecureContent(),
         )
     };
     rt::dispatch(move |browser| {
         browser.page_url(tab, &url);
+        browser.page_security(tab, secure);
         browser.page_title(tab, &title);
         browser.page_loading(tab, loading, progress);
         browser.page_history(tab, back, forward);

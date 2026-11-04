@@ -29,6 +29,8 @@ pub const HOVER: Grey = Grey(0.965, 0.15);
 
 /// The strip's height; the traffic lights sit centred in it.
 pub const STRIP: f64 = 52.0;
+/// The address bar's height, under the strip.
+pub const BAR: f64 = 38.0;
 /// Where the first tab starts: the lights run from 19 to 79, and get the same air on
 /// their right that the window gives them on their left.
 pub const LIGHTS: f64 = 100.0;
@@ -47,6 +49,57 @@ pub const HELM: f64 = 3.0 * DOOR + 2.0 * 2.0 + 8.0;
 /// The address field, in both the places it shows up.
 pub const FIELD: f64 = 560.0;
 pub const RADIUS: f64 = 8.0;
+
+/// A colour for a light window and one for a dark, as red, green and blue.
+#[derive(Clone, Copy, Debug)]
+pub struct Tint(pub (f64, f64, f64), pub (f64, f64, f64));
+
+impl Tint {
+    #[must_use]
+    pub fn resolve(self, dark: bool) -> Retained<NSColor> {
+        let (r, g, b) = if dark { self.1 } else { self.0 };
+        NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0)
+    }
+}
+
+/// Said with care: plain http, a page that isn't all secure (Search's `unsafe`).
+pub const UNSAFE: Tint = Tint((0.71, 0.33, 0.04), (0.98, 0.75, 0.14));
+
+/// A tab group's colour by its name in the session (`tap_core::groups::COLOURS`),
+/// Chrome's nine; anything unknown is grey.
+#[must_use]
+pub fn group_colour(name: Option<&str>) -> Tint {
+    const fn hex(rgb: u32) -> (f64, f64, f64) {
+        (
+            ((rgb >> 16) & 0xff) as f64 / 255.0,
+            ((rgb >> 8) & 0xff) as f64 / 255.0,
+            (rgb & 0xff) as f64 / 255.0,
+        )
+    }
+    let (light, dark) = match name.unwrap_or("grey") {
+        "blue" => (0x1A_73E8, 0x8A_B4F8),
+        "red" => (0xD9_3025, 0xF2_8B82),
+        "yellow" => (0xE3_7400, 0xFD_D663),
+        "green" => (0x1E_8E3E, 0x81_C995),
+        "pink" => (0xD0_1884, 0xFF_8BCB),
+        "purple" => (0xA1_42F4, 0xD7_AEFB),
+        "cyan" => (0x00_7B83, 0x78_D9EC),
+        "orange" => (0xE8_710A, 0xFC_AD70),
+        _ => (0x5F_6368, 0xDA_DCE0),
+    };
+    Tint(hex(light), hex(dark))
+}
+
+/// The words on a group's chip: white on the deep light-window colours, near black on
+/// the pale dark-window ones.
+#[must_use]
+pub fn on_group(dark: bool) -> Retained<NSColor> {
+    if dark {
+        NSColor::colorWithSRGBRed_green_blue_alpha(0.125, 0.13, 0.14, 1.0)
+    } else {
+        NSColor::colorWithWhite_alpha(1.0, 1.0)
+    }
+}
 
 impl Grey {
     #[must_use]

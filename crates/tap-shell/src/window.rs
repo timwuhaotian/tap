@@ -44,6 +44,7 @@ use tap_core::{
 };
 
 use crate::{
+    address_bar::{self, AddressBar},
     dialogs, downloads, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
@@ -91,6 +92,8 @@ impl View {
 struct Views {
     window: Retained<NSWindow>,
     strip: Retained<Strip>,
+    /// The address bar under the strip, while Settings has it up.
+    bar: Retained<AddressBar>,
     stage: Retained<Stage>,
     field: Retained<NSTextField>,
     plate: Retained<Plate>,
@@ -118,6 +121,7 @@ fn with_views<R>(f: impl FnOnce(&Views) -> R) -> Option<R> {
 }
 
 /// Opens the one window.
+#[allow(clippy::too_many_lines)] // every view of the window, made and placed in turn
 pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1280.0, 820.0));
     let style = NSWindowStyleMask::Titled
@@ -165,6 +169,15 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
     root.addSubview(&stage);
+    let bar = AddressBar::new(
+        mtm,
+        NSRect::new(
+            NSPoint::new(0.0, palette::STRIP),
+            NSSize::new(width, palette::BAR),
+        ),
+    );
+    bar.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    root.addSubview(&bar);
     root.addSubview(&strip);
 
     let helm = helm(mtm, commands, width);
@@ -210,6 +223,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
         *views = Some(Views {
             window: window.clone(),
             strip,
+            bar,
             stage,
             field,
             plate,
@@ -224,7 +238,85 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             _field_delegate: field_delegate,
         });
     });
+    with_views(arrange);
     window.makeKeyAndOrderFront(None);
+}
+
+/// Settings moved: the address bar comes up or goes, with all that follows from it.
+pub fn bar_changed() {
+    with_views(arrange);
+}
+
+/// The address bar up or down (Settings › Show the address bar), and what follows from
+/// it: back, forward and reload on the bar's left or at the strip's far end, the
+/// downloads door at the strip's end, the page under whichever is lower, and the field
+/// in the bar or on the live tab.
+fn arrange(views: &Views) {
+    let up = address_bar::shown();
+    let root = views
+        .window
+        .contentView()
+        .map(|v| v.bounds())
+        .unwrap_or_default();
+    let width = root.size.width;
+    views.bar.setHidden(!up);
+    views.bar.setFrame(NSRect::new(
+        NSPoint::new(0.0, palette::STRIP),
+        NSSize::new(width, palette::BAR),
+    ));
+    let top = palette::STRIP + if up { palette::BAR } else { 0.0 };
+    views.stage.setFrame(NSRect::new(
+        NSPoint::new(0.0, top),
+        NSSize::new(width, (root.size.height - top).max(0.0)),
+    ));
+    for (index, door) in views.helm.iter().enumerate() {
+        let (holder, frame, mask): (&NSView, NSRect, NSAutoresizingMaskOptions) = if up {
+            (
+                &views.bar,
+                address_bar::door_rect(index),
+                NSAutoresizingMaskOptions::ViewMaxXMargin,
+            )
+        } else {
+            (
+                &views.strip,
+                helm_rect(width, index),
+                NSAutoresizingMaskOptions::ViewMinXMargin,
+            )
+        };
+        // SAFETY: a plain read of a live view's superview.
+        if unsafe { door.superview() }.as_deref() != Some(holder) {
+            door.removeFromSuperview();
+            holder.addSubview(door);
+        }
+        door.setFrame(frame);
+        door.setAutoresizingMask(mask);
+    }
+    let fetch = views.fetch_door.frame();
+    let x = if up {
+        width - palette::DOOR - 8.0
+    } else {
+        width - palette::HELM - palette::DOOR - 4.0
+    };
+    views
+        .fetch_door
+        .setFrameOrigin(NSPoint::new(x, fetch.origin.y));
+    views.window.invalidateCursorRectsForView(&views.bar);
+    views.strip.setNeedsDisplay(true);
+    views.bar.setNeedsDisplay(true);
+    if let Some(view) = rt::read(View::of) {
+        place_field(views, &view, false);
+        place_offers(views, &view);
+    }
+}
+
+/// A helm door's place at the strip's far end.
+fn helm_rect(width: f64, index: usize) -> NSRect {
+    #[allow(clippy::cast_precision_loss)] // three doors
+    let x = width - palette::HELM + 4.0 + index as f64 * (palette::DOOR + 2.0);
+    NSRect::new(
+        NSPoint::new(x, (palette::STRIP - palette::DOOR) / 2.0),
+        NSSize::new(palette::DOOR, palette::DOOR),
+    )
 }
 
 /// The downloads door, just before the helm at the strip's far end; the window
@@ -275,12 +367,7 @@ fn helm(mtm: MainThreadMarker, commands: &Commands, width: f64) -> [Retained<NSB
         .into_iter()
         .enumerate()
         .map(|(index, button)| {
-            #[allow(clippy::cast_precision_loss)] // three doors
-            let x = width - palette::HELM + 4.0 + index as f64 * (palette::DOOR + 2.0);
-            button.setFrame(NSRect::new(
-                NSPoint::new(x, (palette::STRIP - palette::DOOR) / 2.0),
-                NSSize::new(palette::DOOR, palette::DOOR),
-            ));
+            button.setFrame(helm_rect(width, index));
             button
         })
         .collect::<Vec<_>>()
@@ -370,6 +457,7 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         refresh_fetch_door(views);
         if !dirty.is_empty() || !tabs.is_empty() {
             views.strip.setNeedsDisplay(true);
+            views.bar.setNeedsDisplay(true);
         }
         views.helm[0].setEnabled(view.can_back);
         views.helm[1].setEnabled(view.can_forward);
@@ -533,6 +621,15 @@ fn place_field(views: &Views, view: &View, opened: bool) {
                     NSPoint::new(36.0, 31.0),
                     NSSize::new(size.width - 72.0, 22.0),
                 ));
+            } else if !views.bar.isHidden() {
+                // The address bar holds the field while it is up.
+                views.plate.setHidden(true);
+                // SAFETY: a plain read of a live view's superview.
+                if unsafe { field.superview() }.as_deref() != Some(&**views.bar) {
+                    field.removeFromSuperview();
+                    views.bar.addSubview(field);
+                }
+                field.setFrame(views.bar.field_rect());
             } else {
                 views.plate.setHidden(true);
                 let Some(rect) = views.strip.field_rect() else {
@@ -565,6 +662,14 @@ fn offers_geometry(views: &Views, editing: &Editing) -> (f64, f64, f64) {
             plate.origin.x + 20.0,
             plate.origin.y + 20.0 + 44.0 + 4.0,
             plate.size.width - 40.0,
+        )
+    } else if !views.bar.isHidden() {
+        // Hung from the address bar, as wide as the field in it.
+        let field = views.field.frame();
+        (
+            field.origin.x - 28.0,
+            palette::STRIP + palette::BAR + 2.0,
+            field.size.width + 36.0,
         )
     } else {
         let field = views.field.frame();

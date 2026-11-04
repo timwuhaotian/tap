@@ -1,35 +1,46 @@
-//! The only chrome there is: the row of tabs at the top of the window (Search's
-//! `TabBar.swift`). Titles, the live one on a grey pill, a cross on the one under the
-//! pointer, the plus after the last, and the field in place of the live tab while you
-//! type. A tab group's name heads its tabs; a click on it folds the group to its name
-//! (and the tab in front, if it is one of its own) or opens it again. Drawn as one view:
-//! a row of three hundred tabs is one draw, not three hundred views.
+//! The row of tabs at the top of the window (Search's `TabBar.swift`). Titles, the live
+//! one on a grey pill, a cross on the one under the pointer, the plus after the last,
+//! and the field in place of the live tab while you type (unless the address bar holds
+//! it). A tab group's name heads its tabs on a chip of the group's colour, a line of it
+//! under them; a click on it folds the group to its name (and the tab in front, if it
+//! is one of its own) or opens it again. Drawn as one view: a row of three hundred tabs
+//! is one draw, not three hundred views.
+//!
+//! Every slot (tab, heading, plus) is followed by what it is, not where it stands, and
+//! springs to where the layout puts it (`motion.rs`): opened, closed, moved, folded,
+//! the row glides there. A tab, or a group by its heading, carried by the hand reorders
+//! the row (Search's `Carried`).
 
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    time::Instant,
 };
 
 use block2::RcBlock;
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class,
-    msg_send, rc::Retained, runtime::NSObject,
+    msg_send, rc::Retained, runtime::NSObject, sel,
 };
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSEventModifierFlags,
-    NSGraphicsContext, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSGraphicsContext, NSResponder, NSShadow, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
-use objc2_foundation::{NSPoint, NSProcessInfo, NSRect, NSSize, NSTimer};
+use objc2_core_graphics::CGContext;
+use objc2_foundation::{NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSTimer};
+use objc2_quartz_core::CADisplayLink;
 use tap_core::{
     browser::{Browser, Tab, TabId},
     fnd::{Parts, Url},
     groups::Item,
+    location::{is_address, is_loopback},
     settings_index,
 };
 
 use crate::{
     downloads, icons,
     menu::Commands,
+    motion::{self, Aim, Curve, Flock},
     palette, prefs, rt,
     tabmenu::{self, TabState},
     web,
@@ -37,26 +48,22 @@ use crate::{
 
 /// The strip's look, read from Kept on every draw (and on every tick), so a Settings
 /// change shows at once without anyone having to tell the strip (Search reads its
-/// observable `Preferences` the same way). Keys and defaults are Search's.
+/// observable `Preferences` the same way). Keys and defaults are Search's, but for the
+/// address bar's, which is Tap's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)] // five independent Settings switches, read together
+#[allow(clippy::struct_excessive_bools)] // independent Settings switches, read together
 struct Look {
     icons: bool,
     reading: bool,
     give: bool,
     shortcuts: bool,
     address: bool,
+    /// The address bar is up: it says where the page is and holds the field, so the
+    /// live tab keeps its title and the helm leaves this row.
+    bar: bool,
     /// Settings › Motion, while the Mac saves power: the give below lands at
-    /// once instead of easing (Search's `Motion.light`: its springs become a
-    /// short ease-out; the strip's one motion is this sink).
+    /// once instead of easing (Search's `Motion.light`).
     light: bool,
-}
-
-/// Low Power Mode, or hot enough that macOS holds its processors back
-/// (Search's `Motion.light` reads the same two, at the moment of moving).
-fn power_saving() -> bool {
-    let info = NSProcessInfo::processInfo();
-    info.isLowPowerModeEnabled() || info.thermalState().0 >= 2
 }
 
 fn look() -> Look {
@@ -67,7 +74,8 @@ fn look() -> Look {
         give: settings_index::flag(&kept, "tabs.give"),
         shortcuts: settings_index::flag(&kept, "tabs.shortcuts"),
         address: settings_index::flag(&kept, "tabs.address"),
-        light: settings_index::flag(&kept, "motion.light") && power_saving(),
+        bar: settings_index::flag(&kept, "toolbar.address"),
+        light: motion::light(),
     }
 }
 
@@ -93,7 +101,7 @@ const READING_SCRIPT: &str = r"(() => {
 
 /// Starts the strip's one tick, once: at 20 frames a second it is cheap, and it is
 /// what makes held-⌘ numbers, a pressed tab's give, reading reports and a Settings
-/// change land without a model change to redraw on.
+/// change land without a model change to redraw on. Motion has its own frames.
 fn start_ticker() {
     TICKER.with_borrow_mut(|slot| {
         if slot.is_some() {
@@ -154,6 +162,10 @@ fn poll_reading() {
 /// A site icon's side, in points.
 const ICON: f64 = 16.0;
 
+/// How far the hand goes before a press becomes a carry (Search's drag, which starts
+/// at 5).
+const CARRY: f64 = 5.0;
+
 /// What the pointer is over. Tabs by their place among the tabs, headings by their
 /// group's place among the groups.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -173,25 +185,75 @@ enum Slot {
     Heading(f64),
 }
 
+/// What a slot is, wherever it stands: the row's springs follow it by this.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Key {
+    Tab(TabId),
+    /// A group's heading, by the group's identity.
+    Heading(String),
+    Plus,
+}
+
+/// What the hand carries: a tab, or a group by its heading.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Carried {
+    Tab(TabId),
+    Group(String),
+}
+
+/// A press that may become a carry.
+#[derive(Clone, Debug)]
+struct Grab {
+    what: Carried,
+    /// Where the pointer went down, and where the slot stood then.
+    start: f64,
+    origin: f64,
+    travel: f64,
+    /// Past `CARRY`: the slot is in the hand.
+    carrying: bool,
+}
+
+/// A reorder the hand asked for: a tab to a place among its block's, or a group from
+/// one place among the groups to another.
+enum Move {
+    Tab(TabId, usize),
+    Group(usize, usize),
+}
+
+/// A click whose meaning waits for the release, so the press can still become a carry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Click {
+    /// The live tab: the field opens on it.
+    Edit,
+    /// A heading: its group folds or opens.
+    Fold(String),
+}
+
 /// Where everything in the row goes for a width, one rectangle per slot.
 struct Layout {
     tabs: Vec<NSRect>,
     plus: NSRect,
-    /// How far right the tabs may be drawn: the helm's edge, or just before
+    /// How far right the tabs may be drawn: the doors' edge, or just before
     /// the plus when the row has overflowed and the plus is pinned.
     end: f64,
 }
 
-/// What the row's right end must keep clear: the helm, and the downloads
-/// door before it while that door is shown (the same call the window makes
-/// to show it), so the plus can never run under either.
-fn trailing() -> f64 {
+/// What the row's right end must keep clear: the helm while it is up here (with the
+/// address bar up it stands on the bar), and the downloads door while that door is
+/// shown (the same call the window makes to show it), so the plus can never run under
+/// either.
+fn trailing(bar: bool) -> f64 {
     let kept = prefs::Kept::new();
     let fetch = downloads::shows_button(
         settings_index::flag(&kept, "downloads.button"),
         downloads::going(),
     );
-    palette::HELM + if fetch { palette::DOOR + 4.0 } else { 0.0 }
+    let door = if fetch { palette::DOOR + 4.0 } else { 0.0 };
+    if bar {
+        door + 8.0
+    } else {
+        palette::HELM + door
+    }
 }
 
 /// A heading's width: its name, with air on both sides.
@@ -256,9 +318,29 @@ fn layout(width: f64, slots: &[Slot], editing: Option<usize>, trailing: f64) -> 
     let end = if plus_x < x + 2.0 {
         plus_x - 2.0
     } else {
-        width - palette::HELM
+        width - trailing
     };
     Layout { tabs, plus, end }
+}
+
+/// Where a carried slot lands among its peers (`spans`, each a peer's left and right
+/// edge, the carried one at `at`), drawn from `left` to `right`: past a neighbour once
+/// its leading edge crosses the neighbour's middle, and back the same way. Search's
+/// `Carried` rounds the travel by one tab's step; this is the same for tabs of one
+/// width and holds for groups, which are not.
+fn place_among(spans: &[(f64, f64)], at: usize, left: f64, right: f64) -> usize {
+    spans
+        .iter()
+        .enumerate()
+        .filter(|(i, (start, end))| {
+            let middle = (start + end) / 2.0;
+            match (*i).cmp(&at) {
+                std::cmp::Ordering::Less => left >= middle,
+                std::cmp::Ordering::Greater => right > middle,
+                std::cmp::Ordering::Equal => false,
+            }
+        })
+        .count()
 }
 
 /// The cross's square, at the tab's right end.
@@ -299,8 +381,39 @@ fn slots(browser: &Browser) -> (Vec<Item>, Vec<Slot>) {
     (row, slots)
 }
 
-/// The live tab's slot, while the field is open on it.
-fn editing_slot(browser: &Browser, row: &[Item]) -> Option<usize> {
+/// What a slot of the row is.
+fn key_of(browser: &Browser, item: &Item) -> Key {
+    match item {
+        Item::Heading(place) => Key::Heading(
+            browser
+                .groups()
+                .get(*place)
+                .map(|g| g.id.clone())
+                .unwrap_or_default(),
+        ),
+        Item::Tab(index) => Key::Tab(browser.tabs()[*index].id),
+    }
+}
+
+/// The group a tab stands in in the row: none for a pin.
+fn group_of(tab: &Tab) -> Option<&str> {
+    tab.group().filter(|_| !tab.is_pinned())
+}
+
+/// Whether a slot of the row belongs to the group: its heading, or one of its tabs.
+fn in_group(browser: &Browser, item: &Item, group: &str) -> bool {
+    match item {
+        Item::Heading(place) => browser.groups().get(*place).is_some_and(|g| g.id == group),
+        Item::Tab(index) => group_of(&browser.tabs()[*index]) == Some(group),
+    }
+}
+
+/// The live tab's slot, while the field is open on it in the row (not in the address
+/// bar, nor floating for ⌘T).
+fn editing_slot(browser: &Browser, row: &[Item], bar: bool) -> Option<usize> {
+    if bar {
+        return None;
+    }
     let editing = browser.editing()?;
     if editing.launching {
         return None;
@@ -308,6 +421,48 @@ fn editing_slot(browser: &Browser, row: &[Item]) -> Option<usize> {
     let active = browser.active()?;
     let index = browser.tabs().iter().position(|t| t.id == active)?;
     row.iter().position(|item| *item == Item::Tab(index))
+}
+
+/// Draws with everything at `alpha`: a slot fading in or out.
+fn faded(alpha: f64, draw: impl FnOnce()) {
+    if alpha >= 0.999 {
+        draw();
+        return;
+    }
+    if alpha <= 0.001 {
+        return;
+    }
+    NSGraphicsContext::saveGraphicsState_class();
+    if let Some(context) = NSGraphicsContext::currentContext() {
+        CGContext::set_alpha(Some(&context.CGContext()), alpha);
+    }
+    draw();
+    NSGraphicsContext::restoreGraphicsState_class();
+}
+
+/// Search's lift for a carried tab: a soft shadow under it while the hand has it.
+fn lifted(draw: impl FnOnce()) {
+    NSGraphicsContext::saveGraphicsState_class();
+    let shadow = NSShadow::new();
+    shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.14)));
+    shadow.setShadowBlurRadius(12.0);
+    shadow.setShadowOffset(NSSize::new(0.0, -4.0));
+    shadow.set();
+    draw();
+    NSGraphicsContext::restoreGraphicsState_class();
+}
+
+/// What a draw of the row reads once.
+#[derive(Clone, Copy)]
+struct Paint {
+    dark: bool,
+    look: Look,
+    spot: Spot,
+    pressed: Option<usize>,
+    press_scale: f64,
+    cmd_held: bool,
+    active: Option<TabId>,
+    editing: Option<usize>,
 }
 
 pub struct Ivars {
@@ -324,6 +479,19 @@ pub struct Ivars {
     cmd_held: Cell<bool>,
     last_look: Cell<Option<Look>>,
     poll_ticks: Cell<u8>,
+    /// Every slot's springs.
+    flock: RefCell<Flock<Key>>,
+    /// The row's slots as last aimed, in order: a change in them is what moves.
+    shown: RefCell<Vec<Key>>,
+    /// Each group's fold as last aimed, to tell a group unfolding from a tab opening.
+    folded: RefCell<HashMap<String, bool>>,
+    /// What each slot last said, to draw it while it fades once gone.
+    faces: RefCell<HashMap<Key, String>>,
+    grab: RefCell<Option<Grab>>,
+    click: RefCell<Option<Click>>,
+    /// Frames while something moves, paused when nothing does.
+    link: RefCell<Option<Retained<CADisplayLink>>>,
+    last_frame: Cell<Option<Instant>>,
 }
 
 define_class!(
@@ -386,12 +554,14 @@ define_class!(
             self.press(event);
         }
 
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            self.drag(event);
+        }
+
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, _event: &NSEvent) {
-            // The press is over wherever it lands; the tick eases the tab back up.
-            if self.ivars().pressed.take().is_some() {
-                self.setNeedsDisplay(true);
-            }
+            self.release();
         }
 
         #[unsafe(method(rightMouseDown:))]
@@ -408,6 +578,12 @@ define_class!(
                 rt::dispatch(move |browser| browser.close(id));
             }
         }
+
+        /// One frame of motion, from the display link.
+        #[unsafe(method(stripFrame:))]
+        fn strip_frame(&self, _link: &CADisplayLink) {
+            self.frame_tick();
+        }
     }
 );
 
@@ -423,6 +599,14 @@ impl Strip {
             cmd_held: Cell::new(false),
             last_look: Cell::new(None),
             poll_ticks: Cell::new(0),
+            flock: RefCell::new(Flock::default()),
+            shown: RefCell::new(Vec::new()),
+            folded: RefCell::new(HashMap::new()),
+            faces: RefCell::new(HashMap::new()),
+            grab: RefCell::new(None),
+            click: RefCell::new(None),
+            link: RefCell::new(None),
+            last_frame: Cell::new(None),
         });
         // SAFETY: NSView's designated initialiser.
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
@@ -485,16 +669,28 @@ impl Strip {
         }
     }
 
-    /// Where the live tab is drawn, for the field to sit in while it is edited.
-    pub fn field_rect(&self) -> Option<NSRect> {
+    /// The look as last read, for the many questions a pointer asks.
+    fn look_now(&self) -> Look {
+        self.ivars().last_look.get().unwrap_or_else(look)
+    }
+
+    /// The row's target geometry now, with what each slot is.
+    fn with_layout<R>(&self, f: impl FnOnce(&Browser, &[Item], &Layout) -> R) -> Option<R> {
+        let bar = self.look_now().bar;
         let width = self.bounds().size.width;
         rt::read(|browser| {
             let (row, slots) = slots(browser);
-            let index = editing_slot(browser, &row)?;
-            let rect = layout(width, &slots, Some(index), trailing())
-                .tabs
-                .get(index)
-                .copied()?;
+            let editing = editing_slot(browser, &row, bar);
+            let layout = layout(width, &slots, editing, trailing(bar));
+            f(browser, &row, &layout)
+        })
+    }
+
+    /// Where the live tab is drawn, for the field to sit in while it is edited there.
+    pub fn field_rect(&self) -> Option<NSRect> {
+        self.with_layout(|browser, row, layout| {
+            let index = editing_slot(browser, row, self.look_now().bar)?;
+            let rect = layout.tabs.get(index).copied()?;
             Some(NSRect::new(
                 NSPoint::new(rect.origin.x + 10.0, rect.origin.y + 5.0),
                 NSSize::new(rect.size.width - 20.0, rect.size.height - 10.0),
@@ -517,6 +713,12 @@ impl Strip {
                         others: tabs.iter().any(|t| t.id != id && !t.is_pinned()),
                         right: tabs[index + 1..].iter().any(|t| !t.is_pinned()),
                         can_reopen: browser.can_reopen(),
+                        pinned: tab.is_pinned(),
+                        group: tab
+                            .group()
+                            .and_then(|g| browser.groups().iter().position(|x| x.id == g)),
+                        groups: browser.groups().iter().map(|g| g.name.clone()).collect(),
+                        can_sleep: browser.awake_because(id).is_none(),
                     })
                 })
                 .flatten() else {
@@ -528,7 +730,7 @@ impl Strip {
                     event,
                     self.as_ref(),
                     id,
-                    state,
+                    &state,
                 );
             }
             Spot::Heading(place) => {
@@ -552,11 +754,9 @@ impl Strip {
 
     fn spot_at(&self, event: &NSEvent) -> Spot {
         let point = self.convertPoint_fromView(event.locationInWindow(), None);
-        let width = self.bounds().size.width;
-        rt::read(|browser| {
-            let (row, slots) = slots(browser);
-            let editing = editing_slot(browser, &row);
-            let layout = layout(width, &slots, editing, trailing());
+        let bar = self.look_now().bar;
+        self.with_layout(|browser, row, layout| {
+            let editing = editing_slot(browser, row, bar);
             // The plus first: where it is pinned it stands over the run of
             // tabs, and it, not the tab beneath, takes the click.
             if contains(layout.plus, point) {
@@ -581,7 +781,18 @@ impl Strip {
         .unwrap_or_default()
     }
 
+    fn carrying(&self) -> bool {
+        self.ivars()
+            .grab
+            .borrow()
+            .as_ref()
+            .is_some_and(|g| g.carrying)
+    }
+
     fn hover(&self, event: Option<&NSEvent>) {
+        if self.carrying() {
+            return;
+        }
         let spot = event.map_or(Spot::Nothing, |e| self.spot_at(e));
         let inside = event.is_some();
         if spot != self.ivars().spot.get() || inside != self.ivars().inside.get() {
@@ -593,12 +804,15 @@ impl Strip {
 
     fn press(&self, event: &NSEvent) {
         let spot = self.spot_at(event);
+        let x = self.convertPoint_fromView(event.locationInWindow(), None).x;
         // A tab (or its cross) goes down under the press; the tick sinks it if
         // Settings says tabs give, and `mouseUp:` lets it back up.
         if let Spot::Tab(index) | Spot::Close(index) = spot {
             self.ivars().pressed.set(Some(index));
             self.setNeedsDisplay(true);
         }
+        self.ivars().grab.replace(None);
+        self.ivars().click.replace(None);
         match spot {
             Spot::Close(index) => {
                 if let Some(id) = tab_at(index) {
@@ -607,18 +821,28 @@ impl Strip {
             }
             Spot::Tab(index) => {
                 let Some(id) = tab_at(index) else { return };
-                // The live tab, clicked, becomes the field; any other is picked.
-                rt::dispatch(move |browser| {
-                    if browser.active() == Some(id) {
-                        if browser.editing().is_none() {
-                            browser.begin_editing(false);
-                        }
-                    } else {
-                        browser.select(id);
+                let live = rt::read(|browser| browser.active() == Some(id)).unwrap_or(false);
+                // Any other tab is picked at once, as it goes into the hand; the live
+                // one becomes the field on release, unless the address bar holds the
+                // field, or the press became a carry.
+                if live {
+                    if !self.look_now().bar {
+                        self.ivars().click.replace(Some(Click::Edit));
                     }
-                });
+                } else {
+                    rt::dispatch(move |browser| browser.select(id));
+                }
+                self.grab(Carried::Tab(id), &Key::Tab(id), x);
             }
-            Spot::Heading(place) => rt::dispatch(move |browser| browser.toggle_group(place)),
+            Spot::Heading(place) => {
+                let Some(group) =
+                    rt::read(|browser| browser.groups().get(place).map(|g| g.id.clone())).flatten()
+                else {
+                    return;
+                };
+                self.ivars().click.replace(Some(Click::Fold(group.clone())));
+                self.grab(Carried::Group(group.clone()), &Key::Heading(group), x);
+            }
             Spot::Plus => rt::dispatch(|browser| browser.begin_editing(true)),
             Spot::Nothing => {
                 // The empty row is title bar: a press moves the window, and a
@@ -630,6 +854,171 @@ impl Strip {
                     window.performWindowDragWithEvent(event);
                 }
             }
+        }
+    }
+
+    /// A press on a slot that may become a carry, from where it stands now.
+    fn grab(&self, what: Carried, key: &Key, x: f64) {
+        let origin = self
+            .with_layout(|browser, row, layout| {
+                row.iter()
+                    .zip(&layout.tabs)
+                    .find(|(item, _)| key_of(browser, item) == *key)
+                    .map(|(_, rect)| rect.origin.x)
+            })
+            .flatten();
+        let Some(origin) = origin else { return };
+        self.ivars().grab.replace(Some(Grab {
+            what,
+            start: x,
+            origin,
+            travel: 0.0,
+            carrying: false,
+        }));
+    }
+
+    fn drag(&self, event: &NSEvent) {
+        let x = self.convertPoint_fromView(event.locationInWindow(), None).x;
+        {
+            let mut grab = self.ivars().grab.borrow_mut();
+            let Some(grab) = grab.as_mut() else { return };
+            grab.travel = x - grab.start;
+            if !grab.carrying {
+                if grab.travel.abs() < CARRY {
+                    return;
+                }
+                // In the hand now: no click on release, and no give under it.
+                grab.carrying = true;
+                self.ivars().click.replace(None);
+                self.ivars().pressed.set(None);
+            }
+        }
+        self.carry();
+        self.animate();
+        self.setNeedsDisplay(true);
+    }
+
+    fn release(&self) {
+        // The press is over wherever it lands; the tick eases the tab back up.
+        if self.ivars().pressed.take().is_some() {
+            self.setNeedsDisplay(true);
+        }
+        let grab = self.ivars().grab.take();
+        let click = self.ivars().click.take();
+        if grab.is_some_and(|g| g.carrying) {
+            // Let go: the slot springs from the hand into its place.
+            self.animate();
+            self.setNeedsDisplay(true);
+            return;
+        }
+        match click {
+            Some(Click::Edit) => rt::dispatch(|browser| {
+                if browser.editing().is_none() {
+                    browser.begin_editing(false);
+                }
+            }),
+            Some(Click::Fold(group)) => rt::dispatch(move |browser| {
+                if let Some(place) = browser.groups().iter().position(|g| g.id == group) {
+                    browser.toggle_group(place);
+                }
+            }),
+            None => {}
+        }
+    }
+
+    /// The carried slot past a neighbour: the model reorders, and the row glides.
+    fn carry(&self) {
+        let Some(grab) = self.ivars().grab.borrow().clone().filter(|g| g.carrying) else {
+            return;
+        };
+        let left = grab.origin + grab.travel;
+        let wanted = self
+            .with_layout(|browser, row, layout| match &grab.what {
+                Carried::Tab(id) => {
+                    let me = browser.tab(*id)?;
+                    let block = (me.is_pinned(), group_of(me));
+                    let peers: Vec<(TabId, (f64, f64))> = row
+                        .iter()
+                        .zip(&layout.tabs)
+                        .filter_map(|(item, rect)| match item {
+                            Item::Tab(index) => {
+                                let tab = &browser.tabs()[*index];
+                                ((tab.is_pinned(), group_of(tab)) == block).then_some((
+                                    tab.id,
+                                    (rect.origin.x, rect.origin.x + rect.size.width),
+                                ))
+                            }
+                            Item::Heading(_) => None,
+                        })
+                        .collect();
+                    let at = peers.iter().position(|(peer, _)| peer == id)?;
+                    let (start, end) = peers[at].1;
+                    let spans: Vec<(f64, f64)> = peers.iter().map(|(_, span)| *span).collect();
+                    let to = place_among(&spans, at, left, left + (end - start));
+                    (to != at).then_some(Move::Tab(*id, to))
+                }
+                Carried::Group(group) => {
+                    let spans = group_spans(browser, row, &layout.tabs);
+                    let at = spans.iter().position(|(id, _)| id == group)?;
+                    let (start, end) = spans[at].1;
+                    let edges: Vec<(f64, f64)> = spans.iter().map(|(_, span)| *span).collect();
+                    let to = place_among(&edges, at, left, left + (end - start));
+                    (to != at).then_some(Move::Group(at, to))
+                }
+            })
+            .flatten();
+        match wanted {
+            Some(Move::Tab(id, to)) => rt::dispatch(move |browser| browser.move_tab(id, to)),
+            Some(Move::Group(from, to)) => {
+                rt::dispatch(move |browser| browser.move_group(from, to));
+            }
+            None => {}
+        }
+    }
+
+    /// Frames from now on, until nothing moves.
+    fn animate(&self) {
+        let mut slot = self.ivars().link.borrow_mut();
+        if slot.is_none() {
+            let target: &NSObject = self.as_ref();
+            // SAFETY: `stripFrame:` is this class's own method and takes the link; the
+            // link keeps the strip, which lives for the app's life anyway.
+            let link = unsafe { self.displayLinkWithTarget_selector(target, sel!(stripFrame:)) };
+            // SAFETY: the main run loop and its common modes, so frames keep coming
+            // while a menu is up or the hand is down.
+            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
+            link.setPaused(true);
+            *slot = Some(link);
+        }
+        if let Some(link) = slot.as_ref()
+            && link.isPaused()
+        {
+            self.ivars().last_frame.set(None);
+            link.setPaused(false);
+        }
+    }
+
+    fn frame_tick(&self) {
+        let now = Instant::now();
+        let dt = self
+            .ivars()
+            .last_frame
+            .replace(Some(now))
+            .map_or(1.0 / 60.0, |then| now.duration_since(then).as_secs_f64())
+            .min(1.0 / 15.0);
+        let moving = self.ivars().flock.borrow_mut().step(dt);
+        self.setNeedsDisplay(true);
+        if !moving && !self.carrying() {
+            if let Some(link) = self.ivars().link.borrow().as_ref() {
+                link.setPaused(true);
+            }
+            self.ivars().last_frame.set(None);
+            // What the gone slots said is no longer wanted.
+            let flock = self.ivars().flock.borrow();
+            self.ivars()
+                .faces
+                .borrow_mut()
+                .retain(|key, _| flock.place(key).is_some());
         }
     }
 
@@ -656,36 +1045,175 @@ impl Strip {
         *self.ivars().tracking.borrow_mut() = Some(area);
     }
 
-    #[allow(clippy::too_many_lines)] // the row, left to right, in one pass
+    /// Tells the springs where the row now wants every slot. A change in the slots
+    /// themselves (opened, closed, moved, folded) glides there; anything else (a
+    /// resize, the field widening the live tab) is there at once. A group that
+    /// unfolds sends its tabs out from under its heading; one that folds takes them
+    /// back under it.
+    fn aim(&self, browser: &Browser, row: &[Item], layout: &Layout) {
+        let keys: Vec<Key> = row
+            .iter()
+            .map(|item| key_of(browser, item))
+            .chain([Key::Plus])
+            .collect();
+        let moved = {
+            let shown = self.ivars().shown.borrow();
+            !shown.is_empty() && *shown != keys
+        };
+        let now: HashMap<String, bool> = browser
+            .groups()
+            .iter()
+            .map(|g| (g.id.clone(), g.collapsed))
+            .collect();
+        let before = self.ivars().folded.replace(now.clone());
+        let turned = |group: &str, folded: bool| {
+            before.get(group) == Some(&!folded) && now.get(group) == Some(&folded)
+        };
+        let headings: HashMap<&str, f64> = row
+            .iter()
+            .zip(&layout.tabs)
+            .filter_map(|(item, rect)| match item {
+                Item::Heading(place) => browser
+                    .groups()
+                    .get(*place)
+                    .map(|g| (g.id.as_str(), rect.origin.x)),
+                Item::Tab(_) => None,
+            })
+            .collect();
+        let mut aims: Vec<Aim<Key>> = row
+            .iter()
+            .zip(&layout.tabs)
+            .zip(&keys)
+            .map(|((item, rect), key)| Aim {
+                key: key.clone(),
+                x: rect.origin.x,
+                width: rect.size.width,
+                from: match item {
+                    Item::Tab(index) => group_of(&browser.tabs()[*index])
+                        .filter(|g| turned(g, false))
+                        .and_then(|g| headings.get(g).copied()),
+                    Item::Heading(_) => None,
+                },
+            })
+            .collect();
+        aims.push(Aim {
+            key: Key::Plus,
+            x: layout.plus.origin.x,
+            width: layout.plus.size.width,
+            from: None,
+        });
+        let curve = if moved {
+            Curve::settle_now()
+        } else {
+            Curve::SETTLE
+        };
+        self.ivars()
+            .flock
+            .borrow_mut()
+            .aim(&aims, moved, curve, |key| match key {
+                Key::Tab(id) => browser
+                    .tab(*id)
+                    .and_then(group_of)
+                    .filter(|g| turned(g, true))
+                    .and_then(|g| headings.get(g).copied()),
+                Key::Heading(_) | Key::Plus => None,
+            });
+        if *self.ivars().shown.borrow() != keys {
+            self.ivars().shown.replace(keys);
+        }
+        if moved {
+            self.animate();
+        }
+    }
+
+    /// The carried slot (or group) where the hand has it.
+    fn hold_carried(&self, browser: &Browser, row: &[Item], layout: &Layout) -> Vec<Key> {
+        let Some(grab) = self.ivars().grab.borrow().clone().filter(|g| g.carrying) else {
+            return Vec::new();
+        };
+        let x = grab.origin + grab.travel;
+        let mut flock = self.ivars().flock.borrow_mut();
+        match &grab.what {
+            Carried::Tab(id) => {
+                flock.hold(&Key::Tab(*id), x);
+                vec![Key::Tab(*id)]
+            }
+            Carried::Group(group) => {
+                let Some(heading_x) = row
+                    .iter()
+                    .zip(&layout.tabs)
+                    .find(|(item, _)| {
+                        matches!(item, Item::Heading(_)) && in_group(browser, item, group)
+                    })
+                    .map(|(_, rect)| rect.origin.x)
+                else {
+                    return Vec::new();
+                };
+                let mut held = Vec::new();
+                for (item, rect) in row.iter().zip(&layout.tabs) {
+                    if in_group(browser, item, group) {
+                        let key = key_of(browser, item);
+                        flock.hold(&key, rect.origin.x + (x - heading_x));
+                        held.push(key);
+                    }
+                }
+                held
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // the row, gone slots, carried ones, then the plus
     fn draw(&self) {
         let dark = palette::is_dark(self);
         let bounds = self.bounds();
-        palette::GROUND.resolve(dark).setFill();
-        NSBezierPath::fillRect(bounds);
-        // The line between the row and the page.
-        palette::HAIRLINE.resolve(dark).setFill();
-        NSBezierPath::fillRect(NSRect::new(
-            NSPoint::new(0.0, bounds.size.height - 1.0),
-            NSSize::new(bounds.size.width, 1.0),
-        ));
-
-        let spot = self.ivars().spot.get();
-        let inside = self.ivars().inside.get();
         // Read on every draw, so a Settings change is in the next frame (see `Look`).
         let look = look();
-        let pressed = self.ivars().pressed.get();
-        let press_scale = self.ivars().press_scale.get();
-        let cmd_held = self.ivars().cmd_held.get();
+        palette::GROUND.resolve(dark).setFill();
+        NSBezierPath::fillRect(bounds);
+        if !look.bar {
+            // The line between the row and the page; the address bar draws its own.
+            palette::HAIRLINE.resolve(dark).setFill();
+            NSBezierPath::fillRect(NSRect::new(
+                NSPoint::new(0.0, bounds.size.height - 1.0),
+                NSSize::new(bounds.size.width, 1.0),
+            ));
+        }
+        let inside = self.ivars().inside.get();
+        let trailing = trailing(look.bar);
         // A row too long for the window stops at the doors rather than running under them.
         NSBezierPath::clipRect(NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(bounds.size.width - palette::HELM, bounds.size.height),
+            NSSize::new(bounds.size.width - trailing, bounds.size.height),
         ));
         let _ = rt::read(|browser| {
             let (row, slots) = slots(browser);
-            let editing = editing_slot(browser, &row);
-            let layout = layout(bounds.size.width, &slots, editing, trailing());
-            let active = browser.active();
+            let editing = editing_slot(browser, &row, look.bar);
+            let layout = layout(bounds.size.width, &slots, editing, trailing);
+            self.aim(browser, &row, &layout);
+            let carried = self.hold_carried(browser, &row, &layout);
+            let paint = Paint {
+                dark,
+                look,
+                spot: self.ivars().spot.get(),
+                pressed: self.ivars().pressed.get(),
+                press_scale: self.ivars().press_scale.get(),
+                cmd_held: self.ivars().cmd_held.get(),
+                active: browser.active(),
+                editing,
+            };
+            let flock = self.ivars().flock.borrow();
+            // Where a slot is drawn this frame: its springs' place, at the row's height.
+            let at = |key: &Key, rect: NSRect| -> (NSRect, f64) {
+                flock.place(key).map_or((rect, 1.0), |p| {
+                    (
+                        NSRect::new(
+                            NSPoint::new(p.x, rect.origin.y),
+                            NSSize::new(p.width, rect.size.height),
+                        ),
+                        p.alpha,
+                    )
+                })
+            };
             // The tabs stop where the layout says (before a pinned plus);
             // the state is restored below, before the plus itself is drawn.
             NSGraphicsContext::saveGraphicsState_class();
@@ -693,199 +1221,404 @@ impl Strip {
                 NSPoint::new(0.0, 0.0),
                 NSSize::new(layout.end, bounds.size.height),
             ));
+            let top = (palette::STRIP - palette::ROW) / 2.0;
+            // What has gone, fading under the rest.
+            for (key, place) in flock.leaving() {
+                let rect = NSRect::new(
+                    NSPoint::new(place.x, top),
+                    NSSize::new(place.width, palette::ROW),
+                );
+                faded(place.alpha, || self.draw_gone(browser, key, rect, &paint));
+            }
+            draw_group_lines(browser, &row, &layout, &at, dark);
+            let mut faces = self.ivars().faces.borrow_mut();
             for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
-                let index = match item {
+                let key = key_of(browser, item);
+                let label = match item {
+                    Item::Heading(place) => browser.groups()[*place].name.clone(),
+                    Item::Tab(index) => browser.tabs()[*index].label(),
+                };
+                if faces.get(&key) != Some(&label) {
+                    faces.insert(key.clone(), label);
+                }
+                if carried.contains(&key) {
+                    continue;
+                }
+                let (rect, alpha) = at(&key, *rect);
+                faded(alpha, || draw_item(browser, &paint, slot, item, rect));
+            }
+            drop(faces);
+            // In the hand: over everything, lifted.
+            for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
+                let key = key_of(browser, item);
+                if !carried.contains(&key) {
+                    continue;
+                }
+                let (rect, _) = at(&key, *rect);
+                lifted(|| match item {
                     Item::Heading(place) => {
-                        if spot == Spot::Heading(*place) {
-                            palette::HOVER.resolve(dark).setFill();
-                            pill(*rect).fill();
-                        }
-                        let name = browser.groups().get(*place).map_or("", |g| g.name.as_str());
-                        let text = NSRect::new(
-                            NSPoint::new(rect.origin.x + 10.0, rect.origin.y + 7.0),
-                            NSSize::new(rect.size.width - 20.0, 17.0),
-                        );
-                        palette::draw_text(name, text, &palette::MUTED.resolve(dark));
-                        continue;
+                        let colour = browser.groups()[*place].colour.as_deref();
+                        palette::group_colour(colour).resolve(dark).setFill();
+                        chip(rect).fill();
                     }
-                    Item::Tab(index) => *index,
-                };
-                let Some(tab) = browser.tabs().get(index) else {
-                    continue;
-                };
-                let live = Some(tab.id) == active;
-                let under = matches!(spot, Spot::Tab(i) | Spot::Close(i) if i == index);
-                // A pressed tab sinks where it stands; its hit rect stays the laid-out
-                // one, as SwiftUI's scale leaves the row's geometry alone.
-                let rect = &if pressed == Some(index) && editing != Some(slot) {
-                    sunk(*rect, press_scale)
-                } else {
-                    *rect
-                };
-                if live || under {
-                    let grey = if live { palette::WASH } else { palette::HOVER };
-                    grey.resolve(dark).setFill();
-                    pill(*rect).fill();
-                }
-                let titled = rect.size.width >= palette::TAB_TITLED;
-                // Search's `ReadingFill`: ink at 5.5% over the live pill, from its
-                // left, as far as the page has been read. Not on a tab down to its
-                // mark, where thirty points of grey would say nothing.
-                if live
-                    && look.reading
-                    && titled
-                    && let Some(read) = READING.with_borrow(|map| map.get(&tab.id).copied())
-                    && read > 0.0
-                {
-                    reading_fill(*rect, read, dark);
-                }
-                if editing == Some(slot) {
-                    continue;
-                }
-                let crossed = (under || live) && titled;
-                let number = if cmd_held {
-                    shortcut_number(index, browser.tabs().len())
-                } else {
-                    None
-                };
-                // "Tabs show": a site icon only when that is the choice; the letter
-                // tile stands in wherever Search's `Mark` would show one without an
-                // icon (a narrow tab always, a titled one only in icons mode).
-                let icon = if look.icons {
-                    icons::image_for(tab.url())
-                } else {
-                    None
-                };
-                if let Some(number) = number.filter(|_| !titled) {
-                    let digit = number.to_string();
-                    let width = palette::text_width(&digit);
-                    palette::draw_text(
-                        &digit,
-                        NSRect::new(
-                            NSPoint::new(
-                                rect.origin.x + (rect.size.width - width) / 2.0,
-                                rect.origin.y + 7.0,
-                            ),
-                            NSSize::new(width + 1.0, 17.0),
-                        ),
-                        &palette::MUTED.resolve(dark),
-                    );
-                } else if let Some(icon) = &icon {
-                    // Beside the title, or alone in the middle of a narrow tab.
-                    let x = if titled {
-                        rect.origin.x + 10.0
-                    } else {
-                        rect.origin.x + (rect.size.width - ICON) / 2.0
-                    };
-                    let square = NSRect::new(
-                        NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
-                        NSSize::new(ICON, ICON),
-                    );
-                    // SAFETY: drawing a decoded image into the view's own context, no hints.
-                    unsafe {
-                        icon.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
-                            square,
-                            NSRect::ZERO,
-                            NSCompositingOperation::SourceOver,
-                            1.0,
-                            true,
-                            None,
-                        );
+                    Item::Tab(_) => {
+                        palette::WASH.resolve(dark).setFill();
+                        pill(rect).fill();
                     }
-                } else if !titled || look.icons {
-                    // No icon to show (none kept yet, or Letters is the choice): a
-                    // narrow tab shows its letter on a tile rather than nothing at
-                    // all, and in icons mode a titled tab does the same beside its
-                    // title, as Search's `Mark` falls back to the monogram.
-                    let x = if titled {
-                        rect.origin.x + 10.0
-                    } else {
-                        rect.origin.x + (rect.size.width - ICON) / 2.0
-                    };
-                    let square = NSRect::new(
-                        NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
-                        NSSize::new(ICON, ICON),
-                    );
-                    palette::HAIRLINE.resolve(dark).setFill();
-                    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0)
-                        .fill();
-                    let letter = monogram(tab);
-                    let width = palette::text_width(&letter);
-                    palette::draw_text(
-                        &letter,
-                        NSRect::new(
-                            NSPoint::new(
-                                square.origin.x + (ICON - width) / 2.0,
-                                square.origin.y - 0.5,
-                            ),
-                            NSSize::new(width + 1.0, 17.0),
-                        ),
-                        &palette::MUTED.resolve(dark),
-                    );
-                }
-                if titled {
-                    let mut right = if crossed { 30.0 } else { 12.0 };
-                    if number.is_some() {
-                        right += 18.0;
-                    }
-                    // In icons mode a glyph (icon or letter tile) always stands
-                    // beside the title; in letters mode the title starts at the edge.
-                    let left = if look.icons { 10.0 + ICON + 6.0 } else { 12.0 };
-                    let text = NSRect::new(
-                        NSPoint::new(rect.origin.x + left, rect.origin.y + 7.0),
-                        NSSize::new(rect.size.width - left - right, 17.0),
-                    );
-                    let ink = if live { palette::INK } else { palette::MUTED };
-                    // The tab you're on says where its page is instead of its title,
-                    // and the title comes back under the pointer (Search's
-                    // `TitleAtRest`): the two swap in the same rect.
-                    let said = if live {
-                        at_rest(tab.url(), look.address)
-                    } else {
-                        None
-                    };
-                    match said.filter(|_| !under) {
-                        Some(said) => draw_rest(&said, text, dark),
-                        None => palette::draw_text(&tab.label(), text, &ink.resolve(dark)),
-                    }
-                    if let Some(number) = number {
-                        let digit = number.to_string();
-                        let at = if crossed { 30.0 } else { 12.0 };
-                        palette::draw_text(
-                            &digit,
-                            NSRect::new(
-                                NSPoint::new(
-                                    rect.origin.x + rect.size.width - at - 15.0,
-                                    rect.origin.y + 7.0,
-                                ),
-                                NSSize::new(16.0, 17.0),
-                            ),
-                            &palette::MUTED.resolve(dark),
-                        );
-                    }
-                }
-                if crossed {
-                    let square = close_rect(*rect);
-                    if spot == Spot::Close(index) {
-                        palette::HAIRLINE.resolve(dark).setFill();
-                        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0)
-                            .fill();
-                    }
-                    cross(square, &palette::MUTED.resolve(dark));
-                }
-                if live && tab.loading() {
-                    progress(*rect, tab.progress(), &palette::MUTED.resolve(dark));
-                }
+                });
+                draw_item(browser, &paint, slot, item, rect);
             }
             NSGraphicsContext::restoreGraphicsState_class();
             if inside {
-                if spot == Spot::Plus {
+                let (plus_rect, _) = at(&Key::Plus, layout.plus);
+                if paint.spot == Spot::Plus {
                     palette::HOVER.resolve(dark).setFill();
-                    pill(layout.plus).fill();
+                    pill(plus_rect).fill();
                 }
-                plus(layout.plus, &palette::MUTED.resolve(dark));
+                plus(plus_rect, &palette::MUTED.resolve(dark));
             }
         });
+    }
+
+    /// A slot that has gone, as it fades: a tab still in the row's model (folded away)
+    /// as it was drawn, one that closed, or a group that went, by what it last said.
+    fn draw_gone(&self, browser: &Browser, key: &Key, rect: NSRect, paint: &Paint) {
+        let dark = paint.dark;
+        match key {
+            Key::Tab(id) => {
+                if let Some((index, tab)) =
+                    browser.tabs().iter().enumerate().find(|(_, t)| t.id == *id)
+                {
+                    draw_tab(browser, paint, None, index, tab, rect, true);
+                    return;
+                }
+            }
+            Key::Heading(group) => {
+                if let Some(group) = browser.groups().iter().find(|g| g.id == *group) {
+                    draw_heading(&group.name, group.colour.as_deref(), rect, false, dark);
+                    return;
+                }
+            }
+            Key::Plus => return,
+        }
+        if let Some(label) = self.ivars().faces.borrow().get(key) {
+            let text = NSRect::new(
+                NSPoint::new(rect.origin.x + 12.0, rect.origin.y + 7.0),
+                NSSize::new((rect.size.width - 24.0).max(0.0), 17.0),
+            );
+            palette::draw_text(label, text, &palette::MUTED.resolve(dark));
+        }
+    }
+}
+
+/// Each group in the row, by its identity, from its heading's left edge to its last
+/// tab's right one.
+fn group_spans(browser: &Browser, row: &[Item], rects: &[NSRect]) -> Vec<(String, (f64, f64))> {
+    let mut spans: Vec<(String, (f64, f64))> = Vec::new();
+    for (item, rect) in row.iter().zip(rects) {
+        let right = rect.origin.x + rect.size.width;
+        match item {
+            Item::Heading(place) => {
+                if let Some(group) = browser.groups().get(*place) {
+                    spans.push((group.id.clone(), (rect.origin.x, right)));
+                }
+            }
+            Item::Tab(index) => {
+                if let Some(group) = group_of(&browser.tabs()[*index])
+                    && let Some((id, span)) = spans.last_mut()
+                    && id == group
+                {
+                    span.1 = right;
+                }
+            }
+        }
+    }
+    spans
+}
+
+/// Under each group's tabs, a line of its colour from its chip to its last tab, where
+/// they are drawn this frame (Chrome's group underline).
+fn draw_group_lines(
+    browser: &Browser,
+    row: &[Item],
+    layout: &Layout,
+    at: &dyn Fn(&Key, NSRect) -> (NSRect, f64),
+    dark: bool,
+) {
+    let mut line: Option<(Option<&str>, f64, f64, bool)> = None;
+    let draw = |line: Option<(Option<&str>, f64, f64, bool)>| {
+        if let Some((colour, start, end, with_tabs)) = line
+            && with_tabs
+        {
+            palette::group_colour(colour).resolve(dark).setFill();
+            let y = f64::midpoint(palette::STRIP, palette::ROW) + 1.5;
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                NSRect::new(
+                    NSPoint::new(start + 4.0, y),
+                    NSSize::new((end - start - 8.0).max(0.0), 2.0),
+                ),
+                1.0,
+                1.0,
+            )
+            .fill();
+        }
+    };
+    for (item, rect) in row.iter().zip(&layout.tabs) {
+        let key = key_of(browser, item);
+        let (rect, _) = at(&key, *rect);
+        let right = rect.origin.x + rect.size.width;
+        match item {
+            Item::Heading(place) => {
+                draw(line.take());
+                let colour = browser
+                    .groups()
+                    .get(*place)
+                    .and_then(|g| g.colour.as_deref());
+                line = Some((colour, rect.origin.x, right, false));
+            }
+            Item::Tab(index) => {
+                let grouped = group_of(&browser.tabs()[*index]).is_some();
+                match line.as_mut() {
+                    Some(open) if grouped => {
+                        open.2 = open.2.max(right);
+                        open.3 = true;
+                    }
+                    _ => draw(line.take()),
+                }
+            }
+        }
+    }
+    draw(line);
+}
+
+/// One slot of the row where it is drawn this frame.
+fn draw_item(browser: &Browser, paint: &Paint, slot: usize, item: &Item, rect: NSRect) {
+    match item {
+        Item::Heading(place) => {
+            let group = &browser.groups()[*place];
+            draw_heading(
+                &group.name,
+                group.colour.as_deref(),
+                rect,
+                paint.spot == Spot::Heading(*place),
+                paint.dark,
+            );
+        }
+        Item::Tab(index) => {
+            if let Some(tab) = browser.tabs().get(*index) {
+                draw_tab(browser, paint, Some(slot), *index, tab, rect, false);
+            }
+        }
+    }
+}
+
+/// A group's heading: its name on a chip of its colour, a little deeper under the
+/// pointer.
+fn draw_heading(name: &str, colour: Option<&str>, rect: NSRect, under: bool, dark: bool) {
+    let fill = palette::group_colour(colour).resolve(dark);
+    let fill = if under {
+        fill
+    } else {
+        fill.colorWithAlphaComponent(0.88)
+    };
+    fill.setFill();
+    chip(rect).fill();
+    let text = NSRect::new(
+        NSPoint::new(rect.origin.x + 10.0, rect.origin.y + 7.0),
+        NSSize::new((rect.size.width - 20.0).max(0.0), 17.0),
+    );
+    palette::draw_text(name, text, &palette::on_group(dark));
+}
+
+/// A heading's chip: a little shorter than a tab's pill.
+fn chip(rect: NSRect) -> Retained<NSBezierPath> {
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+        NSRect::new(
+            NSPoint::new(rect.origin.x, rect.origin.y + 4.0),
+            NSSize::new(rect.size.width, (rect.size.height - 8.0).max(0.0)),
+        ),
+        7.0,
+        7.0,
+    )
+}
+
+/// One tab where it is drawn this frame. `slot` is its place in the row (`None` for
+/// one that has gone); `gone` draws it as it fades, at rest: no pill, no cross.
+#[allow(clippy::too_many_lines)] // one tab, left to right, in one pass
+fn draw_tab(
+    browser: &Browser,
+    paint: &Paint,
+    slot: Option<usize>,
+    index: usize,
+    tab: &Tab,
+    rect: NSRect,
+    gone: bool,
+) {
+    let dark = paint.dark;
+    let look = paint.look;
+    let editing_here = slot.is_some() && paint.editing == slot;
+    let live = !gone && Some(tab.id) == paint.active;
+    let under = !gone && matches!(paint.spot, Spot::Tab(i) | Spot::Close(i) if i == index);
+    // A pressed tab sinks where it stands; its hit rect stays the laid-out
+    // one, as SwiftUI's scale leaves the row's geometry alone.
+    let rect = &if !gone && paint.pressed == Some(index) && !editing_here {
+        sunk(rect, paint.press_scale)
+    } else {
+        rect
+    };
+    if live || under {
+        let grey = if live { palette::WASH } else { palette::HOVER };
+        grey.resolve(dark).setFill();
+        pill(*rect).fill();
+    }
+    let titled = rect.size.width >= palette::TAB_TITLED;
+    // Search's `ReadingFill`: ink at 5.5% over the live pill, from its
+    // left, as far as the page has been read. Not on a tab down to its
+    // mark, where thirty points of grey would say nothing.
+    if live
+        && look.reading
+        && titled
+        && let Some(read) = READING.with_borrow(|map| map.get(&tab.id).copied())
+        && read > 0.0
+    {
+        reading_fill(*rect, read, dark);
+    }
+    if editing_here {
+        return;
+    }
+    let crossed = (under || live) && titled;
+    let number = if paint.cmd_held && !gone {
+        shortcut_number(index, browser.tabs().len())
+    } else {
+        None
+    };
+    // "Tabs show": a site icon only when that is the choice; the letter
+    // tile stands in wherever Search's `Mark` would show one without an
+    // icon (a narrow tab always, a titled one only in icons mode).
+    let icon = if look.icons {
+        icons::image_for(tab.url())
+    } else {
+        None
+    };
+    if let Some(number) = number.filter(|_| !titled) {
+        let digit = number.to_string();
+        let width = palette::text_width(&digit);
+        palette::draw_text(
+            &digit,
+            NSRect::new(
+                NSPoint::new(
+                    rect.origin.x + (rect.size.width - width) / 2.0,
+                    rect.origin.y + 7.0,
+                ),
+                NSSize::new(width + 1.0, 17.0),
+            ),
+            &palette::MUTED.resolve(dark),
+        );
+    } else if let Some(icon) = &icon {
+        // Beside the title, or alone in the middle of a narrow tab.
+        let x = if titled {
+            rect.origin.x + 10.0
+        } else {
+            rect.origin.x + (rect.size.width - ICON) / 2.0
+        };
+        let square = NSRect::new(
+            NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
+            NSSize::new(ICON, ICON),
+        );
+        // SAFETY: drawing a decoded image into the view's own context, no hints.
+        unsafe {
+            icon.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+                square,
+                NSRect::ZERO,
+                NSCompositingOperation::SourceOver,
+                1.0,
+                true,
+                None,
+            );
+        }
+    } else if !titled || look.icons {
+        // No icon to show (none kept yet, or Letters is the choice): a
+        // narrow tab shows its letter on a tile rather than nothing at
+        // all, and in icons mode a titled tab does the same beside its
+        // title, as Search's `Mark` falls back to the monogram.
+        let x = if titled {
+            rect.origin.x + 10.0
+        } else {
+            rect.origin.x + (rect.size.width - ICON) / 2.0
+        };
+        let square = NSRect::new(
+            NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
+            NSSize::new(ICON, ICON),
+        );
+        palette::HAIRLINE.resolve(dark).setFill();
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
+        let letter = monogram(tab);
+        let width = palette::text_width(&letter);
+        palette::draw_text(
+            &letter,
+            NSRect::new(
+                NSPoint::new(
+                    square.origin.x + (ICON - width) / 2.0,
+                    square.origin.y - 0.5,
+                ),
+                NSSize::new(width + 1.0, 17.0),
+            ),
+            &palette::MUTED.resolve(dark),
+        );
+    }
+    if titled {
+        let mut right = if crossed { 30.0 } else { 12.0 };
+        if number.is_some() {
+            right += 18.0;
+        }
+        // In icons mode a glyph (icon or letter tile) always stands
+        // beside the title; in letters mode the title starts at the edge.
+        let left = if look.icons { 10.0 + ICON + 6.0 } else { 12.0 };
+        let text = NSRect::new(
+            NSPoint::new(rect.origin.x + left, rect.origin.y + 7.0),
+            NSSize::new((rect.size.width - left - right).max(0.0), 17.0),
+        );
+        let ink = if live { palette::INK } else { palette::MUTED };
+        // The tab you're on says where its page is instead of its title,
+        // and the title comes back under the pointer (Search's
+        // `TitleAtRest`): the two swap in the same rect. Not with the address
+        // bar up: the bar says where, and the tab keeps its title.
+        let said = if live && !look.bar {
+            at_rest(tab.url(), look.address)
+        } else {
+            None
+        };
+        match said.filter(|_| !under) {
+            Some(said) => draw_rest(&said, text, dark),
+            None => palette::draw_text(&tab.label(), text, &ink.resolve(dark)),
+        }
+        if let Some(number) = number {
+            let digit = number.to_string();
+            let at = if crossed { 30.0 } else { 12.0 };
+            palette::draw_text(
+                &digit,
+                NSRect::new(
+                    NSPoint::new(
+                        rect.origin.x + rect.size.width - at - 15.0,
+                        rect.origin.y + 7.0,
+                    ),
+                    NSSize::new(16.0, 17.0),
+                ),
+                &palette::MUTED.resolve(dark),
+            );
+        }
+    }
+    if crossed {
+        let square = close_rect(*rect);
+        if paint.spot == Spot::Close(index) {
+            palette::HAIRLINE.resolve(dark).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0).fill();
+        }
+        cross(square, &palette::MUTED.resolve(dark));
+    }
+    // The load's progress: along the pill's foot, unless the address bar says it.
+    if live && tab.loading() && !look.bar {
+        progress(*rect, tab.progress(), &palette::MUTED.resolve(dark));
     }
 }
 
@@ -984,22 +1717,6 @@ const TWO_LEVEL: [&str; 20] = [
     "com.mx", "com.sg", "com.tw", "gov.uk", "ne.jp", "net.au", "net.cn", "org.au", "org.cn",
     "org.uk",
 ];
-
-fn is_address(host: &str) -> bool {
-    if host.contains(':') {
-        return true;
-    }
-    let labels: Vec<&str> = host.split('.').collect();
-    labels.len() == 4 && labels.iter().all(|label| label.parse::<u8>().is_ok())
-}
-
-fn is_loopback(host: &str) -> bool {
-    // 127.x as an address only: 127.0.0.1.example.com is a website like any other.
-    host == "localhost"
-        || host.ends_with(".localhost")
-        || host == "::1"
-        || (is_address(host) && host.starts_with("127."))
-}
 
 /// A name's registrable part: the last two labels, or three under a two-level
 /// suffix; the whole of an address, or of a name too short to cut.
@@ -1251,6 +1968,30 @@ mod tests {
         let trailing = palette::HELM + palette::DOOR + 4.0;
         let fetching = layout(900.0, &tabs(30), None, trailing);
         assert!(fetching.plus.origin.x + palette::PLUS <= 900.0 - trailing - 4.0 + f64::EPSILON);
+    }
+
+    #[test]
+    fn a_carried_slot_passes_a_neighbour_at_its_middle_and_comes_back_the_same_way() {
+        // Three tabs of 100 with gaps of 2; the first carried right.
+        let spans = [(0.0, 100.0), (102.0, 202.0), (204.0, 304.0)];
+        assert_eq!(
+            place_among(&spans, 0, 40.0, 140.0),
+            0,
+            "not yet past the middle"
+        );
+        assert_eq!(
+            place_among(&spans, 0, 60.0, 160.0),
+            1,
+            "past the second's middle"
+        );
+        assert_eq!(place_among(&spans, 0, 170.0, 270.0), 2, "and the third's");
+        // Now second, it comes back once its left edge is back over the first's middle.
+        assert_eq!(place_among(&spans, 1, 60.0, 160.0), 1);
+        assert_eq!(place_among(&spans, 1, 40.0, 140.0), 0);
+        // Groups are not all one width: a wide one passes a narrow one by its middle.
+        let groups = [(0.0, 300.0), (310.0, 400.0)];
+        assert_eq!(place_among(&groups, 0, 50.0, 350.0), 0);
+        assert_eq!(place_among(&groups, 0, 60.0, 360.0), 1);
     }
 
     #[test]

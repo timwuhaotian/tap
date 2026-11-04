@@ -492,6 +492,7 @@ fn shape(session: &snss::Snapshot) -> Shape {
                     id: gid.clone(),
                     name: meta.title.clone(),
                     collapsed: meta.collapsed,
+                    colour: tap_core::groups::chrome_colour(meta.colour).map(str::to_owned),
                 });
             }
             Some(gid)

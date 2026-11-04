@@ -47,7 +47,7 @@ use tap_core::{
 };
 
 use crate::{
-    bring, dialogs, downloads, links,
+    address_bar, bring, dialogs, downloads, links,
     menu::{self, Command},
     profile, rt, settings, sleep, store, update, web, window,
 };
@@ -282,7 +282,7 @@ fn row(browser: &Browser) -> Value {
         .map(|item| match item {
             tap_core::groups::Item::Heading(place) => {
                 let group = &browser.groups()[*place];
-                json!({ "heading": group.name, "folded": group.collapsed })
+                json!({ "heading": group.name, "folded": group.collapsed, "colour": group.colour })
             }
             tap_core::groups::Item::Tab(index) => {
                 json!({ "tab": browser.tabs()[*index].label() })
@@ -290,7 +290,7 @@ fn row(browser: &Browser) -> Value {
         })
         .collect();
     json!({
-        "groups": browser.groups().iter().map(|g| json!({ "name": g.name, "folded": g.collapsed })).collect::<Vec<_>>(),
+        "groups": browser.groups().iter().map(|g| json!({ "name": g.name, "folded": g.collapsed, "colour": g.colour })).collect::<Vec<_>>(),
         "row": items,
     })
 }
@@ -340,6 +340,8 @@ fn handle(request: &Value, reply: Reply) {
             })
             .unwrap_or_else(|| json!({}));
             out["lights"] = json!(window::lights());
+            out["addressBar"] = address_bar::describe();
+            out["window"] = json!(window::number());
             out["fieldText"] = json!(window::field_text());
             out["firstResponder"] = json!(window::first_responder());
             out["asked"] = json!(dialogs::asked());
@@ -368,6 +370,64 @@ fn handle(request: &Value, reply: Reply) {
             rt::dispatch(move |browser| {
                 browser.toggle_group(usize::try_from(place).unwrap_or(usize::MAX));
             });
+            reply.say(rt::read(row).unwrap_or_default());
+        }
+        "move" => {
+            // A tab carried to a place among its block's (by its place among the tabs),
+            // or a group past others (`group`, `to`), as the hand would in the strip.
+            let to = request
+                .get("to")
+                .and_then(Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok());
+            let Some(to) = to else {
+                return reply.say(json!({ "error": "move needs to" }));
+            };
+            if let Some(group) = request
+                .get("group")
+                .and_then(Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok())
+            {
+                rt::dispatch(move |browser| browser.move_group(group, to));
+            } else if let Some(id) = request
+                .get("tab")
+                .and_then(Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok())
+                .and_then(|index| rt::read(|b| b.tabs().get(index).map(|t| t.id)).flatten())
+            {
+                rt::dispatch(move |browser| browser.move_tab(id, to));
+            } else {
+                return reply.say(json!({ "error": "move needs a tab or a group" }));
+            }
+            reply.say(rt::read(row).unwrap_or_default());
+        }
+        "group" => {
+            // The group menus' commands: `new` (tab), `into` (tab, group), `out` (tab),
+            // `rename` (group, name), `ungroup` (group), `close` (group), `reopen`.
+            let op = text("op").unwrap_or_default();
+            let number = |key: &str| {
+                request
+                    .get(key)
+                    .and_then(Value::as_u64)
+                    .and_then(|v| usize::try_from(v).ok())
+            };
+            let tab = number("tab")
+                .and_then(|index| rt::read(|b| b.tabs().get(index).map(|t| t.id)).flatten());
+            let group = number("group");
+            let name = text("name").unwrap_or_default();
+            match (op.as_str(), tab, group) {
+                ("new", Some(id), _) => rt::dispatch(move |b| {
+                    b.add_group(id);
+                }),
+                ("into", Some(id), Some(place)) => {
+                    rt::dispatch(move |b| b.move_to_group(id, Some(place)));
+                }
+                ("out", Some(id), _) => rt::dispatch(move |b| b.move_to_group(id, None)),
+                ("rename", _, Some(place)) => rt::dispatch(move |b| b.rename_group(place, &name)),
+                ("ungroup", _, Some(place)) => rt::dispatch(move |b| b.ungroup(place)),
+                ("close", _, Some(place)) => rt::dispatch(move |b| b.close_group(place)),
+                ("reopen", _, _) => rt::dispatch(Browser::reopen),
+                _ => return reply.say(json!({ "error": "group needs op and its tab or group" })),
+            }
             reply.say(rt::read(row).unwrap_or_default());
         }
         "export-profile" => {
@@ -705,6 +765,44 @@ fn handle(request: &Value, reply: Reply) {
         }
         "downloads" => reply.say(json!({ "done": downloads::done(), "going": downloads::going() })),
         "history" => reply.say(json!({ "visits": rt::read(|b| b.history().len()) })),
+        "drag" => {
+            // A press, a carry and (unless `release` is false) a let-go, through the
+            // window as the hand would make them: from `from` to `to`, each [x, y] in
+            // the window's points from its top left, in `steps` moves.
+            let point = |key: &str| {
+                let pair = request.get(key)?.as_array()?;
+                Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?))
+            };
+            let (Some(from), Some(to)) = (point("from"), point("to")) else {
+                return reply.say(json!({ "error": "drag needs from and to" }));
+            };
+            let steps = request
+                .get("steps")
+                .and_then(Value::as_u64)
+                .unwrap_or(12)
+                .max(1);
+            let release = request
+                .get("release")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let mut sent = mouse(NSEventType::LeftMouseDown, from);
+            for step in 1..=steps {
+                #[allow(clippy::cast_precision_loss)] // a handful of steps
+                let t = step as f64 / steps as f64;
+                let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+                sent &= mouse(NSEventType::LeftMouseDragged, at);
+            }
+            if release {
+                sent &= mouse(NSEventType::LeftMouseUp, to);
+            }
+            reply.say(json!({ "sent": sent, "row": rt::read(row).unwrap_or_default() }));
+        }
+        "mouseup" => {
+            let x = request.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+            let y = request.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+            let sent = mouse(NSEventType::LeftMouseUp, (x, y));
+            reply.say(json!({ "sent": sent, "row": rt::read(row).unwrap_or_default() }));
+        }
         "keyeq" => {
             let Some(key) = text("key") else {
                 return reply.say(json!({ "error": "keyeq needs a key" }));
@@ -862,6 +960,29 @@ fn field(request: &Value, reply: Reply) {
         }
         reply.say(out);
     });
+}
+
+/// A mouse event through the window, at a point in its points from its top left.
+fn mouse(kind: NSEventType, (x, y): (f64, f64)) -> bool {
+    let Some(window) = window::main_window() else {
+        return false;
+    };
+    let height = window.frame().size.height;
+    let Some(event) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        kind,
+        NSPoint::new(x, height - y),
+        NSEventModifierFlags::empty(),
+        objc2_foundation::NSProcessInfo::processInfo().systemUptime(),
+        window.windowNumber(),
+        None,
+        0,
+        1,
+        1.0,
+    ) else {
+        return false;
+    };
+    window.sendEvent(&event);
+    true
 }
 
 /// A key equivalent, sent through the menu bar as a key press would be.

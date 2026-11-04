@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/tap-core", "crates/tap-import", "crates/tap-shell", "crates/tap-app", "xtask"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 license = "MIT"
 authors = ["timwuhaotian"]
@@ -21,6 +21,8 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 objc2-web-kit = "0.3"
+objc2-core-graphics = "0.3"
+objc2-quartz-core = "0.3"
 resvg = "0.49"
 bitflags = "2"
 block2 = "0.6"

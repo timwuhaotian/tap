@@ -39,6 +39,8 @@ bitflags! {
         const AWAKE = 1 << 6;
         /// The site's icon arrived.
         const ICON = 1 << 7;
+        /// Whether everything on the page came over a secure connection.
+        const SECURITY = 1 << 8;
     }
 
     /// What changed on the window's model since the views last looked.
@@ -196,6 +198,10 @@ pub struct Tab {
     title: String,
     loading: bool,
     progress: f64,
+    /// Everything on the page came over a secure connection (WebKit's
+    /// `hasOnlySecureContent`): never on plain http, and not on an https page that
+    /// pulled an image or a script in over plain http.
+    secure: bool,
     can_back: bool,
     can_forward: bool,
     /// Said in place of the page: a connection that failed, a process that kept dying.
@@ -229,6 +235,7 @@ impl Tab {
             title: String::new(),
             loading: false,
             progress: 0.0,
+            secure: false,
             can_back: false,
             can_forward: false,
             failure: None,
@@ -259,6 +266,11 @@ impl Tab {
     #[must_use]
     pub fn progress(&self) -> f64 {
         self.progress
+    }
+    /// Whether everything on the page came over a secure connection.
+    #[must_use]
+    pub fn secure(&self) -> bool {
+        self.secure
     }
     #[must_use]
     pub fn can_back(&self) -> bool {
@@ -355,6 +367,15 @@ pub struct Editing {
     pub picked: Option<usize>,
 }
 
+/// A closed tab, as ⇧⌘T brings it back: where it stood, and which close it went in.
+/// Tabs closed together (a group, Close Group) share a batch and come back together.
+#[derive(Clone, Debug)]
+struct Closed {
+    index: usize,
+    entry: session::Entry,
+    batch: u64,
+}
+
 /// A run of links opened from one tab land one after another beside it.
 #[derive(Clone, Copy, Debug)]
 struct LinkRun {
@@ -375,7 +396,12 @@ pub struct Browser {
     /// The tabs left, the latest last: where closing the one in front goes back to.
     viewed: Vec<TabId>,
     /// Closed tabs, newest last, with where they were: ⇧⌘T brings them back.
-    closed: Vec<(usize, session::Entry)>,
+    closed: Vec<Closed>,
+    /// The batch the closes under way belong to (Close Group's), and the last one made.
+    batch: Option<u64>,
+    batches: u64,
+    /// Groups closed whole, with their place: a tab of one brought back brings it back.
+    closed_groups: Vec<(TabGroup, usize)>,
     link_run: Option<LinkRun>,
     refusals: u32,
     effects: Vec<Effect>,
@@ -411,6 +437,9 @@ impl Browser {
             behaviour: Behaviour::default(),
             viewed: Vec::new(),
             closed: Vec::new(),
+            batch: None,
+            batches: 0,
+            closed_groups: Vec::new(),
             link_run: None,
             refusals: 0,
             effects: Vec::new(),
@@ -488,6 +517,7 @@ impl Browser {
         self.tabs
             .sort_by_cached_key(|tab| groups::rank(&tab.entry, groups));
         self.prune();
+        groups::colour_all(&mut self.groups);
     }
 
     /// A group lasts as long as its tabs.
@@ -640,6 +670,160 @@ impl Browser {
             return;
         };
         group.collapsed = !group.collapsed;
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// A tab carried along the row to `place` among the tabs that stand with it: the
+    /// pins, its group's, or the tabs in no group (Search's `move(_:within:to:)`). A
+    /// place past the last is the last. It never leaves its block this way.
+    pub fn move_tab(&mut self, id: TabId, place: usize) {
+        let Some(from) = self.tabs.iter().position(|t| t.id == id) else {
+            return;
+        };
+        let rank = groups::rank(&self.tabs[from].entry, &self.groups);
+        // The row is kept in rank order (`order`), so a block's tabs stand together.
+        let Some(first) = self
+            .tabs
+            .iter()
+            .position(|t| groups::rank(&t.entry, &self.groups) == rank)
+        else {
+            return;
+        };
+        let count = self.tabs[first..]
+            .iter()
+            .take_while(|t| groups::rank(&t.entry, &self.groups) == rank)
+            .count();
+        let to = first + place.min(count - 1);
+        if to == from {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// A group carried past others, its tabs with it (Search's `moveTabGroup`): from
+    /// its place among the groups to `to`.
+    pub fn move_group(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.groups.len() || to >= self.groups.len() {
+            return;
+        }
+        let group = self.groups.remove(from);
+        self.groups.insert(to, group);
+        self.order();
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// Move to Group › New Group: a group of the tab's own, named as Search names one
+    /// ("Group 3"), open, after the others. A pin stays out of groups. Answers the
+    /// group's place.
+    pub fn add_group(&mut self, id: TabId) -> Option<usize> {
+        if self.tab(id)?.is_pinned() {
+            return None;
+        }
+        let group = TabGroup {
+            id: fnd::uuid(),
+            name: format!("Group {}", self.groups.len() + 1),
+            collapsed: false,
+            colour: Some(groups::next_colour(&self.groups).to_owned()),
+        };
+        let key = group.id.clone();
+        self.groups.push(group);
+        self.move_to_group(id, Some(self.groups.len() - 1));
+        self.groups.iter().position(|g| g.id == key)
+    }
+
+    /// Move to Group: into the group at `place`, or out of any (`None`, Remove from
+    /// Group). The group it joins opens; the one it leaves goes if it was the last
+    /// (Search's `move(_:toGroup:)`). A pin stays out of groups.
+    pub fn move_to_group(&mut self, id: TabId, place: Option<usize>) {
+        let group = match place {
+            Some(place) => match self.groups.get_mut(place) {
+                Some(group) => Some(group.id.clone()),
+                None => return,
+            },
+            None => None,
+        };
+        let Some(index) = self.index(id) else { return };
+        let tab = &mut self.tabs[index];
+        if tab.is_pinned() || tab.entry.group_id == group {
+            return;
+        }
+        tab.entry.group_id.clone_from(&group);
+        if let Some(place) = place {
+            self.groups[place].collapsed = false;
+        }
+        self.order();
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// Rename Group: a name with something in it.
+    pub fn rename_group(&mut self, place: usize, name: &str) {
+        let trimmed = name.trim();
+        let Some(group) = self.groups.get_mut(place) else {
+            return;
+        };
+        if trimmed.is_empty() || group.name == trimmed {
+            return;
+        }
+        trimmed.clone_into(&mut group.name);
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// Ungroup Tabs: the group goes, its tabs stay, in no group (Search's
+    /// `removeTabGroup`).
+    pub fn ungroup(&mut self, place: usize) {
+        if place >= self.groups.len() {
+            return;
+        }
+        let group = self.groups.remove(place);
+        for tab in &mut self.tabs {
+            if tab.entry.group_id.as_deref() == Some(group.id.as_str()) {
+                tab.entry.group_id = None;
+            }
+        }
+        self.order();
+        self.dirty.insert(BrowserFields::TABS);
+        self.session_changed = true;
+    }
+
+    /// Close Group: the group and every tab in it, each closed as ⌘W closes it and
+    /// remembered together, so one ⇧⌘T brings the group back whole (Search's
+    /// `closeTabGroup`). Off the group first, so none of its tabs wakes only to be
+    /// closed.
+    pub fn close_group(&mut self, place: usize) {
+        let Some(group) = self.groups.get(place).cloned() else {
+            return;
+        };
+        let going: Vec<usize> = (0..self.tabs.len())
+            .filter(|i| self.tabs[*i].entry.group_id.as_deref() == Some(group.id.as_str()))
+            .collect();
+        let (Some(&first), Some(&last)) = (going.first(), going.last()) else {
+            return;
+        };
+        let ids: Vec<TabId> = going.iter().map(|i| self.tabs[*i].id).collect();
+        if self.active.is_some_and(|active| ids.contains(&active))
+            && let Some(outside) = self
+                .tabs
+                .get(last + 1)
+                .or_else(|| first.checked_sub(1).and_then(|i| self.tabs.get(i)))
+                .map(|t| t.id)
+        {
+            self.select(outside);
+        }
+        self.closed_groups.push((group, place));
+        self.batches += 1;
+        self.batch = Some(self.batches);
+        // From the right, so each is remembered where it stood.
+        for id in ids.iter().rev() {
+            self.close(*id);
+        }
+        self.batch = None;
         self.dirty.insert(BrowserFields::TABS);
         self.session_changed = true;
     }
@@ -1013,34 +1197,84 @@ impl Browser {
     }
 
     fn remember(&mut self, index: usize) {
-        let tab = &self.tabs[index];
-        if !tab.is_blank() {
-            self.closed.push((index, tab.entry()));
+        if self.tabs[index].is_blank() {
+            return;
         }
+        let batch = self.batch.unwrap_or_else(|| {
+            self.batches += 1;
+            self.batches
+        });
+        let entry = self.tabs[index].entry();
+        self.closed.push(Closed {
+            index,
+            entry,
+            batch,
+        });
     }
 
-    /// ⇧⌘T: the last closed tab, back where it was.
+    /// ⇧⌘T: the last closed tab, back where it was; a group closed whole comes back
+    /// whole, with its name and its place (Search's `reopen(batch:)`).
     pub fn reopen(&mut self) {
-        let Some((index, entry)) = self.closed.pop() else {
+        let Some(last) = self.closed.pop() else {
             return;
         };
-        let id = TabId(self.next);
-        self.next += 1;
-        let mut tab = Tab::new(id);
-        tab.url.clone_from(&entry.url);
-        tab.title.clone_from(&entry.title);
-        tab.entry = entry;
+        let mut batch = vec![last];
+        while let Some(next) = self.closed.pop_if(|c| c.batch == batch[0].batch) {
+            batch.push(next);
+        }
         // An empty new tab in front is what closing the only tab left: it gives way.
         if self.tabs.len() == 1 && self.tabs[0].is_blank() {
             self.tabs.clear();
         }
-        let place = index.min(self.tabs.len());
-        self.tabs.insert(place, tab);
+        let mut first = None;
+        // Closed last to first, so the newest closed stood leftmost.
+        for closed in batch {
+            if let Some(group) = closed.entry.group_id.as_deref()
+                && !self.groups.iter().any(|g| g.id == group)
+                && let Some(at) = self.closed_groups.iter().rposition(|(g, _)| g.id == group)
+            {
+                let (group, place) = self.closed_groups.remove(at);
+                let place = place.min(self.groups.len());
+                self.groups.insert(place, group);
+            }
+            let id = TabId(self.next);
+            self.next += 1;
+            let mut tab = Tab::new(id);
+            tab.url.clone_from(&closed.entry.url);
+            tab.title.clone_from(&closed.entry.title);
+            tab.entry = closed.entry;
+            let place = closed.index.min(self.tabs.len());
+            self.tabs.insert(place, tab);
+            first.get_or_insert(id);
+        }
         // Its group may have gone with it: then it comes back in none.
         self.order();
         self.dirty.insert(BrowserFields::TABS);
         self.session_changed = true;
-        self.select(id);
+        if let Some(id) = first {
+            self.select(id);
+        }
+    }
+
+    /// Rename, in the tab's menu: the name it wears in place of its page's title;
+    /// nothing gives the title back (Search's `commitTabEdit` while renaming).
+    pub fn rename_tab(&mut self, id: TabId, name: &str) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        let trimmed = name.trim();
+        let name = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+        if tab.entry.name != name {
+            tab.entry.name = name;
+            tab.dirty.insert(TabFields::TITLE);
+            self.session_changed = true;
+        }
+    }
+
+    /// Put to Sleep, in the tab's menu: its page let go of now, as it would be after
+    /// a while unseen. Not the tab on screen, nor one that has to stay awake.
+    pub fn put_to_sleep(&mut self, id: TabId) {
+        if self.awake_because(id).is_none() {
+            self.effects.push(Effect::Sleep(id));
+        }
     }
 
     /// ⌃Tab and ⌃⇧Tab: along the row, round from one end to the other.
@@ -1637,6 +1871,13 @@ impl Browser {
         }
     }
 
+    /// What WebKit says of the page's connection: whether every resource on it came
+    /// over a secure one.
+    pub fn page_security(&mut self, id: TabId, secure: bool) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        Tab::set(&mut tab.secure, secure, &mut tab.dirty, TabFields::SECURITY);
+    }
+
     pub fn page_history(&mut self, id: TabId, can_back: bool, can_forward: bool) {
         let Some(tab) = self.tab_mut(id) else { return };
         Tab::set(
@@ -2047,6 +2288,190 @@ mod tests {
         );
         assert_eq!(shape.active, 1);
         assert_eq!(shape.tabs[4].group_id, None);
+    }
+
+    #[test]
+    fn a_tab_moves_only_among_the_tabs_of_its_own_block() {
+        let mut browser = Browser::restored(grouped());
+        browser.toggle_group(0);
+        let a2 = browser.tabs()[1].id;
+        browser.take_dirty();
+        browser.move_tab(a2, 0);
+        assert_eq!(
+            urls(&browser)[..2],
+            ["https://a2.com", "https://a1.com"],
+            "first in its group"
+        );
+        assert!(browser.take_dirty().0.contains(BrowserFields::TABS));
+        assert!(
+            browser
+                .take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::Save(_))),
+            "and the session remembers it"
+        );
+        // Past the end of its group is the group's last place, never another group's.
+        browser.move_tab(a2, 9);
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://a1.com",
+                "https://a2.com",
+                "https://b1.com",
+                "https://loose.com",
+                "https://gone.com"
+            ]
+        );
+        let loose = browser.tabs()[4].id;
+        browser.move_tab(loose, 0);
+        assert_eq!(
+            urls(&browser)[3..],
+            ["https://gone.com", "https://loose.com"],
+            "a loose tab moves among the loose ones"
+        );
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://a2.com"));
+    }
+
+    #[test]
+    fn a_group_moves_with_all_its_tabs() {
+        let mut browser = Browser::restored(grouped());
+        browser.move_group(0, 1);
+        assert_eq!(
+            browser
+                .groups()
+                .iter()
+                .map(|g| g.name.as_str())
+                .collect::<Vec<_>>(),
+            ["AI Providers", "软件开发"]
+        );
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://b1.com",
+                "https://a1.com",
+                "https://a2.com",
+                "https://loose.com",
+                "https://gone.com"
+            ]
+        );
+        assert_eq!(
+            browser.row()[0],
+            Item::Heading(0),
+            "the row leads with the moved-up group"
+        );
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://a2.com"));
+        let shape = browser.shape();
+        assert_eq!(
+            shape.groups.expect("groups")[0].name,
+            "AI Providers",
+            "kept in the order shown"
+        );
+        browser.move_group(1, 7);
+        assert_eq!(browser.groups()[0].name, "AI Providers", "no such place");
+    }
+
+    #[test]
+    fn a_tab_joins_a_new_group_moves_between_groups_and_leaves_them() {
+        let mut browser = Browser::restored(grouped());
+        let loose = browser.tabs()[3].id;
+        let place = browser.add_group(loose).expect("a new group");
+        assert_eq!(place, 2);
+        assert_eq!(browser.groups()[2].name, "Group 3");
+        assert_eq!(
+            browser.tab(loose).and_then(Tab::group),
+            Some(browser.groups()[2].id.as_str())
+        );
+        // Into the folded first group: it opens to show it.
+        browser.move_to_group(loose, Some(0));
+        assert!(!browser.groups()[0].collapsed);
+        assert_eq!(
+            browser.groups().len(),
+            2,
+            "the group it left had no other tab"
+        );
+        assert_eq!(
+            urls(&browser)[..3],
+            ["https://a1.com", "https://a2.com", "https://loose.com"]
+        );
+        browser.move_to_group(loose, None);
+        assert_eq!(browser.tab(loose).and_then(Tab::group), None);
+        assert_eq!(
+            urls(&browser)[3..],
+            ["https://loose.com", "https://gone.com"]
+        );
+    }
+
+    #[test]
+    fn a_group_is_renamed_ungrouped_or_closed_and_comes_back_whole() {
+        let mut browser = Browser::restored(grouped());
+        browser.rename_group(1, "  Models ");
+        assert_eq!(browser.groups()[1].name, "Models");
+        browser.rename_group(1, "   ");
+        assert_eq!(browser.groups()[1].name, "Models", "never a blank name");
+
+        // Close Group: the front tab (a2) is in it, so the row moves off it first.
+        browser.close_group(0);
+        assert_eq!(
+            urls(&browser),
+            ["https://b1.com", "https://loose.com", "https://gone.com"]
+        );
+        assert_eq!(browser.groups().len(), 1);
+        assert_eq!(browser.active_tab().map(Tab::url), Some("https://b1.com"));
+        // One ⇧⌘T brings the group back whole, folded as it was, in its place.
+        browser.reopen();
+        assert_eq!(
+            urls(&browser)[..3],
+            ["https://a1.com", "https://a2.com", "https://b1.com"]
+        );
+        assert_eq!(browser.groups()[0].name, "软件开发");
+        assert!(browser.groups()[0].collapsed);
+        assert!(!browser.can_reopen());
+
+        browser.ungroup(0);
+        assert_eq!(browser.groups().len(), 1);
+        assert!(
+            browser
+                .tabs()
+                .iter()
+                .all(|t| t.group().is_none() || t.group() == Some(browser.groups()[0].id.as_str()))
+        );
+        assert_eq!(
+            urls(&browser),
+            [
+                "https://b1.com",
+                "https://a1.com",
+                "https://a2.com",
+                "https://loose.com",
+                "https://gone.com"
+            ],
+            "its tabs stay, among the loose ones"
+        );
+    }
+
+    #[test]
+    fn a_renamed_tab_wears_its_name_until_it_is_emptied() {
+        let mut browser = with_pages(&["https://example.com"]);
+        let id = browser.active().expect("a tab");
+        browser.rename_tab(id, " Mine ");
+        assert_eq!(browser.tab(id).map(Tab::label).as_deref(), Some("Mine"));
+        browser.rename_tab(id, "");
+        assert_ne!(browser.tab(id).map(Tab::label).as_deref(), Some("Mine"));
+    }
+
+    #[test]
+    fn a_page_s_security_is_marked_only_when_it_changes() {
+        let mut browser = with_pages(&["https://example.com"]);
+        let id = browser.active().expect("a tab");
+        browser.take_dirty();
+        browser.page_security(id, true);
+        assert!(browser.active_tab().is_some_and(Tab::secure));
+        let (_, tabs) = browser.take_dirty();
+        assert!(
+            tabs.iter()
+                .any(|(t, f)| *t == id && f.contains(TabFields::SECURITY))
+        );
+        browser.page_security(id, true);
+        assert_eq!(browser.take_dirty().1, []);
     }
 
     #[test]

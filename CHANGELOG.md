@@ -7,6 +7,29 @@ Info.plist.
 
 ## Unreleased
 
+## 0.1.6 — 2026-11-04
+
+The tab row moves, groups have colours, and there's an address bar.
+
+- **Everything in the tab row moves smoothly**: tabs opening, closing and changing
+  places glide on one spring; a group folding slides its tabs back under its name, and
+  unfolding brings them out again. Reduce Motion in System Settings turns it off.
+- **Drag tabs to reorder them**, within their group (or among the tabs in none), and
+  **drag a group by its name** to move the whole group past the others.
+- **Groups have colours**, as in Chrome: each new group gets one no other group has,
+  its name on a chip of that colour and a line of it under its tabs. Groups brought
+  over from Chrome keep the colour they had there.
+- **An address bar** under the tabs, with back, forward and reload on its left: the
+  page's address with its site in bold, a lock (or a warning on plain http, or a
+  slashed lock when a secure page pulls in insecure parts), and the load's progress.
+  Click the address (or ⌘L) to type; click the lock to see whether the connection is
+  secure and who issued the site's certificate. Settings › Appearance › Show the
+  address bar hides it, and the tabs and buttons go back to how they were.
+- **A group can be ungrouped or closed** now: right-click its name for Rename Group,
+  Collapse/Expand, Ungroup Tabs and Close Group (⇧⌘T brings a closed group back whole).
+- **Right-click a tab** for Move to Group (a new group, another one, or out of its
+  group), Rename and Put to Sleep, beside what was there.
+
 ## 0.1.5 — 2026-11-04
 
 Passwords come over, and Tap fills them in.

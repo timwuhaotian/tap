@@ -492,6 +492,12 @@ pub fn items() -> &'static [Item] {
                 "Beside the window's buttons, before the tabs")
                 .keys(&["toolbar.left"]).words(&["toolbar", "buttons", "navigation"]).under("tabs.layout")
                 .control(Control::Switch("toolbar.left")),
+            // Tap's own row: Search has no address bar, its live tab says where it is.
+            Item::new("toolbar.address", "window", "link", "Show the address bar",
+                "Under the tabs: where the page is, and whether its connection is secure")
+                .more("Click the address to type another, or the lock to see the site's certificate. ⌘L goes there too.")
+                .keys(&["toolbar.address"]).words(&["url", "address bar", "location", "toolbar", "ssl", "https", "lock", "certificate"])
+                .control(Control::Switch("toolbar.address")),
             Item::new("sidebar.roomy", "tablook", "textformat.size.larger", "Roomier tabs",
                 "Taller rows and larger titles in the column")
                 .keys(&["sidebar.roomy"]).words(&["bigger", "larger", "text size", "accessibility"]).under("tabs.layout")
@@ -764,7 +770,7 @@ pub fn items() -> &'static [Item] {
 
 /// The rows Tap acts on today, the only ones Settings shows. Every other row's value is
 /// kept under its keys, and travels in a profile, until the feature behind it lands.
-const LIVE: [&str; 55] = [
+const LIVE: [&str; 56] = [
     "general.default",
     "general.import",
     "quit.confirm",
@@ -785,6 +791,7 @@ const LIVE: [&str; 55] = [
     "tabs.close.after",
     "tabs.shortcuts",
     "tabs.address",
+    "toolbar.address",
     "search.engine",
     "search.suggest",
     "search.keywords",
@@ -845,7 +852,7 @@ pub fn default(key: &str) -> Value {
         "layout.cards" | "tabs.reading" | "tabs.sleep" | "tabs.address" | "float.leave"
         | "passwords.save" | "passwords.fill" | "shield" | "privacy.clickIDs" | "privacy.gpc"
         | "notifications.ask" | "links.peek" | "swipe.history" | "update.install"
-        | "links.show" | "float.flicks" | "autocorrect" => on,
+        | "links.show" | "float.flicks" | "autocorrect" | "toolbar.address" => on,
         "look" => "system".into(),
         "sidebar.position" => "left".into(),
         "glyph" => "letters".into(),
@@ -995,6 +1002,8 @@ pub fn applies(item: &Item, prefs: &dyn Prefs) -> bool {
         "pages.dusk" => text(prefs, "look") != "light",
         "sidebar.roomy" => sidebar && !flag(prefs, "sidebar.icons"),
         "sidebar.hides" | "layout.cards" | "pins.list" => sidebar,
+        // The bar says where the page is; the tab then keeps its title.
+        "tabs.address" => !flag(prefs, "toolbar.address"),
         "toolbar.left" => !sidebar,
         _ => true,
     }
@@ -1007,6 +1016,7 @@ pub fn needs(item: &Item) -> &'static str {
         "pages.dusk" => "Only while Tap isn't set to Light",
         "toolbar.left" => "Only with the tabs across the top",
         "sidebar.roomy" => "Only with titles in the column",
+        "tabs.address" => "Only without the address bar",
         _ => "Only with the tabs down a side",
     }
 }
@@ -1126,7 +1136,11 @@ mod tests {
         ] {
             assert!(!keys.contains(&key), "{key} must not travel");
         }
-        assert_eq!(keys.len(), 77, "Search's 78 less translate.pages");
+        assert_eq!(
+            keys.len(),
+            78,
+            "Search's 78 less translate.pages, plus Tap's toolbar.address"
+        );
     }
 
     #[test]
@@ -1170,6 +1184,10 @@ mod tests {
     #[test]
     fn rows_that_need_another_count_only_while_it_does() {
         let mut prefs = Map::default();
+        let address = item("tabs.address").expect("a row");
+        assert!(!applies(address, &prefs), "the bar is on by default");
+        prefs.set("toolbar.address", false.into());
+        assert!(applies(address, &prefs));
         let roomy = item("sidebar.roomy").expect("a row");
         let left = item("toolbar.left").expect("a row");
         assert!(!applies(roomy, &prefs) && applies(left, &prefs));

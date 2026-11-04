@@ -79,6 +79,10 @@ pub struct TabGroup {
     /// group saved without it is an open one.
     #[serde(default, deserialize_with = "lenient_bool")]
     pub collapsed: bool,
+    /// Its colour, one of [`crate::groups::COLOURS`]: Tap's own key (Search's groups have
+    /// none, and its reader passes over it), given when the group is made.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "color")]
+    pub colour: Option<String>,
 }
 
 /// The row of tabs and which one was in front; `active` is -1 for none.

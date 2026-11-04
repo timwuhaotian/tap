@@ -447,6 +447,7 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             collapsed: false,
+            colour: None,
         };
         let mut incoming = Incoming {
             sessions: vec![

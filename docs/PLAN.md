@@ -984,6 +984,89 @@ brought forward as a patch release.
   main thread (now off it). Not checked: a real Chrome (none on this Mac) and the
   macOS prompt for a real Search item.
 
+### 0.1.6 — The strip moves, groups have colours, and an address bar
+
+At the user's request (2026-11-04: "tab groups 应该支持animations/transition移动顺序；tab同理；
+tab group展开，收缩应该有对应的统一风格的过渡效果；tab栏下方增加永久展示的一个（可配置隐藏）address
+bar，跟随当前打开的tab更新对应的url等信息（SSL etc 行业标配）", then "直接推送main分支，发布patch
+版本", "tab group好像还不能删除, 右键菜单audit一遍", "tab group 本身应该支持类似chrome一样的自动
+分配不同的底色", "back, forward, refresh button跟着新增的地址栏，放到它的左侧（经典排版）").
+Part of M3's "tab drag within the strip" and the tab menu, brought forward as a patch
+release.
+
+- [x] **One motion for the whole row** (`motion.rs`, Search's `Motion`): every slot
+  of the strip (tab, heading, plus) is keyed by identity, not place, and springs to
+  where the layout puts it on `settle` (0.30, 0.86). Search's
+  `.animation(Motion.settle, value: tabs.map(\.id))`, run by hand since the strip
+  is one drawn view: a row whose slots changed (opened, closed, moved, folded) goes
+  there on the spring; a row whose slots didn't (a resize, the field widening the live
+  tab) goes at once, anything in flight kept in flight. A slot that leaves fades where
+  it stood, one that comes fades in. Reduce Motion: no motion. Settings › Reduce
+  animations in Low Power Mode, while the Mac saves power: a short damped spring
+  (0.12, 1.0) in place of Search's 0.16 s ease-out (`fixed-deviation`: one curve
+  family, one integrator). Frames come from the strip's `CADisplayLink`, running only
+  while something moves.
+- [x] **Tabs drag** (Search's `Carried`): pressed and moved 5 points, a tab follows
+  the hand exactly, lifted on its pill with Search's shadow, and passes a neighbour
+  once its leading edge crosses the neighbour's middle; the others glide aside. Let
+  go, it springs into its slot. Only within its own block (the pins, its group, the
+  tabs in no group): `Browser::move_tab(id, place)`. A drop into another group is
+  Move to Group's, below.
+- [x] **Groups drag**: a heading carries its group, heading and tabs, past the other
+  groups the same way (`Browser::move_group(from, to)`). `fixed-deviation` in feel,
+  not outcome: Search reorders a group by dropping it on another's heading
+  (`moveTabGroup`); here it moves along the row like a tab, so both read as one. A
+  click on a heading (or on the live tab) acts on release, so a press can become a
+  carry.
+- [x] **Fold and unfold** on the same spring: a folding group's tabs slide back under
+  its heading as they fade, and come out from under it when it opens.
+- [x] **Group colours** (Chrome's; Search's groups have none): each group wears one
+  of nine colours, given when it is made, one no group has yet or else the least used
+  (`groups::next_colour`, Chrome's `GetNextColor`), kept in the session as Tap's own
+  `color` key (Search's reader passes over it). Groups that come without one (Search's
+  sessions, an older Tap's) are given theirs in order; a Chrome session's group brings
+  its own (`SetTabGroupMetadata2`'s colour, read now). The heading is a chip of the
+  colour and a line of it runs under the group's tabs. Not yet: choosing a colour.
+- [x] **Address bar** (`address_bar.rs`; Tap's own, Search has none: its live tab is
+  the address): a 38-point bar under the strip, on by default, Settings › Appearance ›
+  Window › Show the address bar (`toolbar.address`, Tap's own key; 56 of 82 rows
+  live). Back, forward and reload move onto its left while it is up (the classic
+  layout), and back to the strip's end when it isn't. It follows the tab in front:
+  its address, the host in ink and the rest dim; a badge for the connection
+  (`tap_core::location::security`): lock for https whose every resource was (WebKit's
+  `hasOnlySecureContent`, a new `TabFields::SECURITY`), a slashed lock where some
+  came over plain http, a warning and "Not secure" on plain http, and marks for a
+  file, this Mac and Tap's own pages; the load's progress along its foot. A click on
+  the address opens the field there (⌘L too), the suggestions hanging under it; a
+  click on the badge says what the connection is and, for https, the certificate from
+  the page's `serverTrust`: issued to, issued by, valid until. With the bar up the
+  live tab keeps its title (the bar says where), so Show the address on the tab
+  you're on only applies with the bar off, and a click on the live tab no longer opens
+  the field there.
+- [x] **The right-click menus, audited against Search's** (`TabMenu`,
+  `GroupHeadingShared`): the heading's menu had only Collapse/Expand, so a group could
+  never go. Now Rename Group…, Collapse/Expand Group, Ungroup Tabs (`removeTabGroup`)
+  and Close Group (`closeTabGroup`: every tab, closed as ⌘W closes them and remembered
+  together, so one ⇧⌘T brings the group back whole, name, colour, fold and place). The
+  tab's menu gains Move to Group (New Group, each group, Remove from Group), Rename…
+  and Put to Sleep, and its close items are in Search's order (Close Tab, Close Other
+  Tabs, Close Tabs to the Right, Reopen). Renaming is a sheet, not Search's in-place
+  field (`fixed-deviation`: the strip draws its tabs, it has no field per tab). Still
+  waiting on their subsystems: Pin, Mute, Copy Clean Link, Site Information, spaces,
+  Split View, windows.
+- Checked: `cargo test` (tap-core 100, tap-import 31, tap-shell 53), clippy
+  `-D warnings`, nightly fmt. In a test world through the bench, real mouse events
+  sent through the window (`drag`, `mouseup`) and screenshots: two groups made came
+  out blue and red and kept them across a relaunch; 60 ms after a fold the groups to
+  the right were still gliding left and the folded tab fading, settled by 0.8 s; a tab
+  carried 120 points rode lifted over its neighbour, which slid aside, and sprang home
+  on release; a group carried by its heading moved past the other; a click on a folded
+  heading opened it on release; https://example.com showed the lock and its menu "Connection
+  is secure", http://neverssl.com the warning and progress; ⌘L opened the field in the
+  bar with its suggestions under it; Show the address bar off put the helm back at
+  the strip's end and the live tab said "Not secure — neverssl…" again. Found on the
+  way: a test run's events reach the window only while Tap is the active app.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -1418,6 +1501,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 |---|---|
 | 2026-11-04 | Full Rust rewrite that copies Search; pure Rust (translation dropped); full parity before release; Developer ID from the start; Bolt T icon; WebKit over Servo and egui; one plan doc (this file). |
 | 2026-11-04 | Credentials and the release flow are copied from Kil: Developer ID HAOTIAN WU (43VLF3KTFZ); notarization through the `asc` stored key; local release builds; one `releases/Tap-arm64.dmg` in git on `main`; the `latest.toml` updater; arm64 only; `scripts/bundle.sh` and `release.sh` instead of xtask release commands; no Homebrew cask, GitHub Pages or signed appcast. |
+| 2026-11-04 | At the user's request (0.1.6, §8): the strip animates every change on Search's `settle` spring, tabs and groups reorder by hand, groups wear Chrome's colours, the group and tab menus gain what Search's have and Tap can do (a group can now be ungrouped or closed), and an address bar of Tap's own (Search has none) sits under the strip with back, forward and reload on its left, on by default and hidden by Settings › Show the address bar. `objc2-core-graphics` and `objc2-quartz-core` (already in the lock through `objc2-app-kit`) become direct dependencies for fading and frames. |
 | 2026-11-04 | The bench came forward from M1 to check the browsing build by, and found three bugs no unit test could: `selectText:` ending the field's own editing session, focus handed out before the page was in the window, and shifted key equivalents that a real keyboard never matches (⇧⌘T must be "T"; ⌃⇧Tab is the back-tab character). |
 | 2026-11-04 | Browsing came before M1's foundations, at the user's request: the core model, runtime, window, tabs, field and web views are in (M2 progress). The bench moves up next: driving the UI with synthetic keystrokes is unreliable and can reach other apps. |
 | 2026-11-04 | The GitHub repo `timwuhaotian/tap` is public from day one, not only from 1.0. Nothing is downloadable until `releases/` is first committed at 1.0. |
@@ -1574,9 +1658,9 @@ added below this one as M1 starts.
 | Swipe.swift | 153 | w/swipe, a | M5 | todo |
 | Tab.swift | 3012 | c/tab, w/{config,page_view,tab_host,spi,relays} | M2 | partial |
 | TabBar.swift | 1771 | s/ui/tab_bar/* | M2→M3 | partial |
-| TabDrag.swift | 288 | c/tab_drag, s/ui/tab_drag | M3 | todo |
+| TabDrag.swift | 288 | c/tab_drag, s/ui/tab_drag | M3 | partial: reorder within the strip (`strip.rs`, 0.1.6); no drag out, no split bands |
 | TabGroup.swift | 32 | c/session (TabGroup), c/groups | M3 | ported |
-| TabGroups.swift | 233 | c/groups, s/strip (headings) | M3 | partial |
+| TabGroups.swift | 233 | c/groups, s/strip (headings), s/tabmenu | M3 | partial: fold, rename, ungroup, close, move, reorder by drag (0.1.6); no in-place rename, no colour picker |
 | TabOffers.swift | 146 | s/ui/tab_offers | M2 | todo |
 | TabShortcutHint.swift | 26 | s/ui/tab_shortcut_hint | M3 | todo |
 | TabSwitcher.swift | 631 | c/tab_switcher, s/ui/tab_switcher | M3 | todo |

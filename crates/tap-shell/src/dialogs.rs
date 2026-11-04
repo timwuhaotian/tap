@@ -236,6 +236,43 @@ pub fn prompt_panel(
     );
 }
 
+/// Asks for a name (Rename, Rename Group), on a sheet over the window, the current
+/// one in the field and selected so typing replaces it. `done` gets what was typed for
+/// Rename; Cancel says nothing. A test run records the question and answers nothing.
+pub fn ask_name(title: &str, detail: &str, current: &str, done: impl FnOnce(String) + 'static) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    if testing() {
+        ASKED.with_borrow_mut(|asked| asked.push(title.to_owned()));
+        return;
+    }
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(detail));
+    alert.addButtonWithTitle(&NSString::from_str("Rename"));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    let field = NSTextField::textFieldWithString(&NSString::from_str(current), mtm);
+    field.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(260.0, 24.0),
+    ));
+    alert.setAccessoryView(Some(&field));
+    alert.window().setInitialFirstResponder(Some(&field));
+    let once = Cell::new(Some(done));
+    let block = RcBlock::new(move |answer: NSModalResponse| {
+        if answer == NSAlertFirstButtonReturn
+            && let Some(done) = once.take()
+        {
+            done(field.stringValue().to_string());
+        }
+    });
+    match crate::window::main_window() {
+        Some(window) => alert.beginSheetModalForWindow_completionHandler(&window, Some(&block)),
+        None => block.call((alert.runModal(),)),
+    }
+}
+
 /// A file input: the system's panel, naming the site the file goes to.
 pub fn open_panel(
     web: &WKWebView,

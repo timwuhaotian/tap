@@ -30,6 +30,8 @@ pub struct Tab {
 pub struct Group {
     pub title: String,
     pub collapsed: bool,
+    /// Chrome's number for its colour (`TabGroupColorId`).
+    pub colour: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -207,16 +209,22 @@ impl Seen {
             }
             GROUP_METADATA => {
                 // A pickle: the token, the name, the colour, then (in newer files)
-                // folded, saved and the saved group's id. Only the name and the fold come
-                // over; groups here have no colour.
+                // folded, saved and the saved group's id. The name, the colour and the
+                // fold come over.
                 frame.skip(4);
                 if let (Some(high), Some(low), Some(title)) =
                     (frame.u64(), frame.u64(), frame.utf16())
                 {
-                    frame.skip(4);
+                    let colour = frame.i32().and_then(|c| u32::try_from(c).ok()).unwrap_or(0);
                     let collapsed = frame.i32().is_some_and(|c| c != 0);
-                    self.meta
-                        .insert(Token { high, low }, Group { title, collapsed });
+                    self.meta.insert(
+                        Token { high, low },
+                        Group {
+                            title,
+                            collapsed,
+                            colour,
+                        },
+                    );
                 }
             }
             _ => {}
@@ -259,12 +267,14 @@ impl Seen {
                 Group {
                     title: titled(&found.title, None),
                     collapsed: found.collapsed,
+                    colour: found.colour,
                 }
             } else {
                 unnamed += 1;
                 Group {
                     title: format!("Group {unnamed}"),
                     collapsed: false,
+                    colour: 0,
                 }
             };
             snapshot.groups.insert(token, group);
@@ -553,7 +563,8 @@ pub(crate) mod tests {
             read.groups[&token],
             Group {
                 title: "Work".into(),
-                collapsed: true
+                collapsed: true,
+                colour: 1
             }
         );
         assert_eq!(
@@ -599,7 +610,8 @@ pub(crate) mod tests {
             read.groups.get(&Token { high: 9, low: 9 }),
             Some(&Group {
                 title: "Short".into(),
-                collapsed: false
+                collapsed: false,
+                colour: 2
             })
         );
         // Ungrouped away, the group has no tabs and is gone with it.

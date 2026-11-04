@@ -130,6 +130,7 @@ pub fn apply(mtm: MainThreadMarker) {
     };
     let appearance = name.and_then(NSAppearance::appearanceNamed);
     NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
+    crate::window::bar_changed();
 }
 
 /// How tabs open and close, from Settings › Tabs and › Address bar commands.
