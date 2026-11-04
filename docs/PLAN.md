@@ -1166,6 +1166,23 @@ changes, no new features; the two noted deviations from Search's menu are delibe
   `-D warnings`, nightly fmt. Not checked by eye: light/dark feel of each wash and
   the VoiceOver pass over the badge menu.
 
+### Unreleased — A click on any tab puts the cursor in the field
+
+At the user's request (2026-11-05: "每当点击任何一个tab，甚至是new tab，自动focus/选中地址栏的url" —
+the cursor, not the pointer), a deliberate departure from Search's `DragStrip`:
+Search opens the field only on the live tab, and only while the address bar is away.
+
+- [x] **Any plain click opens the field** (`strip.rs`): a plain press on any tab —
+  the live one in either mode, or one behind — sets `Click::Edit`, so on release
+  `begin_editing(false)` opens the field on the tab now in front, its address selected
+  (`place_field`'s `makeFirstResponder`); a blank one opens the field empty with the
+  cursor in it, as the plus already does. The press still selects a tab behind at
+  once; a carry clears the click as before, and ⌘/⇧ picks and the unpick release keep
+  the page's keys.
+- Checked: `cargo test` (tap-core 107, tap-import 31, tap-shell 57), clippy
+  `-D warnings`, nightly fmt. Not checked by eye: a real click in a running app
+  (`scripts/bench click` over the tab row, then `field`).
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
