@@ -66,7 +66,7 @@ fn should_listen(test_run: bool, switched_on: bool) -> bool {
     test_run || switched_on
 }
 
-fn test_run() -> bool {
+pub(crate) fn test_run() -> bool {
     identity::world(std::env::var(identity::PROBE_ENV).ok().as_deref()).is_some()
 }
 
@@ -82,6 +82,8 @@ pub fn refresh() {
     } else {
         stop();
     }
+    // The tap command and the agents' skill follow the same switch.
+    crate::agents::refresh();
 }
 
 /// Starts listening, if this run should. Called once at launch; the switch moving is
