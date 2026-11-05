@@ -6,7 +6,10 @@
 //! that way whatever order its file holds them in; Tap keeps the tabs themselves in it, so
 //! ⌃Tab, ⌘1–9 and a run of links all walk what you see.
 
-use crate::session::{Entry, TabGroup};
+use crate::{
+    browser::TabId,
+    session::{Entry, TabGroup},
+};
 
 /// The colours a group can wear, in the order new groups are handed them: Chrome's
 /// nine, grey last rather than first.
@@ -142,6 +145,68 @@ pub fn kept(groups: &[TabGroup], entries: &[&Entry]) -> Vec<TabGroup> {
         .collect()
 }
 
+/// Where tabs let go over a group land (Search's `GroupDropTarget`): in `group`, before
+/// `member`, or after it when `after`; with no member, after the group's last tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupDrop {
+    pub group: String,
+    pub member: Option<TabId>,
+    pub after: bool,
+}
+
+/// A group as the row lays it out, for a drop: its heading's left and right edge, and
+/// each of its tabs' shown, in the row's order.
+pub struct GroupSpans<'a> {
+    pub group: &'a str,
+    pub collapsed: bool,
+    pub heading: (f64, f64),
+    pub members: Vec<(TabId, (f64, f64))>,
+}
+
+/// Search's `GroupDropFrames.resolve`, along the row: the group whose stretch (its
+/// heading through its last tab, the carried tabs left out) holds `x`. Over the
+/// heading, over a folded group or one with nothing else shown: its end. Otherwise
+/// before the first of its tabs whose middle is right of `x`, or after the last.
+#[must_use]
+pub fn drop_target(x: f64, groups: &[GroupSpans<'_>], carried: &[TabId]) -> Option<GroupDrop> {
+    groups.iter().find_map(|spans| {
+        let members: Vec<(TabId, (f64, f64))> = spans
+            .members
+            .iter()
+            .filter(|(id, _)| !carried.contains(id))
+            .copied()
+            .collect();
+        let end = members
+            .last()
+            .map_or(spans.heading.1, |(_, (_, right))| *right);
+        if x < spans.heading.0 || x >= end {
+            return None;
+        }
+        let whole = GroupDrop {
+            group: spans.group.to_owned(),
+            member: None,
+            after: false,
+        };
+        if x < spans.heading.1 || spans.collapsed || members.is_empty() {
+            return Some(whole);
+        }
+        let next = members
+            .iter()
+            .find(|(_, (left, right))| x < f64::midpoint(*left, *right));
+        Some(match next {
+            Some((id, _)) => GroupDrop {
+                member: Some(*id),
+                ..whole
+            },
+            None => GroupDrop {
+                member: members.last().map(|(id, _)| *id),
+                after: true,
+                ..whole
+            },
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +303,72 @@ mod tests {
         let groups = [group("A", false), group("B", false)];
         let b = entry(Some("B"));
         assert_eq!(kept(&groups, &[&b]), [group("B", false)]);
+    }
+
+    fn spans<'a>(group: &'a str, heading: (f64, f64), members: &[(u64, f64)]) -> GroupSpans<'a> {
+        GroupSpans {
+            group,
+            collapsed: false,
+            heading,
+            members: members
+                .iter()
+                .map(|(id, left)| (TabId(*id), (*left, left + 100.0)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn tabs_let_go_over_a_group_land_beside_the_tab_under_the_hand() {
+        // A's heading 100–150 and tabs 152–252, 254–354; B's heading 356–406, one tab.
+        let row = [
+            spans("A", (100.0, 150.0), &[(1, 152.0), (2, 254.0)]),
+            spans("B", (356.0, 406.0), &[(3, 408.0)]),
+        ];
+        let drop = |x, carried: &[TabId]| drop_target(x, &row, carried);
+        let a = |member: Option<u64>, after| {
+            Some(GroupDrop {
+                group: "A".to_owned(),
+                member: member.map(TabId),
+                after,
+            })
+        };
+        assert_eq!(
+            drop(120.0, &[]),
+            a(None, false),
+            "the heading: the group's end"
+        );
+        assert_eq!(
+            drop(180.0, &[]),
+            a(Some(1), false),
+            "left of a tab's middle"
+        );
+        assert_eq!(
+            drop(220.0, &[]),
+            a(Some(2), false),
+            "past it: before the next"
+        );
+        assert_eq!(
+            drop(330.0, &[]),
+            a(Some(2), true),
+            "past the last: after it"
+        );
+        assert_eq!(drop(99.0, &[]), None, "before the group");
+        assert_eq!(drop(355.0, &[]), None, "between groups");
+        assert_eq!(drop(600.0, &[]), None, "past every group");
+        assert_eq!(
+            drop(330.0, &[TabId(2)]),
+            None,
+            "a carried tab's own place is no group's"
+        );
+        assert_eq!(drop(420.0, &[]).map(|d| d.group), Some("B".to_owned()));
+        let folded = [GroupSpans {
+            collapsed: true,
+            ..spans("A", (100.0, 150.0), &[(1, 152.0)])
+        }];
+        assert_eq!(
+            drop_target(200.0, &folded, &[]),
+            a(None, false),
+            "a folded group takes it at its end"
+        );
     }
 }

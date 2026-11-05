@@ -568,8 +568,8 @@ BookmarksFile, Registrable.
   `History.swift` (identity, front-door credits, frecency, ranking, the known sites,
   completion, `history.json` in Search's format, capped at 2,000, passwords never
   kept), with Search's `HistoryRegression` cases as tests. The field offers three
-  places and a search, with the grey ending after the caret; ↓/↑ pick a row, Tab takes
-  the ending, Return goes to the picked row, the ending or the words, a click on a row
+  places and a search, with the grey ending after the caret; ↓/↑ pick a row, Tab (or → from
+  the end of the text) takes the ending, Return goes to the picked row, the ending or the words, a click on a row
   goes there. Nothing is completed while an input method composes (fixes Search's own
   gap, §3.5). Checked through the bench, including marked text (`field marked=true`,
   `unmark`). Not yet: bookmark and open-tab rows, address commands, engine suggestions,
@@ -1260,6 +1260,19 @@ chrome text carried its own hand-picked offset (`+7`/`17`, `+5.5`, `(ROW − 17)
   open both start on row 138, the lock's centre on the cap height, and the tab-row
   field on the title's rows 43–65.
 
+### Unreleased — → takes the grey ending too
+
+At the user's request (2026-11-05: "right arrow key 应该也可以实现自动完成补全不仅仅是tab按钮，比如地址栏的url自动完成").
+
+- [x] **→ takes the ending** (`browser.rs` `accept_ending_on_right`,
+  `right_takes_ending`; `window.rs` `moveRight:`): as Tab does, but only from the end
+  of the typed text with nothing selected, as Chrome and Safari do; anywhere else →
+  moves the caret as ever. Test: `right_arrow_takes_the_ending_only_from_the_end`.
+- [x] **Bench**: `fieldkey` takes `left` and `right`.
+- Checked: `cargo test` (tap-core 117, tap-import 31, tap-shell 68), clippy
+  `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
+  example.com, and ← then → moved the caret without taking it.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
@@ -1752,6 +1765,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-05 | At the user's request (New Tab should open many, and its cross should close it), new tabs pile up: +/⌘T and the "new tab" field command always open a fresh blank tab instead of reusing the blank one in front, and closing the only tab when it is already new closes the window as Search's `close` does (`fixed-deviation` from Search's `newTab` reusing a blank tab). Core asks with a new `Effect::CloseWindow`, carried out by the shell. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 | 2026-11-05 | The page-load path is audited end to end at the user's request and tightened in seven places (§10 "The page-load path"), all behaviour-preserving, as a PR like the one before it. |
 | 2026-11-05 | At the user's request, agents drive Tap through a `tap` CLI and a skill Tap installs, not MCP (§8 "Agents use Tap"): every agent here has a shell, a skill loads only when a task needs it, and one install in `~/.agents/skills` reaches them all. The bench switch is on by default (`fixed-deviation`). Delivered as a PR at the user's request. |
+| 2026-11-05 | At the user's request ("tab的拖拽应该是整个tab都可以拖拽 而不只是四周；…tab拖拽会容易跟着整个app拖拽…tab拖拽到group，自动可以加入这个group"): a press takes a strip slot by its whole column, the strip's full 52-point height and the gap to its right, not just its 30-point pill. The bands above, below and between the pills had been empty title bar, so a press meant for a tab dragged the window. Only the row's truly empty ends still move the window. Tabs carried over another group (heading or tabs) stop moving along their own block, the group shows a plate of its colour, and on release they join it beside the tab under the hand, or at its end over the heading or a folded group (Search's `GroupDropFrames.resolve` and `move(_:toGroup:)`: `groups::drop_target`, `Browser::drop_into_group`). Not done: dragging a grouped tab out among the loose tabs (Remove from Group does that). The bench's `row` now reports each slot's rect. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 
 ## Appendix A — Parity tracker
 
@@ -1899,7 +1913,7 @@ added below this one as M1 starts.
 | TabBar.swift | 1771 | s/ui/tab_bar/* | M2→M3 | partial |
 | TabDrag.swift | 288 | c/tab_drag, s/ui/tab_drag | M3 | partial: reorder within the strip (`strip.rs`, 0.1.6); no drag out, no split bands |
 | TabGroup.swift | 32 | c/session (TabGroup), c/groups | M3 | ported |
-| TabGroups.swift | 233 | c/groups, s/strip (headings), s/tabmenu | M3 | partial: fold, rename, ungroup, close, move, reorder by drag (0.1.6), colours chosen; no in-place rename |
+| TabGroups.swift | 233 | c/groups, s/strip (headings), s/tabmenu | M3 | partial: fold, rename, ungroup, close, move, reorder by drag (0.1.6), colours chosen, a tab dropped on a group joins it; no in-place rename |
 | TabOffers.swift | 146 | s/ui/tab_offers | M2 | todo |
 | TabShortcutHint.swift | 26 | s/ui/tab_shortcut_hint | M3 | todo |
 | TabSwitcher.swift | 631 | c/tab_switcher, s/ui/tab_switcher | M3 | todo |

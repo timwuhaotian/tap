@@ -38,8 +38,9 @@ with its own name and icon, and with fixes of its own.
 - **Tab groups** in colours of their own: a group's name heads its tabs on a chip of
   its colour (right-click it to choose another), and a click folds it away or opens it.
 - **Pick several tabs** with ⌘-click or ⇧-click: ⌘C copies their addresses, one to a
-  line, ⌘W closes them, and a drag moves them together. Drag a tab to reorder it, or a
-  group by its name; everything in the row glides where it goes.
+  line, ⌘W closes them, and a drag moves them together. Drag a tab to reorder it, onto
+  another group to join it, or a group by its name; everything in the row glides where
+  it goes, and a press anywhere in a tab's column takes the tab, not the window.
 - **Right-click a tab** to move it into a group (or a new one), rename it, reload,
   duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones
   to its right or all the others, or reopen a closed one; right-click a group's name to
@@ -108,7 +109,7 @@ with its own name and icon, and with fixes of its own.
 Everything else Search does, including:
 
 - Bookmarks, the History page, private windows, and tabs down the side, pinned tabs,
-  dragging a tab into another group or out of the window, Spaces and profiles, two pages side by side, peeking at
+  dragging a tab out of its group or out of the window, Spaces and profiles, two pages side by side, peeking at
   a link and the small window for links from other apps.
 - **Hiding any element for good**, and Search's fuller dark-pages engine (0.1.3
   darkens a light page's colours; it doesn't sample the page as Search does).

@@ -364,7 +364,11 @@ fn handle(request: &Value, reply: Reply) {
             });
             reply.say(out.unwrap_or_else(|| json!({ "error": "no browser" })));
         }
-        "row" => reply.say(rt::read(row).unwrap_or_default()),
+        "row" => {
+            let mut out = rt::read(row).unwrap_or_default();
+            out["rects"] = json!(crate::strip::slot_rects());
+            reply.say(out);
+        }
         "fold" => {
             // A click on a group's heading, by its place among the groups.
             let Some(place) = request.get("group").and_then(Value::as_u64) else {
@@ -710,17 +714,19 @@ fn handle(request: &Value, reply: Reply) {
         }
         "field" => field(request, reply),
         "fieldkey" => {
-            // A key the field's editor turns into a command (↓ ↑ Tab Return Esc), sent
+            // A key the field's editor turns into a command (↓ ↑ ← → Tab Return Esc), sent
             // through the same path, so the field's delegate answers it.
             let command =
                 match text("key").as_deref() {
                     Some("down") => sel!(moveDown:),
                     Some("up") => sel!(moveUp:),
+                    Some("left") => sel!(moveLeft:),
+                    Some("right") => sel!(moveRight:),
                     Some("tab") => sel!(insertTab:),
                     Some("return") => sel!(insertNewline:),
                     Some("escape") => sel!(cancelOperation:),
                     _ => return reply.say(
-                        json!({ "error": "fieldkey needs key: down, up, tab, return or escape" }),
+                        json!({ "error": "fieldkey needs key: down, up, left, right, tab, return or escape" }),
                     ),
                 };
             // Whichever field has the keyboard: the address field, or the find bar's.
