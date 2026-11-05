@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.5 — 2026-11-05
+
+Sites whose only icon is an SVG now show it in the tab.
+
+- **SVG site icons**: a page declaring only an SVG icon (e.g.
+  platform.qianwenai.com) gets its icon drawn in an isolated page-scripts-off view
+  and kept like any other icon, instead of leaving the tab blank.
+
 ## 0.2.4 — 2026-11-05
 
 Dragging a tab no longer drags the window; the empty row stops opening new tabs.

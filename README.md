@@ -31,7 +31,8 @@ with its own name and icon, and with fixes of its own.
   history as you type, with the rest drawn grey after the caret (Tab or → takes it), and
   leaves pinyin and kana alone while an input method is composing.
 - **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
-  ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon.
+  ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon
+  (including sites whose only icon is an SVG).
 - **An address bar** under the tabs, with back, forward and reload on its left: the
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
   the load's progress. Settings can hide it.
