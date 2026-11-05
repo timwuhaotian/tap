@@ -627,17 +627,21 @@ BookmarksFile, Registrable.
   sites kept awake, and Search's own typed check (an interim one until forms, M5).
 - [x] Site icons (2026-11-04), from `Icons.swift`: when a page finishes, Tap's own
   content world reads its `<link rel=…icon…>`; `tap_core::icons::rank` orders them as
-  Search does (a crisp 32–64 px icon, the touch icon, then `/favicon.ico`; the other
-  look's icon skipped) and the first one that is really a PNG, ICO, JPEG, GIF or WebP
-  (its header looked at first, 1 MB at most) is drawn into a 32-pixel square and kept as
-  `icons/<sha256 of its address>.png`. `icons/pages.json` is Search's index (site with
+  Search does (a crisp 32–64 px icon, the touch icon, an SVG one, then `/favicon.ico`;
+  the other look's icon skipped) and the first one that is really a PNG, ICO, JPEG,
+  GIF or WebP (its header looked at first, 1 MB at most) is drawn into a 32-pixel
+  square and kept as `icons/<sha256 of its address>.png`. An SVG icon (by its mime
+  or its first bytes, 256 KB at most) is drawn in an isolated web view of its own
+  (`tap-shell/src/svg.rs`, Search's `SVGIcons`: a non-persistent store, page scripts
+  off, only `about:blank` allowed in) and kept the same way. `icons/pages.json` is Search's index (site with
   its port, then page, then icon; 4000 pages, the oldest forgotten), so a tab restored
   from yesterday has its icon before its page, and a page with none borrows the nearest
   of its site's unless one host is several apps. 16 pt in the strip, left of the title,
   alone in a narrow tab. Checked in a test world: GitHub, Wikipedia and rust-lang.org
   kept and drawn, example.com (no icon) left plain, all three back after a relaunch.
-  Not yet: SVG and inline icons (Search draws them in a web view), the dark-look icon,
-  the letter before an icon arrives, icons in the field's rows.
+  SVG (2026-11-05): platform.qianwenai.com, whose only icon is an SVG, keeps and
+  draws it. Not yet: inline icons (Search reads the page's own `data:` address),
+  the dark-look icon, the letter before an icon arrives, icons in the field's rows.
 - [x] Links from other apps (2026-11-04), from `Links.swift`: `Info.plist` claims http
   and https, `public.html` and `public.xhtml` (what macOS asks before it lists a default
   web browser), and Search's Alternate list (PDF, pictures by name, plain text, JSON) for

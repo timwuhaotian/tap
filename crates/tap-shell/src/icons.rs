@@ -3,9 +3,10 @@
 //! and page through `tap_core::icons::Index` (Search's `icons/pages.json`).
 //!
 //! Only the raster kinds a tab needs are decoded in the app (PNG, ICO, JPEG, GIF, WebP),
-//! each looked at before it is opened. Not yet: SVG icons, which Search draws in a web
-//! view of its own; a second icon for the dark look; the letter shown before an icon
-//! arrives; icons in the field's rows.
+//! each looked at before it is opened. An SVG icon is drawn in an isolated web view of
+//! its own (`svg`, Search's `SVGIcons`) and kept the same way. Not yet: inline icons,
+//! a second icon for the dark look; the letter shown before an icon arrives; icons in
+//! the field's rows.
 
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, ptr, time::Duration};
 
@@ -27,7 +28,7 @@ use tap_core::{
     icons::{self, Declared, Index},
 };
 
-use crate::{rt, store, web};
+use crate::{rt, store, svg, web};
 
 /// The side an icon is kept at, in pixels: crisp at 16 points on a Retina screen.
 const SIDE: isize = 32;
@@ -133,19 +134,39 @@ fn try_next(tab: TabId, page: Url, candidates: Vec<String>, at: usize) {
         return try_next(tab, page, candidates, at + 1);
     };
     let block = RcBlock::new(
-        move |data: *mut NSData, _response: *mut NSURLResponse, _error: *mut NSError| {
-            // SAFETY: the session hands a valid object or null, for the call's length.
+        move |data: *mut NSData, response: *mut NSURLResponse, _error: *mut NSError| {
+            // SAFETY: the session hands valid objects or null, for the call's length.
             let bytes = unsafe { data.as_ref() }
                 .map(NSData::to_vec)
                 .unwrap_or_default();
+            // SAFETY: as above, for the response.
+            let mime = unsafe { response.as_ref() }
+                .and_then(NSURLResponse::MIMEType)
+                .map(|mime| mime.to_string());
             let (page, candidates, address) = (page.clone(), candidates.clone(), address.clone());
             // Back on the main thread, where images and the model live.
             dispatch2::DispatchQueue::main().exec_async(move || {
-                if !keep(&page, &address, &bytes) {
+                if keep(&page, &address, &bytes) {
+                    rt::dispatch(move |browser| browser.icon_arrived(tab));
+                    return;
+                }
+                // No raster in it, but an SVG by its mime or its first bytes:
+                // drawn in the isolated view, kept the same way (Search's
+                // `SVGIcons`). Anything else moves on to the next candidate.
+                if !svg::looks_like_svg(&bytes, mime.as_deref()) {
                     try_next(tab, page, candidates, at + 1);
                     return;
                 }
-                rt::dispatch(move |browser| browser.icon_arrived(tab));
+                // The outer block may run again, so the drawing takes its own.
+                let (page, candidates, address) =
+                    (page.clone(), candidates.clone(), address.clone());
+                svg::draw(bytes, move |png| {
+                    if png.as_deref().is_some_and(|png| keep(&page, &address, png)) {
+                        rt::dispatch(move |browser| browser.icon_arrived(tab));
+                    } else {
+                        try_next(tab, page, candidates, at + 1);
+                    }
+                });
             });
         },
     );
