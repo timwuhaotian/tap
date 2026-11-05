@@ -44,7 +44,7 @@ with its own name and icon, and with fixes of its own.
 - **Right-click a tab** to move it into a group (or a new one), rename it, reload,
   duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones
   to its right or all the others, or reopen a closed one; right-click a group's name to
-  rename, fold, ungroup or close it.
+  rename, fold, ungroup or close it. Right-click the empty tab row to reopen a closed tab.
 - **Settings** (⌘,), laid out as Search's, with only the settings that work — 56
   rows (Search's 81, less translation, plus the address bar's): where new tabs go, what closing one lands on, background links that wait,
   closing tabs you leave alone, a fresh window at launch, sleeping tabs, the search
@@ -104,8 +104,8 @@ Everything else Search does, including:
 - Bookmarks, the History page, private windows, and tabs down the side, pinned tabs,
   dragging a tab out of its group or out of the window, Spaces and profiles, two pages side by side, peeking at
   a link and the small window for links from other apps.
-- **Hiding any element for good**, and Search's fuller dark-pages engine (0.1.3
-  darkens a light page's colours; it doesn't sample the page as Search does).
+- **Hiding any element for good**, and Search's fuller dark-pages engine (Tap darkens a
+  light page's colours; it doesn't sample the page as Search does).
 - **A Passwords page** of Tap's own (Settings › Passwords › Open… shows them in
   Keychain Access meanwhile), **passkeys**, Apple's Passwords app under the sign-in
   box, and **Chrome extensions** on WebKit's own extension engine.

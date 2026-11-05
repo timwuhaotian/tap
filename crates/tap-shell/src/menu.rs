@@ -164,7 +164,9 @@ define_class!(
     unsafe impl NSApplicationDelegate for Commands {
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, app: &NSApplication) -> NSApplicationTerminateReply {
-            if QUITTING_NOW.get() || !confirms_quit() {
+            if !LAST_WINDOW_CLOSED.with(|last| {
+                confirm_termination(last, QUITTING_NOW.get(), confirms_quit())
+            }) {
                 return NSApplicationTerminateReply::TerminateNow;
             }
             let alert = NSAlert::new(self.mtm());
@@ -199,6 +201,7 @@ define_class!(
 
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn last_window_closed(&self, _app: &NSApplication) -> bool {
+            LAST_WINDOW_CLOSED.set(true);
             true
         }
     }
@@ -218,6 +221,16 @@ define_class!(
 thread_local! {
     /// Restart to Update, or the bench's quit: no question first.
     static QUITTING_NOW: Cell<bool> = const { Cell::new(false) };
+    static LAST_WINDOW_CLOSED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn confirm_termination(
+    last_window_closed: &Cell<bool>,
+    quitting_now: bool,
+    confirms: bool,
+) -> bool {
+    let automatic = last_window_closed.replace(false);
+    confirms && !quitting_now && !automatic
 }
 
 /// Settings › General › "Confirm before quitting", never on a test run.
@@ -472,4 +485,26 @@ pub fn main_menu(
         .submenu()
         .and_then(|menu| menu.itemWithTag(Command::CheckForUpdates as isize));
     (bar, update)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::confirm_termination;
+
+    #[test]
+    fn closing_the_last_window_does_not_confirm_and_does_not_mask_later_quits() {
+        let last_window_closed = Cell::new(true);
+        assert!(!confirm_termination(&last_window_closed, false, true));
+        assert!(confirm_termination(&last_window_closed, false, true));
+        assert!(confirm_termination(&last_window_closed, false, true));
+    }
+
+    #[test]
+    fn quitting_without_confirmation_respects_the_setting_and_forced_quit() {
+        let last_window_closed = Cell::new(false);
+        assert!(!confirm_termination(&last_window_closed, false, false));
+        assert!(!confirm_termination(&last_window_closed, true, true));
+    }
 }

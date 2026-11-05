@@ -1,6 +1,6 @@
 //! Right-click on the strip (Search's `TabMenu`, `TabBar.swift:1213`, and the group
-//! heading's menu, `TabGroups.swift`): a menu for the tab or heading under the pointer,
-//! built fresh at each click from its state, the find bar's way. Only what Tap can do
+//! heading's menu, `TabGroups.swift`): a menu for the tab, heading or empty row under
+//! the pointer, built fresh at each click from its state, the find bar's way. Only what Tap can do
 //! today: no Pin, Mute, spaces, Split View or windows, whose subsystems aren't here
 //! yet. The items act on the tab (or group) that was clicked, not the one in front, so
 //! its identity waits here while the menu is up; there is only ever one menu at a time.
@@ -192,6 +192,10 @@ pub fn tab_entries(state: &TabState, can_copy: bool) -> Vec<Entry> {
     entries
 }
 
+fn empty_entries(can_reopen: bool) -> Vec<Entry> {
+    vec![entry("Reopen Closed Tab", Command::TabReopen, can_reopen)]
+}
+
 /// A heading's Color submenu: Chrome's nine, each with its dot, the group's ticked
 /// (drawn into its dot: AppKit hides an item's own tick behind its image).
 fn colours(current: Option<&str>) -> Entry {
@@ -265,6 +269,19 @@ pub fn show_tab(
     GROUP.replace(None);
     let can_copy = rt::read(Browser::can_copy_selected).unwrap_or(false);
     pop_up(mtm, commands, event, view, &tab_entries(state, can_copy));
+}
+
+/// The empty row's menu, up under the pointer.
+pub fn show_empty(
+    mtm: MainThreadMarker,
+    commands: &Commands,
+    event: &NSEvent,
+    view: &NSView,
+    can_reopen: bool,
+) {
+    TARGET.set(None);
+    GROUP.replace(None);
+    pop_up(mtm, commands, event, view, &empty_entries(can_reopen));
 }
 
 /// The heading's menu, up under the pointer.
@@ -624,6 +641,16 @@ mod tests {
                 "Reopen Closed Tab",
             ]
         );
+    }
+
+    #[test]
+    fn the_empty_row_offers_reopen_only_when_a_closed_tab_exists() {
+        for can_reopen in [false, true] {
+            let entries = empty_entries(can_reopen);
+            assert_eq!(titles(&entries), ["Reopen Closed Tab"]);
+            assert_eq!(entries[0].tag, Some(Command::TabReopen as NSInteger));
+            assert_eq!(entries[0].enabled, can_reopen);
+        }
     }
 
     #[test]

@@ -400,16 +400,22 @@ fn column(rect: NSRect, height: f64) -> NSRect {
 /// overflows, the tabs laid out past `end` aren't drawn, and the end past the plus
 /// stays title bar rather than a tab nobody can see.
 fn slot_at(layout: &Layout, point: NSPoint, height: f64) -> Option<usize> {
-    layout.tabs.iter().position(|rect| {
-        let shown = rect.size.width.min(layout.end - rect.origin.x);
+    layout.tabs.iter().rposition(|rect| {
+        let shown = (rect.size.width + palette::TAB_GAP).min(layout.end - rect.origin.x);
         shown > 0.0
             && contains(
-                column(
-                    NSRect::new(rect.origin, NSSize::new(shown, rect.size.height)),
-                    height,
-                ),
+                NSRect::new(NSPoint::new(rect.origin.x, 0.0), NSSize::new(shown, height)),
                 point,
             )
+    })
+}
+
+fn drawn_rect(flock: &Flock<Key>, key: &Key, rect: NSRect) -> NSRect {
+    flock.place(key).map_or(rect, |place| {
+        NSRect::new(
+            NSPoint::new(place.x, rect.origin.y),
+            NSSize::new(place.width, rect.size.height),
+        )
     })
 }
 
@@ -794,8 +800,7 @@ impl Strip {
         .flatten()
     }
 
-    /// Right-click: a tab's menu, or its heading's (see `tabmenu`). Clicking
-    /// nowhere in particular offers nothing, as it does nothing.
+    /// Right-click: a tab's, heading's or the empty row's menu.
     fn context_menu(&self, event: &NSEvent) {
         match self.spot_at(event) {
             Spot::Tab(index) | Spot::Close(index) => {
@@ -864,7 +869,11 @@ impl Strip {
                     colour.as_deref(),
                 );
             }
-            Spot::Plus | Spot::Nothing => {}
+            Spot::Nothing => {
+                let can_reopen = rt::read(Browser::can_reopen).unwrap_or(false);
+                tabmenu::show_empty(self.mtm(), &self.ivars().commands, event, self, can_reopen);
+            }
+            Spot::Plus => {}
         }
     }
 
@@ -874,12 +883,22 @@ impl Strip {
         let height = self.bounds().size.height;
         self.with_layout(|browser, row, layout| {
             let editing = editing_slot(browser, row, bar);
+            let flock = self.ivars().flock.borrow();
+            let layout = Layout {
+                tabs: row
+                    .iter()
+                    .zip(&layout.tabs)
+                    .map(|(item, rect)| drawn_rect(&flock, &key_of(browser, item), *rect))
+                    .collect(),
+                plus: drawn_rect(&flock, &Key::Plus, layout.plus),
+                end: layout.end,
+            };
             // The plus first: where it is pinned it stands over the run of
             // tabs, and it, not the tab beneath, takes the click.
             if contains(column(layout.plus, height), point) {
                 return Spot::Plus;
             }
-            let Some(slot) = slot_at(layout, point, height) else {
+            let Some(slot) = slot_at(&layout, point, height) else {
                 return Spot::Nothing;
             };
             let (Some(item), Some(rect)) = (row.get(slot), layout.tabs.get(slot)) else {
@@ -1031,7 +1050,11 @@ impl Strip {
                 row.iter()
                     .zip(&layout.tabs)
                     .find(|(item, _)| key_of(browser, item) == *key)
-                    .map(|(_, rect)| rect.origin.x)
+                    .map(|(_, rect)| {
+                        drawn_rect(&self.ivars().flock.borrow(), key, *rect)
+                            .origin
+                            .x
+                    })
             })
             .flatten();
         let Some(origin) = origin else { return };
@@ -1498,15 +1521,10 @@ impl Strip {
             let flock = self.ivars().flock.borrow();
             // Where a slot is drawn this frame: its springs' place, at the row's height.
             let at = |key: &Key, rect: NSRect| -> (NSRect, f64) {
-                flock.place(key).map_or((rect, 1.0), |p| {
-                    (
-                        NSRect::new(
-                            NSPoint::new(p.x, rect.origin.y),
-                            NSSize::new(p.width, rect.size.height),
-                        ),
-                        p.alpha,
-                    )
-                })
+                (
+                    drawn_rect(&flock, key, rect),
+                    flock.place(key).map_or(1.0, |p| p.alpha),
+                )
             };
             // The tabs stop where the layout says (before a pinned plus);
             // the state is restored below, before the plus itself is drawn.
@@ -2399,6 +2417,34 @@ mod tests {
                 palette::STRIP
             ),
             Some(cut)
+        );
+    }
+
+    #[test]
+    fn a_moving_tab_is_hit_where_it_is_drawn_not_where_it_will_land() {
+        let key = Key::Tab(TabId(1));
+        let mut flock = Flock::default();
+        let aim = |x| Aim {
+            key: key.clone(),
+            x,
+            width: 100.0,
+            from: None,
+        };
+        flock.aim(&[aim(100.0)], false, Curve::SETTLE, |_| None);
+        flock.aim(&[aim(300.0)], true, Curve::SETTLE, |_| None);
+        let target = NSRect::new(NSPoint::new(300.0, 11.0), NSSize::new(100.0, 30.0));
+        let row = Layout {
+            tabs: vec![drawn_rect(&flock, &key, target)],
+            plus: NSRect::ZERO,
+            end: 500.0,
+        };
+        assert_eq!(
+            slot_at(&row, NSPoint::new(150.0, 1.0), palette::STRIP),
+            Some(0)
+        );
+        assert_eq!(
+            slot_at(&row, NSPoint::new(350.0, 1.0), palette::STRIP),
+            None
         );
     }
 

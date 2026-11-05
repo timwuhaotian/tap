@@ -1625,9 +1625,8 @@ a version number. Versions are for maintainers: `Cargo.toml`, Info.plist,
   - team `43VLF3KTFZ`
   - `com.apple.developer.web-browser.public-key-credential`
 
-  Without the profile it signs with `packaging/tap.entitlements`, and passkeys report
-  that they're unavailable. `release.sh` then refuses to run unless
-  `TAP_ALLOW_NO_PASSKEYS=1`, which is Search's rule (`build.sh:288-291`).
+  Without the profile it signs with `packaging/tap.entitlements`, as Kil does with its
+  ordinary entitlements, and warns that passkeys are unavailable.
 - **Entitlements.** Hardened runtime, no sandbox. Camera, audio-input and location,
   Search's set.
 
@@ -1773,6 +1772,8 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-05 | At the user's request, agents drive Tap through a `tap` CLI and a skill Tap installs, not MCP (§8 "Agents use Tap"): every agent here has a shell, a skill loads only when a task needs it, and one install in `~/.agents/skills` reaches them all. The bench switch is on by default (`fixed-deviation`). Delivered as a PR at the user's request. |
 | 2026-11-05 | At the user's request ("tab的拖拽应该是整个tab都可以拖拽 而不只是四周；…tab拖拽会容易跟着整个app拖拽…tab拖拽到group，自动可以加入这个group"): a press takes a strip slot by its whole column, the strip's full 52-point height and the gap to its right, not just its 30-point pill. The bands above, below and between the pills had been empty title bar, so a press meant for a tab dragged the window. Only the row's truly empty ends still move the window. Tabs carried over another group (heading or tabs) stop moving along their own block, the group shows a plate of its colour, and on release they join it beside the tab under the hand, or at its end over the heading or a folded group (Search's `GroupDropFrames.resolve` and `move(_:toGroup:)`: `groups::drop_target`, `Browser::drop_into_group`). Not done: dragging a grouped tab out among the loose tabs (Remove from Group does that). The bench's `row` now reports each slot's rect. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
 | 2026-11-05 | `cargo xtask check`, step 1 of §12's release steps, is built. The plan had required it since 0.1.0, but it never existed, so releases ran without it. It checks the icon PNGs against the SVG and the parity tracker against Search, and on its first run it found `SearchProfile.swift` at 355 lines in the reference build, not 350. xtask no longer depends on `tap-shell`: it is quick to build, and `search-profile` is gone. |
+| 2026-11-05 | At the user's request, strip hit testing follows the tabs' animated positions so dragging a moving tab does not move the window, and the empty row's context menu offers Reopen Closed Tab. Closing a blank tab beside pins or groups leaves the window open; closing the last window quits without the explicit-quit confirmation, avoiding a repeated prompt after Cancel. |
+| 2026-11-05 | At the user's request, releases use the ordinary entitlements by default when the optional passkey profile is absent, like Kil and Kiled; the script warns that passkeys are unavailable rather than stopping. |
 
 ## Appendix A — Parity tracker
 

@@ -4,14 +4,13 @@
 # releases.
 # Usage: scripts/release.sh   → releases/Tap-arm64.dmg (+ .sha256, latest.toml), replacing the
 # last release: downloads are always the latest, and the version is only for us (Info.plist,
-# git history) and for the app's updater, which reads latest.toml. Until 1.0, releases/ stays out
-# of git (.gitignore); this proves the pipeline.
+# git history) and for the app's updater, which reads latest.toml. releases/ is tracked in git.
 #
 # Signing: TAP_SIGN_IDENTITY, default "Developer ID Application" (the one such identity in the
 # login keychain).
 # Passkeys: with packaging/Tap.provisionprofile present, it is embedded and the app is signed with
-# packaging/tap.passkeys.entitlements; without it, the release refuses unless
-# TAP_ALLOW_NO_PASSKEYS=1, and passkeys stay unavailable in that build.
+# packaging/tap.passkeys.entitlements; without it, the regular entitlements are used and
+# passkeys stay unavailable in that build.
 # Notarization credentials, the first of:
 #   TAP_NOTARY_KEY, TAP_NOTARY_KEY_ID, TAP_NOTARY_ISSUER   an App Store Connect API key
 #   TAP_NOTARY_PROFILE   a `xcrun notarytool store-credentials` profile
@@ -53,12 +52,9 @@ if ! grep -qF "($link)" README.md; then
 fi
 if [ -f "$profile" ]; then
   entitlements="packaging/tap.passkeys.entitlements"
-elif [ "${TAP_ALLOW_NO_PASSKEYS:-}" = 1 ]; then
-  entitlements="packaging/tap.entitlements"
 else
-  echo "no $profile: passkeys would not work in this build." >&2
-  echo "Add the Developer ID provisioning profile, or set TAP_ALLOW_NO_PASSKEYS=1." >&2
-  exit 1
+  entitlements="packaging/tap.entitlements"
+  echo "no $profile: passkeys will not work in this build." >&2
 fi
 
 app="$(sh scripts/bundle.sh release | tail -n 1)"

@@ -1312,7 +1312,9 @@ impl Browser {
             self.behaviour.new_after_last && !others.clone().any(|t| t.entry.pin.is_none());
         let only_kept = beside_groups && !kept(closing) && !others.any(|t| !kept(t));
         let internal = closing.is_internal();
-        if self.tabs.len() == 1 || (self.active == Some(id) && (only_pins || only_kept)) {
+        if self.tabs.len() == 1
+            || (!closing.is_blank() && self.active == Some(id) && (only_pins || only_kept))
+        {
             if closing.is_blank() {
                 self.effects.push(Effect::CloseWindow);
                 return;
@@ -3930,6 +3932,28 @@ mod tests {
         );
         assert_eq!(browser.groups().len(), 2, "the groups stay as they were");
         assert!(browser.editing().is_some());
+    }
+
+    #[test]
+    fn closing_a_blank_tab_beside_groups_or_pins_keeps_the_window() {
+        let shape = r#"{"tabs":[{"url":"https://pin.com","title":"P","pin":"P"}],"active":0}"#;
+        let mut grouped_browser = with_pages(&["https://group.com"]);
+        let grouped_tab = grouped_browser.active().expect("a tab");
+        grouped_browser.add_group(grouped_tab);
+        for mut browser in [
+            grouped_browser,
+            Browser::restored(session::Shape::decode(shape.as_bytes()).expect("decodes")),
+        ] {
+            browser.behaviour.new_after_last = true;
+            let blank = browser.open(None, true, None);
+            let remaining = browser.tabs().len() - 1;
+            browser.take_effects();
+            browser.close(blank);
+            assert_eq!(browser.tabs().len(), remaining);
+            let effects = browser.take_effects();
+            assert!(effects.contains(&Effect::Discard(blank)));
+            assert!(!effects.contains(&Effect::CloseWindow));
+        }
     }
 
     #[test]

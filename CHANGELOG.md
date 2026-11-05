@@ -7,6 +7,18 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.3 — 2026-11-05
+
+Moving tabs stay under the hand; ⌘W closes without surprises; the empty row brings tabs back.
+
+- **Drag a moving tab where you see it**: clicks follow the tab's animated position,
+  including the gap beside it, instead of taking its destination for the tab and
+  sometimes dragging the window.
+- **⌘W closes without surprises**: closing a blank tab beside pins or groups keeps the
+  window open; closing the last window quits without the explicit-quit confirmation.
+- **Right-click the empty tab row to reopen a closed tab**: Reopen Closed Tab is
+  available when there is a closed tab to bring back.
+
 ## 0.2.2 — 2026-11-05
 
 Bring things over from Chrome or Safari; the chrome lines up; → completes the address.
