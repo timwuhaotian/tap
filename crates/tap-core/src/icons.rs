@@ -100,11 +100,13 @@ pub fn ident(icon: &str) -> String {
 }
 
 /// The icons to try for a page, best first (Search's `rank`): a crisp one around 32–64
-/// pixels, then the touch icon, then the file at the root every site has had since 1999.
-/// An icon for the other look is skipped; one for this look comes first.
+/// pixels, then the touch icon, then an SVG one, then the file at the root every site
+/// has had since 1999. An icon for the other look is skipped; one for this look comes
+/// first.
 ///
-/// Not yet: SVG and inline icons, which Search draws in a web view of their own rather
-/// than in the app.
+/// Not yet: inline icons, which Search reads from the page's own `data:` address.
+/// An SVG here is only ordered; it is drawn in the shell's isolated web view, never
+/// decoded in the app.
 #[must_use]
 pub fn rank(declared: &[Declared], page: &Url, dark: bool) -> Vec<String> {
     let mut scored: Vec<(String, i32)> = Vec::new();
@@ -121,9 +123,6 @@ pub fn rank(declared: &[Declared], page: &Url, dark: bool) -> Vec<String> {
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
             });
-        if svg {
-            continue;
-        }
         let meant = look(&entry.media);
         if meant == if dark { Look::Light } else { Look::Dark } {
             continue;
@@ -146,6 +145,11 @@ pub fn rank(declared: &[Declared], page: &Url, dark: bool) -> Vec<String> {
                 128..260 => 42,
                 _ => 20,
             };
+        }
+        // An SVG draws at any size, so its declared size says nothing: it sits
+        // between the touch icon and the small rasters (Search's `rank`).
+        if svg {
+            score = 35;
         }
         if meant != Look::Any {
             score += 40;
@@ -336,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn a_crisp_icon_first_then_the_touch_icon_then_the_root_file() {
+    fn a_crisp_icon_first_then_the_touch_icon_then_svg_then_the_root_file() {
         let page = url("https://example.com/docs");
         let list = rank(
             &[
@@ -354,6 +358,7 @@ mod tests {
             [
                 "https://example.com/32.png",
                 "https://example.com/touch.png",
+                "https://example.com/i.svg",
                 "https://example.com/16.png",
                 "https://example.com/favicon.ico"
             ]

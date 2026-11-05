@@ -34,6 +34,7 @@ mod signin;
 mod sleep;
 mod store;
 mod strip;
+mod svg;
 mod tabmenu;
 mod update;
 mod update_window;
