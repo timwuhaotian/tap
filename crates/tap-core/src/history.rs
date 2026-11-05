@@ -1,6 +1,6 @@
 //! Where you have been, so the field can finish the address for you. A port of Search's
 //! `History.swift`: the same file (`history.json`, a list of visits), the same identity
-//! for a page, the same ranking, the same completion.
+//! for a page and the same completion. Visited URL paths and queries also match.
 //!
 //! Not yet: Search's move of pre-1.0.4 "front door" credits (`rehomeCredits`), which only
 //! files written by Search before 1.0.4 need, and the history list (⌘Y).
@@ -188,9 +188,8 @@ fn rank(key: &str, needle: &str) -> Option<f64> {
     if needle.chars().count() >= 2 && host.contains(needle) {
         return Some(2.0);
     }
-    // Deliberately no match on the path: "blog" turning up six articles from three
-    // sites is not an answer to anything.
-    None
+    // Path and query matches are useful, but less specific than a host match.
+    (needle.chars().count() >= 2 && key.contains(needle)).then_some(1.0)
 }
 
 /// Somewhere to start on the first day. Ranked below anything visited, and dropped the
@@ -895,6 +894,68 @@ mod tests {
             None,
             "a name the app merely knows waits for a second letter"
         );
+    }
+
+    #[test]
+    fn url_fragments_find_saved_pages_after_reload_without_inline_completion() {
+        let mut history = History::default();
+        history.record(
+            "https://example.test/articles/the-pair?view=full",
+            "Pair",
+            NOW,
+        );
+        let (history, _) = History::load(&history.encode(NOW)).expect("decodes");
+
+        for typed in ["the-pair", "PAIR?VIEW", "view=full"] {
+            let options = history.suggestions(typed, 3, NOW);
+            assert_eq!(options.len(), 1, "{typed}");
+            assert_eq!(
+                options[0].url,
+                "https://example.test/articles/the-pair?view=full"
+            );
+            assert_eq!(options[0].kind, Kind::Visited);
+            assert_eq!(History::completion(typed, &options), None);
+        }
+        assert!(
+            history
+                .suggestions("p", 50, NOW)
+                .iter()
+                .all(|s| s.kind != Kind::Visited)
+        );
+    }
+
+    #[test]
+    fn url_fragment_matches_order_by_visits_and_recency() {
+        let mut history = History::default();
+        history.record(
+            "https://old.example.test/the-pair",
+            "Old",
+            NOW - 90.0 * 86_400.0,
+        );
+        history.record("https://fresh.example.test/the-pair", "Fresh", NOW);
+        for _ in 0..3 {
+            history.record("https://often.example.test/the-pair", "Often", NOW);
+        }
+        let (history, _) = History::load(&history.encode(NOW)).expect("decodes");
+        let titles: Vec<_> = history
+            .suggestions("the-pair", 3, NOW)
+            .into_iter()
+            .map(|s| s.title)
+            .collect();
+        assert_eq!(titles, ["Often", "Fresh", "Old"]);
+    }
+
+    #[test]
+    fn host_matches_rank_above_url_fragment_matches_at_equal_frecency() {
+        let mut history = History::default();
+        history.record("https://the-pair.example.test/", "Host", NOW);
+        history.record("https://other.example.test/the-pair", "Path", NOW);
+        let titles: Vec<_> = history
+            .suggestions("the-pair", 3, NOW)
+            .into_iter()
+            .map(|s| s.title)
+            .collect();
+        assert_eq!(titles, ["Host", "Path"]);
     }
 
     #[test]

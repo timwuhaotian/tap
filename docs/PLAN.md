@@ -575,9 +575,10 @@ BookmarksFile, Registrable.
   completion, `history.json` in Search's format, capped at 2,000, passwords never
   kept), with Search's `HistoryRegression` cases as tests. The field offers three
   places and a search, with the grey ending after the caret; ↓/↑ pick a row, Tab (or → from
-  the end of the text) takes the ending, Return goes to the picked row, the ending or the words, a click on a row
-  goes there. Nothing is completed while an input method composes (fixes Search's own
-  gap, §3.5). Checked through the bench, including marked text (`field marked=true`,
+  the end of the text) takes the ending, Return goes to the picked row or the words as
+  typed, and a click on a row goes there. URL path and query fragments also find visited
+  pages (`fixed-deviation` from Search's host-only ranking). Nothing is completed while
+  an input method composes (fixes Search's own gap, §3.5). Checked through the bench, including marked text (`field marked=true`,
   `unmark`). Not yet: bookmark and open-tab rows, address commands, engine suggestions,
   site search, the History page (⌘Y), per-profile files, and moving pre-1.0.4 Search
   front-door credits (`rehomeCredits`).
@@ -1770,6 +1771,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-05 | At the user's request, strip hit testing follows the tabs' animated positions so dragging a moving tab does not move the window, and the empty row's context menu offers Reopen Closed Tab. Closing a blank tab beside pins or groups leaves the window open; closing the last window quits without the explicit-quit confirmation, avoiding a repeated prompt after Cancel. |
 | 2026-11-05 | At the user's request, releases follow Kil and Kiled's signing flow directly, using the regular entitlements without a provisioning-profile check. |
 | 2026-11-05 | At the user's request ("拖拽tab会导致整个app移动的问题还是没解决"), the window is made unmovable and only the strip's truly empty ends move it, through `performWindowDragWithEvent`: AppKit's titlebar drag had been stealing presses in the row's top band even with the slot hit areas fixed, because `mouseDownCanMoveWindow` is not consulted there. The double-click on the empty row that opened a new tab (Search's `DragStrip.onDoubleClick`) is removed at the same request; the empty row is the titlebar, not a button. |
+| 2026-11-06 | At the user's request, Return uses the typed address unless a suggestion was explicitly picked; Tab or → accepts an inline ending. History offers match URL paths and queries as well as hosts (`fixed-deviation`). The offers card and tab strip use native spring transitions, respecting Reduce Motion and light motion. |
 
 ## Appendix A — Parity tracker
 

@@ -1111,7 +1111,8 @@ impl Strip {
             if let (Some(to), Carried::Tabs { run, .. }) = (drop, grab.what) {
                 rt::dispatch(move |browser| browser.drop_into_group(&run, &to));
             }
-            // Let go: the slot springs from the hand into its place.
+            // Let go: use the current motion preference even if the row never reordered.
+            self.ivars().flock.borrow_mut().release(Curve::settle_now());
             self.animate();
             self.setNeedsDisplay(true);
             return;

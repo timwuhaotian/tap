@@ -7,6 +7,21 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.7 — 2026-11-06
+
+### Fixed
+
+- **Return uses what you typed**: an inline address ending is only accepted with Tab
+  or →; Return still opens a suggestion you explicitly picked.
+- **Find visited URLs by their path**: a fragment such as `the-pair` now brings up
+  matching pages from history, including matches in query strings.
+
+### Changed
+
+- **Smoother browser chrome**: address suggestions fade in and their selection glides;
+  tabs and groups slide gently as they enter or leave. Reduce Motion and the light
+  motion setting keep these transitions restrained.
+
 ## 0.2.6 — 2026-11-05
 
 ### Fixed

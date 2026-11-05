@@ -27,9 +27,10 @@ with its own name and icon, and with fixes of its own.
 
 ## What it does now
 
-- **One field** for addresses and searches. It finishes addresses from your own
-  history as you type, with the rest drawn grey after the caret (Tab or → takes it), and
-  leaves pinyin and kana alone while an input method is composing.
+- **One field** for addresses and searches. It suggests your visited pages by host,
+  path or query, with a grey ending after the caret when it can finish an address.
+  Tab or → takes the ending; Return uses what you typed unless you pick a suggestion.
+  Pinyin and kana are left alone while an input method is composing.
 - **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
   ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon
   (including sites whose only icon is an SVG); blank cached icons are fetched again.
@@ -42,7 +43,8 @@ with its own name and icon, and with fixes of its own.
   line, ⌘W closes them, and a drag moves them together. Drag a tab to reorder it, onto
   another group to join it, or a group by its name; everything in the row glides where
   it goes, and a press anywhere in a tab's column takes the tab, not the window — the
-  window itself is moved only by the row's empty ends.
+  window itself is moved only by the row's empty ends. Tabs and address suggestions
+  move on gentle springs, with less motion when your Mac asks for it.
 - **Right-click a tab** to move it into a group (or a new one), rename it, reload,
   duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones
   to its right or all the others, or reopen a closed one; right-click a group's name to

@@ -733,14 +733,14 @@ fn offers_geometry(views: &Views, editing: &Editing) -> (f64, f64, f64) {
 /// up with the live tab's pill, or with the floating field's card.
 fn place_offers(views: &Views, view: &View) {
     let Some(editing) = view.editing.as_ref().filter(|_| view_has_field(views)) else {
-        views.offers.setHidden(true);
+        views.offers.hide();
         views.suggest.setHidden(true);
         views.ending.setHidden(true);
         return;
     };
     let (x, top, width) = offers_geometry(views, editing);
     if editing.offers.is_empty() {
-        views.offers.setHidden(true);
+        views.offers.hide();
     } else {
         views.offers.setFrame(NSRect::new(
             NSPoint::new(x - offers::SHADOW, top - offers::SHADOW),
@@ -749,8 +749,7 @@ fn place_offers(views: &Views, view: &View) {
                 offers::height(editing.offers.len()),
             ),
         ));
-        views.offers.setHidden(false);
-        views.offers.setNeedsDisplay(true);
+        views.offers.show(editing.picked);
     }
     place_suggest(views, view, x, top, width);
 

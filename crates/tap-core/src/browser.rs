@@ -1703,12 +1703,8 @@ impl Browser {
             }
             return;
         }
-        // The row the arrow keys chose, or else the address the field was finishing,
-        // or else where the words go.
         let target = if let Some(row) = editing.picked.and_then(|i| editing.offers.get(i)) {
             Url::parse(&row.url)
-        } else if let Some(ending) = &editing.ending {
-            address::url(&format!("{}{ending}", editing.typed))
         } else {
             self.destination(&editing.typed)
         };
@@ -3494,7 +3490,7 @@ mod tests {
     }
 
     #[test]
-    fn typing_offers_places_and_finishes_the_address_return_goes_there() {
+    fn return_searches_the_typed_words_without_accepting_the_ending() {
         let mut browser = visited(&[
             ("https://github.com/timwuhaotian/tap", "tap"),
             ("https://example.com/", "Example"),
@@ -3511,11 +3507,60 @@ mod tests {
             editing.offers.first().map(|o| o.key.as_str()),
             Some("github.com")
         );
+        let expected = browser.destination("git").expect("search");
+        browser.submit();
+        assert_eq!(browser.active_tab().map(Tab::url), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn return_opens_the_typed_address_without_accepting_the_ending() {
+        let mut browser = visited(&[("https://example.com/", "Example")]);
+        browser.begin_editing(false);
+        browser.set_typed("example.co", false);
+        assert_eq!(
+            browser.editing().and_then(|e| e.ending.as_deref()),
+            Some("m")
+        );
         browser.submit();
         assert_eq!(
             browser.active_tab().map(Tab::url),
-            Some("https://github.com")
+            Some("https://example.co")
         );
+    }
+
+    #[test]
+    fn return_after_leaving_a_picked_row_uses_the_typed_words() {
+        let mut browser = visited(&[("https://example.com/", "Example")]);
+        browser.begin_editing(false);
+        browser.set_typed("ex", false);
+        browser.pick(true);
+        browser.pick(false);
+        assert_eq!(browser.editing().and_then(|e| e.picked), None);
+        let expected = browser.destination("ex").expect("search");
+        browser.submit();
+        assert_eq!(browser.active_tab().map(Tab::url), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn return_opens_a_history_suggestion_picked_by_arrow() {
+        let mut browser = visited(&[("https://example.com/", "Example")]);
+        browser.begin_editing(false);
+        browser.set_typed("ex", false);
+        let expected = browser.editing().expect("editing").offers[0].url.clone();
+        browser.pick(true);
+        browser.submit();
+        assert_eq!(browser.active_tab().map(Tab::url), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn return_opens_a_suggestion_picked_by_pointer() {
+        let mut browser = visited(&[("https://example.com/", "Example")]);
+        browser.begin_editing(false);
+        browser.set_typed("ex", false);
+        let expected = browser.editing().expect("editing").offers[0].url.clone();
+        browser.pick_row(0);
+        browser.submit();
+        assert_eq!(browser.active_tab().map(Tab::url), Some(expected.as_str()));
     }
 
     #[test]
@@ -3575,6 +3620,11 @@ mod tests {
         );
         assert!(browser.take_dirty().0.contains(BrowserFields::RETYPED));
         assert!(!browser.accept_ending(), "nothing left to take");
+        browser.submit();
+        assert_eq!(
+            browser.active_tab().map(Tab::url),
+            Some("https://example.com")
+        );
     }
 
     #[test]
@@ -3599,6 +3649,12 @@ mod tests {
             "mid-text: no take"
         );
         assert_eq!(browser.editing().map(|e| e.typed.as_str()), Some("ex"));
+        assert!(browser.accept_ending_on_right((2, 0), 2));
+        browser.submit();
+        assert_eq!(
+            browser.active_tab().map(Tab::url),
+            Some("https://example.com")
+        );
     }
 
     #[test]

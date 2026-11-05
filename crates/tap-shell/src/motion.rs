@@ -198,7 +198,7 @@ pub struct Aim<K> {
     pub key: K,
     pub x: f64,
     pub width: f64,
-    /// Where it comes from if it is new; `None` fades it in where it stands.
+    /// Where it comes from if it is new; `None` uses the row's short entrance.
     pub from: Option<f64>,
 }
 
@@ -248,7 +248,7 @@ impl<K: Eq + Hash + Clone> Flock<K> {
     /// The row as it should stand. `reordered`: its slots came, went or changed order, and
     /// it goes there on `curve`. Otherwise (a resize, the field widening a tab) each
     /// slot is put where it belongs at once, whatever is in flight kept in flight. A
-    /// slot that left goes towards `to(key)`, or fades where it stood.
+    /// slot that left goes towards `to(key)`, or makes the row's short exit.
     pub fn aim(
         &mut self,
         aims: &[Aim<K>],
@@ -279,7 +279,14 @@ impl<K: Eq + Hash + Clone> Flock<K> {
             }
             let fresh = if animate {
                 Mover {
-                    x: Spring::from(aim.from.unwrap_or(aim.x), aim.x),
+                    x: Spring::from(
+                        aim.from.unwrap_or(if curve == Curve::LIGHT {
+                            aim.x
+                        } else {
+                            aim.x - 8.0
+                        }),
+                        aim.x,
+                    ),
                     width: Spring::at(aim.width),
                     alpha: Spring::from(0.0, 1.0),
                     leaving: false,
@@ -299,9 +306,14 @@ impl<K: Eq + Hash + Clone> Flock<K> {
                 if !seen.contains(key) && !mover.leaving {
                     mover.leaving = true;
                     mover.alpha.target = 0.0;
-                    if let Some(x) = to(key) {
-                        mover.x.target = x;
-                    }
+                    mover.x.target = if let Some(x) = to(key) {
+                        x
+                    } else if curve == Curve::LIGHT {
+                        mover.x.velocity = 0.0;
+                        mover.x.value
+                    } else {
+                        mover.x.value - 8.0
+                    };
                 }
             }
         } else {
@@ -309,6 +321,15 @@ impl<K: Eq + Hash + Clone> Flock<K> {
                 .retain(|key, mover| seen.contains(key) || mover.leaving);
         }
         if curve == Curve::Instant && reordered {
+            self.movers.retain(|_, mover| !mover.leaving);
+            self.movers.values_mut().for_each(Mover::rest);
+        }
+    }
+
+    /// Choose the curve for a released slot, including an immediate return when needed.
+    pub fn release(&mut self, curve: Curve) {
+        self.curve = curve;
+        if curve == Curve::Instant {
             self.movers.retain(|_, mover| !mover.leaving);
             self.movers.values_mut().for_each(Mover::rest);
         }
@@ -474,6 +495,53 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_slots_enter_and_leave_with_a_short_slide() {
+        let mut flock = Flock::default();
+        flock.aim(&[aim("a", 0.0)], false, Curve::SETTLE, |_| None);
+        flock.aim(
+            &[aim("a", 0.0), aim("b", 100.0)],
+            true,
+            Curve::SETTLE,
+            |_| None,
+        );
+        assert_eq!(flock.place(&"b").map(|p| (p.x, p.alpha)), Some((92.0, 0.0)));
+        run(&mut flock, 1.0);
+        flock.aim(&[aim("a", 0.0)], true, Curve::SETTLE, |_| None);
+        flock.step(1.0 / 60.0);
+        let leaving = flock.place(&"b").expect("leaving slot");
+        assert!(leaving.x < 100.0 && leaving.alpha < 1.0);
+        run(&mut flock, 1.0);
+        assert!(flock.place(&"b").is_none());
+    }
+
+    #[test]
+    fn light_motion_fades_ordinary_slots_without_sliding() {
+        let mut flock = Flock::default();
+        flock.aim(&[aim("a", 0.0)], false, Curve::LIGHT, |_| None);
+        flock.aim(
+            &[aim("a", 0.0), aim("b", 100.0)],
+            true,
+            Curve::LIGHT,
+            |_| None,
+        );
+        assert_eq!(
+            flock.place(&"b").map(|p| (p.x, p.alpha)),
+            Some((100.0, 0.0))
+        );
+        flock.aim(
+            &[aim("a", 0.0), aim("b", 200.0)],
+            true,
+            Curve::SETTLE,
+            |_| None,
+        );
+        flock.step(1.0 / 60.0);
+        let x = flock.place(&"b").expect("b").x;
+        flock.aim(&[aim("a", 0.0)], true, Curve::LIGHT, |_| None);
+        flock.step(1.0 / 60.0);
+        assert_eq!(flock.place(&"b").map(|p| p.x), Some(x));
+    }
+
+    #[test]
     fn a_glide_goes_from_nought_to_one_and_stops() {
         let mut glide = Glide::default();
         assert!(
@@ -509,6 +577,20 @@ mod tests {
         flock.aim(&[aim("b", 0.0)], true, Curve::Instant, |_| None);
         assert_eq!(flock.place(&"b").map(|p| p.x), Some(0.0));
         assert!(flock.place(&"a").is_none() && !flock.moving());
+    }
+
+    #[test]
+    fn releasing_a_held_slot_respects_the_current_curve() {
+        let mut flock = Flock::default();
+        flock.aim(&[aim("a", 0.0)], false, Curve::SETTLE, |_| None);
+        flock.hold(&"a", 40.0);
+        flock.release(Curve::Instant);
+        assert_eq!(flock.place(&"a").map(|p| p.x), Some(0.0));
+        assert!(!flock.moving());
+        flock.hold(&"a", 40.0);
+        flock.release(Curve::LIGHT);
+        run(&mut flock, 0.25);
+        assert!(flock.place(&"a").expect("a").x < 1.0);
     }
 
     #[test]

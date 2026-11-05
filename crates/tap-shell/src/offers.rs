@@ -2,17 +2,27 @@
 //! first, and a search last when what is typed can't be a place. The row the arrow keys
 //! picked is on the live tab's grey. A click goes there.
 
+use std::{
+    cell::{Cell, RefCell},
+    time::Instant,
+};
+
 use objc2::{
-    MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::NSObject,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::NSObject, sel,
 };
 use objc2_app_kit::{NSEvent, NSResponder, NSView};
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize};
+use objc2_quartz_core::CADisplayLink;
 use tap_core::{
     browser::Browser,
     history::{Kind, Suggestion},
 };
 
-use crate::{palette, rt};
+use crate::{
+    motion::{self, Curve, Glide},
+    palette, rt,
+};
 
 /// A row's height, and the card's padding around the rows.
 pub const ROW: f64 = 34.0;
@@ -28,10 +38,48 @@ pub fn height(rows: usize) -> f64 {
     rows * ROW + 2.0 * PAD + 2.0 * SHADOW
 }
 
+#[derive(Default)]
+struct Selection {
+    picked: Option<usize>,
+    from: f64,
+    to: f64,
+    glide: Glide,
+}
+
+impl Selection {
+    fn position(&self) -> f64 {
+        self.from + (self.to - self.from) * self.glide.progress().clamp(0.0, 1.0)
+    }
+
+    fn pick(&mut self, picked: Option<usize>, curve: Curve) -> bool {
+        if picked == self.picked {
+            return false;
+        }
+        let from = self.position();
+        #[allow(clippy::cast_precision_loss)] // a handful of rows
+        let to = picked.unwrap_or_default() as f64;
+        let slide = self.picked.is_some() && picked.is_some() && curve != Curve::LIGHT;
+        self.from = if slide { from } else { to };
+        self.to = to;
+        self.picked = picked;
+        self.glide
+            .restart(if slide { curve } else { Curve::Instant });
+        slide && curve != Curve::Instant
+    }
+}
+
+pub struct Ivars {
+    selection: RefCell<Selection>,
+    entrance: RefCell<Glide>,
+    link: RefCell<Option<Retained<CADisplayLink>>>,
+    last_frame: Cell<Option<Instant>>,
+}
+
 define_class!(
     #[unsafe(super(NSView, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "TapOffers"]
+    #[ivars = Ivars]
     pub struct Offers;
 
     impl Offers {
@@ -43,6 +91,11 @@ define_class!(
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             self.draw();
+        }
+
+        #[unsafe(method(offersFrame:))]
+        fn offers_frame(&self, _link: &CADisplayLink) {
+            self.frame_tick();
         }
 
         #[unsafe(method(acceptsFirstMouse:))]
@@ -82,9 +135,93 @@ define_class!(
 
 impl Offers {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(());
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            selection: RefCell::new(Selection::default()),
+            entrance: RefCell::new(Glide::default()),
+            link: RefCell::new(None),
+            last_frame: Cell::new(None),
+        });
         // SAFETY: NSView's designated initialiser.
         unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
+    }
+
+    pub fn show(&self, picked: Option<usize>) {
+        let curve = Curve::settle_now();
+        let opening = self.isHidden();
+        if opening {
+            *self.ivars().selection.borrow_mut() = Selection::default();
+            self.ivars().entrance.borrow_mut().restart(curve);
+            self.setAlphaValue(self.ivars().entrance.borrow().progress().clamp(0.0, 1.0));
+            self.setHidden(false);
+        }
+        let moving = self.ivars().selection.borrow_mut().pick(picked, curve);
+        if (opening && curve != Curve::Instant) || moving {
+            self.animate();
+        }
+        self.setNeedsDisplay(true);
+    }
+
+    pub fn hide(&self) {
+        self.setHidden(true);
+        if let Some(link) = self.ivars().link.borrow().as_ref() {
+            link.setPaused(true);
+        }
+        self.ivars().last_frame.set(None);
+        self.setAlphaValue(1.0);
+    }
+
+    fn animate(&self) {
+        let mut slot = self.ivars().link.borrow_mut();
+        if slot.is_none() {
+            let target: &NSObject = self.as_ref();
+            // SAFETY: offersFrame: is this view's own display-link callback.
+            let link = unsafe { self.displayLinkWithTarget_selector(target, sel!(offersFrame:)) };
+            // SAFETY: the main run loop and common modes keep frames running during input.
+            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
+            link.setPaused(true);
+            *slot = Some(link);
+        }
+        if let Some(link) = slot.as_ref()
+            && link.isPaused()
+        {
+            self.ivars().last_frame.set(None);
+            link.setPaused(false);
+        }
+    }
+
+    fn frame_tick(&self) {
+        let now = Instant::now();
+        let dt = self
+            .ivars()
+            .last_frame
+            .replace(Some(now))
+            .map_or(1.0 / 60.0, |then| {
+                now.duration_since(then).as_secs_f64().min(1.0 / 15.0)
+            });
+        if motion::reduced() {
+            self.ivars().entrance.borrow_mut().restart(Curve::Instant);
+            self.ivars()
+                .selection
+                .borrow_mut()
+                .glide
+                .restart(Curve::Instant);
+        } else if motion::light() {
+            self.ivars()
+                .selection
+                .borrow_mut()
+                .glide
+                .restart(Curve::Instant);
+        }
+        let entering = self.ivars().entrance.borrow_mut().step(dt);
+        let moving = self.ivars().selection.borrow_mut().glide.step(dt);
+        self.setAlphaValue(self.ivars().entrance.borrow().progress().clamp(0.0, 1.0));
+        self.setNeedsDisplay(true);
+        if !entering && !moving {
+            if let Some(link) = self.ivars().link.borrow().as_ref() {
+                link.setPaused(true);
+            }
+            self.ivars().last_frame.set(None);
+        }
     }
 
     fn card(&self) -> NSRect {
@@ -136,15 +273,19 @@ impl Offers {
             palette::card_path(self.card()).fill();
         });
 
-        for (row, offer) in offers.iter().enumerate() {
-            let rect = self.row_rect(row);
-            if picked == Some(row) {
-                palette::WASH.resolve(dark).setFill();
-                let plate = palette::pill_path(rect);
-                plate.fill();
-                palette::stroke_hairline(&plate, dark);
+        if let Some(row) = picked.filter(|&row| row < offers.len()) {
+            let mut rect = self.row_rect(row);
+            let selection = self.ivars().selection.borrow();
+            if selection.picked == Some(row) {
+                rect.origin.y = self.card().origin.y + PAD + selection.position() * ROW;
             }
-            draw_row(offer, rect, dark);
+            palette::WASH.resolve(dark).setFill();
+            let plate = palette::pill_path(rect);
+            plate.fill();
+            palette::stroke_hairline(&plate, dark);
+        }
+        for (row, offer) in offers.iter().enumerate() {
+            draw_row(offer, self.row_rect(row), dark);
         }
     }
 }
@@ -168,5 +309,42 @@ fn draw_row(offer: &Suggestion, rect: NSRect, dark: bool) {
             palette::text_line(line, main_width + 10.0, 0.0),
             &palette::MUTED.resolve(dark),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_slides_and_retargets_from_its_current_position() {
+        let mut selection = Selection::default();
+        assert!(!selection.pick(Some(0), Curve::SETTLE));
+        assert!(selection.pick(Some(2), Curve::SETTLE));
+        selection.glide.step(1.0 / 60.0);
+        let in_between = selection.position();
+        assert!(in_between > 0.0 && in_between < 2.0);
+        assert!(selection.pick(Some(1), Curve::SETTLE));
+        assert!((selection.position() - in_between).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn reduced_and_light_motion_put_selection_in_place() {
+        for curve in [Curve::Instant, Curve::LIGHT] {
+            let mut selection = Selection::default();
+            selection.pick(Some(0), curve);
+            assert!(!selection.pick(Some(2), curve));
+            assert!((selection.position() - 2.0).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn clearing_and_reselecting_does_not_slide_from_an_old_row() {
+        let mut selection = Selection::default();
+        selection.pick(Some(0), Curve::SETTLE);
+        selection.pick(Some(2), Curve::SETTLE);
+        selection.pick(None, Curve::SETTLE);
+        assert!(!selection.pick(Some(1), Curve::SETTLE));
+        assert!((selection.position() - 1.0).abs() < f64::EPSILON);
     }
 }
