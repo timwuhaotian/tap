@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.6 — 2026-11-05
+
+### Fixed
+
+- **Missing tab icons**: sites such as platform.qianwenai.com recover from blank
+  cached icons, and newly fetched icons no longer disappear while being saved.
+
 ## 0.2.5 — 2026-11-05
 
 Sites whose only icon is an SVG now show it in the tab.

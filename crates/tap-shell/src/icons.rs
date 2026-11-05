@@ -54,7 +54,7 @@ const PROBE: &str = r"(() => {
 
 thread_local! {
     static INDEX: RefCell<Option<Index>> = const { RefCell::new(None) };
-    static IMAGES: RefCell<HashMap<String, Option<Retained<NSImage>>>> = RefCell::new(HashMap::new());
+    static IMAGES: RefCell<HashMap<String, Retained<NSImage>>> = RefCell::new(HashMap::new());
 }
 
 fn folder() -> PathBuf {
@@ -79,18 +79,31 @@ fn with_index<R>(f: impl FnOnce(&mut Index) -> R) -> R {
 pub fn image_for(address: &str) -> Option<Retained<NSImage>> {
     let url = Url::parse(address)?;
     let name = with_index(|index| index.lookup(&url, false))?;
-    IMAGES.with_borrow_mut(|images| {
-        images
-            .entry(name.clone())
-            .or_insert_with(|| {
-                let path = folder().join(format!("{name}.png"));
-                NSImage::initWithContentsOfFile(
-                    NSImage::alloc(),
-                    &NSString::from_str(&path.display().to_string()),
-                )
-            })
-            .clone()
+    image_named(&name)
+}
+
+fn image_named(name: &str) -> Option<Retained<NSImage>> {
+    cached_image(name, || {
+        let path = folder().join(format!("{name}.png"));
+        let image = NSImage::initWithContentsOfFile(
+            NSImage::alloc(),
+            &NSString::from_str(&path.display().to_string()),
+        )?;
+        square_png(&image)?;
+        Some(image)
     })
+}
+
+fn cached_image(
+    name: &str,
+    load: impl FnOnce() -> Option<Retained<NSImage>>,
+) -> Option<Retained<NSImage>> {
+    if let Some(image) = IMAGES.with_borrow(|images| images.get(name).cloned()) {
+        return Some(image);
+    }
+    let image = load()?;
+    IMAGES.with_borrow_mut(|images| images.insert(name.to_owned(), image.clone()));
+    Some(image)
 }
 
 /// A page finished loading in the tab: it is asked what it declares, and the best icon
@@ -113,6 +126,7 @@ pub fn fetch(tab: TabId, web: &WKWebView) {
         && std::fs::metadata(folder().join(format!("{name}.png")))
             .and_then(|kept| kept.modified())
             .is_ok_and(|kept| kept.elapsed().is_ok_and(|age| age < FRESH))
+        && image_named(&name).is_some()
     {
         return;
     }
@@ -198,12 +212,13 @@ fn keep(page: &Url, address: &str, bytes: &[u8]) -> bool {
     let Some(png) = square_png(&image) else {
         return false;
     };
+    let Some(kept) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&png)) else {
+        return false;
+    };
     let name = icons::ident(address);
-    // The PNG goes through the writer thread. If that write were to fail, the index
-    // would still name it; the next visit's freshness check finds no file and asks
-    // again, so the miss heals itself.
+    // The strip can draw immediately, without racing the asynchronous disk write.
+    IMAGES.with_borrow_mut(|images| images.insert(name.clone(), kept));
     store::save(folder().join(format!("{name}.png")), png);
-    IMAGES.with_borrow_mut(|images| images.remove(&name));
     let data = with_index(|index| {
         index.record(page, &name, false, history::now());
         index.encode()
@@ -247,8 +262,60 @@ fn square_png(image: &NSImage) -> Option<Vec<u8>> {
         );
         context.flushGraphics();
         NSGraphicsContext::restoreGraphicsState_class();
+        let data = rep.bitmapData();
+        let row = usize::try_from(rep.bytesPerRow()).ok()?;
+        if data.is_null() || row < SIDE as usize * 4 {
+            return None;
+        }
+        let pixels = std::slice::from_raw_parts(data, row * SIDE as usize);
+        if !(0..SIDE as usize).any(|y| (0..SIDE as usize).any(|x| pixels[y * row + x * 4 + 3] != 0))
+        {
+            return None;
+        }
         let png = rep
             .representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())?;
         Some(png.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_with_alpha(alpha: u8) -> Retained<NSImage> {
+        // SAFETY: AppKit allocates the bitmap's planes with the stated dimensions.
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(), ptr::null_mut(), SIDE, SIDE, 8, 4, true, false,
+                NSDeviceRGBColorSpace, 0, 0,
+            )
+        }.unwrap();
+        let row = usize::try_from(rep.bytesPerRow()).unwrap();
+        // SAFETY: the allocated bitmap has SIDE rows of row bytes.
+        let pixels =
+            unsafe { std::slice::from_raw_parts_mut(rep.bitmapData(), row * SIDE as usize) };
+        pixels.fill(0);
+        pixels[3] = alpha;
+        // SAFETY: the bitmap is allocated and the PNG properties are empty.
+        let png = unsafe {
+            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+        }
+        .unwrap();
+        NSImage::initWithData(NSImage::alloc(), &png).unwrap()
+    }
+
+    #[test]
+    fn transparent_images_are_not_icons() {
+        assert!(square_png(&image_with_alpha(0)).is_none());
+        assert!(square_png(&image_with_alpha(255)).is_some());
+    }
+
+    #[test]
+    fn a_cache_miss_does_not_hide_a_later_image() {
+        let name = "test-cache-miss";
+        assert!(cached_image(name, || None).is_none());
+        assert!(cached_image(name, || Some(image_with_alpha(255))).is_some());
+        assert!(cached_image(name, || None).is_some());
+        IMAGES.with_borrow_mut(|images| images.remove(name));
     }
 }
