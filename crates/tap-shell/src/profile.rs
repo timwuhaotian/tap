@@ -1,6 +1,5 @@
-//! File › Export Tap Profile… and Import Profile… (Search #845's `exportProfile` and
-//! `takeSearchProfile`): this profile as one offline file for your other Mac, and one
-//! brought in from it. The format is `tap_import::profile`'s; this is the Mac side:
+//! File › Export Tap Profile… and Import Profile…: this profile as one offline file for
+//! your other Mac, and one brought in from it. The format is `tap_import::profile`'s; this is the Mac side:
 //! panels, the share picker, and where what comes in goes.
 //!
 //! What comes in: the tabs of each of its spaces with their groups, folded or not, after
@@ -23,10 +22,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSDate, NSDateFormatter, NSLocale, NSRectEdge, NSString, NSURL};
 use tap_core::history;
-use tap_import::{
-    from_search,
-    profile::{self, Incoming, Outgoing},
-};
+use tap_import::profile::{self, Incoming, Outgoing};
 
 use crate::{oslog, prefs, rt, settings, store, update, window};
 
@@ -80,33 +76,6 @@ pub fn write(path: &Path) -> Result<Written, String> {
     })
 }
 
-/// Search's own profile on this Mac (its store folder and its settings), written to `path`
-/// as a Tap profile file for File › Import Profile… to bring in: `cargo xtask
-/// search-profile`. Read only: Search's files and settings are left as they are.
-///
-/// # Errors
-/// If there is no Search store here, or the file can't be packed or written.
-pub fn write_from_search(path: &Path) -> Result<String, String> {
-    let home = std::env::var_os("HOME").ok_or("no home folder")?;
-    let folder = PathBuf::from(home)
-        .join("Library/Application Support")
-        .join(from_search::FOLDER);
-    let prefs = prefs::for_profile_of(from_search::DOMAIN);
-    let settings = prefs.len();
-    let bytes = from_search::pack(&folder, prefs, &update::current(), history::now())?;
-    let temporary = path.with_extension("partial");
-    std::fs::write(&temporary, &bytes)
-        .and_then(|()| std::fs::rename(&temporary, path))
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    let incoming = profile::unpack(&bytes).map_err(|p| p.said())?;
-    Ok(format!(
-        "{} tabs in {} groups, {} bookmarks, {settings} settings",
-        incoming.tabs(),
-        incoming.groups(),
-        incoming.bookmarks.len()
-    ))
-}
-
 /// What an import brought in, and the sentence that says so.
 pub struct Taken {
     pub tabs: usize,
@@ -123,17 +92,15 @@ pub struct Taken {
 /// # Errors
 /// If it isn't a profile this version reads, said as it is to be shown.
 pub fn take(path: &Path) -> Result<Taken, String> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("searchprofile"))
+    {
+        return Err("Search profiles are not supported".to_owned());
+    }
     let bytes = std::fs::read(path).map_err(|_| "That file couldn't be read".to_owned())?;
     let incoming = profile::unpack(&bytes).map_err(|p| p.said())?;
-    let from = if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case(profile::SEARCH_EXTENSION))
-    {
-        "the Search profile"
-    } else {
-        "the profile"
-    };
-    Ok(bring_in(incoming, from))
+    Ok(bring_in(incoming, "the profile"))
 }
 
 /// What came in, from a file or from another browser here (`bring`), merged into this
@@ -234,7 +201,7 @@ pub fn is_profile_path(path: &str) -> bool {
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     match extension.as_str() {
-        profile::EXTENSION | profile::SEARCH_EXTENSION => true,
+        profile::EXTENSION => true,
         "zip" => std::fs::read(path).is_ok_and(|bytes| profile::is_profile(&bytes)),
         _ => false,
     }
@@ -329,16 +296,15 @@ fn share(path: &Path) {
     picker.showRelativeToRect_ofView_preferredEdge(anchor, &view, edge);
 }
 
-/// File › Import Profile…: a Tap or Search profile, or a `.zip` that is one.
+/// File › Import Profile…: a Tap profile, or a `.zip` that is one.
 pub fn choose_and_import() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
     let panel = NSOpenPanel::openPanel(mtm);
-    #[allow(deprecated)] // the extensions are Tap's and Search's own: no system type covers them
+    #[allow(deprecated)] // Tap's extension has no system type
     panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[
         NSString::from_str(profile::EXTENSION),
-        NSString::from_str(profile::SEARCH_EXTENSION),
         NSString::from_str("zip"),
     ])));
     panel.setAllowsOtherFileTypes(true);
@@ -346,7 +312,7 @@ pub fn choose_and_import() {
     panel.setCanChooseDirectories(false);
     panel.setPrompt(Some(&NSString::from_str("Bring In")));
     panel.setMessage(Some(&NSString::from_str(
-        "A profile exported from Tap (.tapprofile) or from Search (.searchprofile).",
+        "A profile exported from Tap (.tapprofile).",
     )));
     if panel.runModal() != NSModalResponseOK {
         return;

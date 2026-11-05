@@ -24,6 +24,11 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-05 import decision:** Browser imports offer only Chrome and Safari. Safari
+uses an export ZIP chosen by the user; Tap profile backups and password CSV imports
+remain. Search discovery, profile-file registration, and lazy Search password access
+are removed. Earlier descriptions of those imports below are historical, not current.
+
 ### Made by the user (not to be revisited)
 
 | Topic | Decision |

@@ -7,6 +7,10 @@ Info.plist.
 
 ## Unreleased
 
+- **Import from Chrome or Safari**: Chrome profiles are detected locally; Safari data
+  comes from an export ZIP. Tap backups and password CSV files remain supported.
+  Search and other browser-specific import sources are no longer offered.
+
 - **The chrome's text and pills line up**: a group's chip is as tall as a tab; the
   address no longer jumps above the lock when you click into it, nor a tab's title
   when it opens for editing; every line of chrome text is centred by one rule.

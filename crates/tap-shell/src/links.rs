@@ -7,7 +7,7 @@
 //! wait for it. A test run takes nothing from outside: a link from another app would
 //! bring its window forward. The bench hands links in itself (`link`).
 //!
-//! A profile file (`.tapprofile`, `.searchprofile`) opened from the Finder, or from
+//! A profile file (`.tapprofile`) opened from the Finder, or from
 //! AirDrop on the other Mac, is brought in rather than shown (`profile::open_file`).
 //!
 //! Not yet: Search's small window for links (Little), the Dock menu's New Window, and

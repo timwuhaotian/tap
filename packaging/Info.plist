@@ -93,7 +93,7 @@
 				<string>public.json</string>
 			</array>
 		</dict>
-		<!-- A profile exported from Tap or Search (#845): opened from the Finder, or from
+		<!-- A profile exported from Tap: opened from the Finder, or from
 		     AirDrop on the other Mac, it is brought in (crates/tap-shell/src/profile.rs). -->
 		<dict>
 			<key>CFBundleTypeName</key>
@@ -105,18 +105,6 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.timwuhaotian.tap.profile</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>Search Profile</string>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>LSHandlerRank</key>
-			<string>Alternate</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>app.search.profile</string>
 			</array>
 		</dict>
 	</array>
@@ -136,26 +124,6 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>tapprofile</string>
-				</array>
-			</dict>
-		</dict>
-	</array>
-	<key>UTImportedTypeDeclarations</key>
-	<array>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>app.search.profile</string>
-			<key>UTTypeDescription</key>
-			<string>Search Profile</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>searchprofile</string>
 				</array>
 			</dict>
 		</dict>

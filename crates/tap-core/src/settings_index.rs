@@ -3,10 +3,9 @@
 //! Settings draws each page's groups from this list, its find field filters the same
 //! list, and a profile export carries exactly the keys these rows read and write (plus
 //! the per-site shield pauses), so a setting can't travel that Settings doesn't show
-//! (docs/PLAN.md §7). Keys and their values are Search's own, so a Search profile's
-//! settings read as they are.
+//! (docs/PLAN.md §7). Keys and their values follow Search's own.
 //!
-//! Every row of Search's is here but translation's (dropped, docs/PLAN.md §2). Each says
+//! The rows follow Search's, except for dropped or unsupported features. Each says
 //! whether Tap acts on it yet ([`live`]). Settings shows only the rows Tap acts on; the
 //! others' values are still kept under their keys and still travel in a profile, ready
 //! for the feature behind them.
@@ -444,9 +443,9 @@ pub fn items() -> &'static [Item] {
                 .words(&["default browser"])
                 .control(Control::Buttons(&[("default", "Make default")])),
             Item::new("general.import", "browser", "square.and.arrow.down.on.square", "Bring things over",
-                "Passwords, bookmarks, history and open tabs from another browser on this Mac, or from a file")
-                .more("Search, Chrome, Arc, Brave, Edge, Dia and the other Chromium browsers are found on their own, and nothing in them changes; macOS asks once for a browser's key before its passwords come. Export writes an offline file you can AirDrop to your other Mac; open it there to bring it all in. Passwords and cookies are never carried in it.")
-                .words(&["import", "export", "profile", "chrome", "safari", "arc", "brave", "edge", "search", "migrate", "airdrop", "passwords", "csv"])
+                "Bring data from Chrome or a Safari export, a Tap backup, or a passwords CSV")
+                .more("Chrome can bring passwords, bookmarks, history and open tabs; macOS asks for Chrome's keychain key for passwords. Safari requires an exported browsing-data ZIP: passwords, bookmarks and history can come in, but not open tabs. The ZIP may contain passwords in plain text. Export writes an offline Tap profile for your other Mac; passwords and cookies are never carried in it.")
+                .words(&["import", "export", "profile", "backup", "chrome", "safari", "migrate", "airdrop", "passwords", "csv"])
                 .control(Control::Buttons(&[("import", "Bring Over"), ("export", "Export Tap Profile…")])),
             Item::new("quit.confirm", "browser", "power", "Confirm before quitting",
                 "Ask before ⌘Q or Quit Tap closes the browser")
@@ -616,9 +615,6 @@ pub fn items() -> &'static [Item] {
                 .more("Also turns on New tab in a floating field. Undo puts back what you had.")
                 .words(&["arc", "the browser company"])
                 .control(Control::Buttons(&[("arc", "Set Up")])),
-            Item::new("arc.import", "arc", "square.and.arrow.down", "Bring Arc's spaces and pins over",
-                "Your spaces, pinned tabs and folders, read from Arc on this Mac")
-                .words(&["arc", "import"]).control(Control::Buttons(&[("arc.import", "Bring Over…")])),
             Item::new("spaces", "spaces", "square.stack.3d.up", "Spaces",
                 "Separate sets of tabs, switched with ⌃1–⌃9 or a swipe")
                 .more("Each space can be signed in where the others are or start afresh. Mission Control's own ⌃1–⌃9, if you turned them on, take those keys first.")

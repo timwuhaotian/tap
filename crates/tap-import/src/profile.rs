@@ -5,8 +5,8 @@
 //! own files byte for byte (`session.json`, `history.json`, `bookmarks.json`...), the
 //! shared ones beside them, `prefs.json` cut to the keys Settings shows, `installed.json`
 //! with the extensions' store ids, and `manifest.json` (`format` 1, `scope` "profile").
-//! Tap writes it as `.tapprofile` and reads that, `.searchprofile`, or a `.zip` that is
-//! one. Passwords, cookies and anything signed stay where they are: the keychain and
+//! Tap writes it as `.tapprofile` and reads that or a `.zip` that is one.
+//! Passwords, cookies and anything signed stay where they are: the keychain and
 //! WebKit's stores never enter the file.
 //!
 //! Reading never unpacks to disk: each file is read by its name, flat, into memory, with
@@ -24,9 +24,8 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 /// What a reader refuses: anything written by a newer Tap or Search.
 pub const FORMAT: i64 = 1;
-/// Tap's own extension, and Search's.
+/// Tap's profile extension.
 pub const EXTENSION: &str = "tapprofile";
-pub const SEARCH_EXTENSION: &str = "searchprofile";
 /// The first space's identity (Search's `Space.firstID`): its session is `session.json`.
 pub const FIRST_SPACE: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -378,8 +377,8 @@ fn flat_files(bytes: &[u8]) -> Option<BTreeMap<String, Vec<u8>>> {
 
 /// The profile's bookmarks added to the ones kept here (a top-level list in Search's
 /// `bookmarks.json` shape), without doubles: a bookmark whose address is already
-/// anywhere here stays out, as does a folder whose identity is. Answers the file to keep,
-/// with how many bookmarks came in and how many were here already.
+/// anywhere here stays out; folders with the same identity are merged. Answers the file
+/// to keep, with how many bookmarks came in and how many were here already.
 #[must_use]
 pub fn merge_bookmarks(kept: Option<&[u8]>, incoming: Vec<Value>) -> (Vec<u8>, usize, usize) {
     let mut list: Vec<Value> = kept
@@ -392,29 +391,113 @@ pub fn merge_bookmarks(kept: Option<&[u8]>, incoming: Vec<Value>) -> (Vec<u8>, u
     }
     let (mut added, mut already) = (0, 0);
     for node in incoming {
-        let url = node.get("url").and_then(Value::as_str).map(str::to_owned);
-        let id = node.get("id").and_then(Value::as_str).map(str::to_owned);
-        let here = match &url {
-            Some(url) => urls.contains(url),
-            None => id.as_ref().is_some_and(|id| ids.contains(id)),
-        };
-        let mut inside = (Vec::new(), Vec::new());
-        walk(&node, &mut inside.0, &mut inside.1);
-        let leaves = inside.0.len();
-        if here {
-            already += leaves.max(1);
-            continue;
-        }
-        added += leaves;
-        urls.extend(inside.0);
-        ids.extend(inside.1);
-        list.push(node);
+        merge_node(
+            &mut list,
+            &[],
+            node,
+            &mut urls,
+            &mut ids,
+            &mut added,
+            &mut already,
+        );
     }
     (
         serde_json::to_vec(&list).unwrap_or_default(),
         added,
         already,
     )
+}
+
+fn folder_path(list: &[Value], id: &str) -> Option<Vec<usize>> {
+    for (index, node) in list.iter().enumerate() {
+        if let Some(children) = node.get("children").and_then(Value::as_array) {
+            if node.get("id").and_then(Value::as_str) == Some(id) {
+                return Some(vec![index]);
+            }
+            if let Some(mut path) = folder_path(children, id) {
+                path.insert(0, index);
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn children_at<'a>(mut list: &'a mut Vec<Value>, path: &[usize]) -> Option<&'a mut Vec<Value>> {
+    for &index in path {
+        list = list.get_mut(index)?.get_mut("children")?.as_array_mut()?;
+    }
+    Some(list)
+}
+
+fn merge_node(
+    list: &mut Vec<Value>,
+    parent: &[usize],
+    mut node: Value,
+    urls: &mut Vec<String>,
+    ids: &mut Vec<String>,
+    added: &mut usize,
+    already: &mut usize,
+) {
+    let url = node.get("url").and_then(Value::as_str).map(str::to_owned);
+    let id = node.get("id").and_then(Value::as_str).map(str::to_owned);
+    if let Some(url) = url {
+        if urls.contains(&url) {
+            *already += 1;
+        } else {
+            urls.push(url);
+            if let Some(id) = id {
+                ids.push(id);
+            }
+            *added += 1;
+            if let Some(target) = children_at(list, parent) {
+                target.push(node);
+            }
+        }
+        return;
+    }
+    let existing = id.as_deref().and_then(|id| folder_path(list, id));
+    if let Some(children) = node.get_mut("children").and_then(Value::as_array_mut) {
+        let children = std::mem::take(children);
+        let is_existing = existing.is_some();
+        let path = if let Some(path) = existing {
+            path
+        } else if id.as_ref().is_some_and(|id| ids.contains(id)) {
+            let mut found = Vec::new();
+            for child in &children {
+                walk(child, &mut found, &mut Vec::new());
+            }
+            *already += found.len().max(1);
+            return;
+        } else {
+            if let Some(id) = id {
+                ids.push(id);
+            }
+            let Some(target) = children_at(list, parent) else {
+                return;
+            };
+            let mut path = parent.to_vec();
+            path.push(target.len());
+            target.push(node);
+            path
+        };
+        let before = (*added, *already);
+        for child in children {
+            merge_node(list, &path, child, urls, ids, added, already);
+        }
+        if is_existing && before == (*added, *already) {
+            *already += 1;
+        }
+    } else if id.as_ref().is_some_and(|id| ids.contains(id)) {
+        *already += 1;
+    } else {
+        if let Some(id) = id {
+            ids.push(id);
+        }
+        if let Some(target) = children_at(list, parent) {
+            target.push(node);
+        }
+    }
 }
 
 fn walk(node: &Value, urls: &mut Vec<String>, ids: &mut Vec<String>) {
@@ -627,6 +710,42 @@ mod tests {
             firsts,
             ["https://first.com", "https://last.com", "https://other.com"]
         );
+    }
+
+    #[test]
+    fn safari_reimport_merges_nested_folders_and_deduplicates_urls() {
+        let read = |html: &str| {
+            let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+            zip.start_file("bookmarks.html", SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(html.as_bytes()).unwrap();
+            crate::safari::read(&zip.finish().unwrap().into_inner())
+                .unwrap()
+                .incoming
+                .bookmarks
+        };
+        let first = "<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><H3>Folder</H3><DL><H3>Nested</H3><DL><A HREF='https://a.com/'>A</A></DL></DL></DL>";
+        let second = "<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><H3>Folder</H3><DL><H3>Nested</H3><DL><A HREF='https://a.com/'>Changed</A><A HREF='https://b.com/'>B</A></DL><H3>New</H3><DL><A HREF='https://b.com/'>Duplicate</A><A HREF='https://c.com/'>C</A></DL></DL></DL>";
+        let (kept, added, already) = merge_bookmarks(None, read(first));
+        assert_eq!((added, already), (1, 0));
+        let (merged, added, already) = merge_bookmarks(Some(&kept), read(second));
+        assert_eq!((added, already), (2, 2));
+        let nodes: Vec<Value> = serde_json::from_slice(&merged).unwrap();
+        assert_eq!(nodes[0]["children"][0]["children"][0]["title"], "A");
+        assert_eq!(
+            nodes[0]["children"][0]["children"][1]["url"],
+            "https://b.com/"
+        );
+        assert_eq!(
+            nodes[0]["children"][1]["children"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let (again, added, already) = merge_bookmarks(Some(&merged), read(second));
+        assert_eq!((added, already), (0, 4));
+        assert_eq!(again, merged);
     }
 
     #[test]

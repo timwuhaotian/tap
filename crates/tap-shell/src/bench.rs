@@ -506,24 +506,8 @@ fn handle(request: &Value, reply: Reply) {
         "signin" => {
             // Sign-ins: the accounts hanging under a box and the offer to keep one; with
             // `pick`, a row of the list clicked; with `answer` ("save", "never", "later"),
-            // the offer's button pressed; with `kept`, what Tap's drawer (and Search's,
-            // when on) holds for that host, without secrets; with `seed`, a made-up
-            // Search item in the test world's own Search drawer.
-            if crate::vault::search_label() == "Search" && request.get("seed").is_some() {
-                return reply.say(json!({ "error": "seed only works on a test run" }));
-            }
-            if let Some(Value::Object(seed)) = request.get("seed") {
-                let get = |k: &str| seed.get(k).and_then(Value::as_str).unwrap_or_default();
-                let ok = crate::keychain::save(
-                    crate::vault::search_drawer(&crate::vault::search_label()),
-                    get("host"),
-                    get("user"),
-                    get("password"),
-                    None,
-                    seed.get("clear").and_then(Value::as_bool).unwrap_or(false),
-                );
-                return reply.say(json!({ "seeded": ok }));
-            }
+            // the offer's button pressed; with `kept`, what Tap's drawer holds for that
+            // host, without secrets.
             if let Some(row) = request.get("pick").and_then(Value::as_u64) {
                 crate::signin::bench_pick(usize::try_from(row).unwrap_or(usize::MAX));
             }
@@ -533,7 +517,7 @@ fn handle(request: &Value, reply: Reply) {
             if let Some(host) = text("kept") {
                 let kept: Vec<Value> = crate::vault::kept_for(&host)
                     .into_iter()
-                    .map(|k| json!({"host": k.host, "user": k.user, "search": k.search, "clear": k.clear}))
+                    .map(|k| json!({"host": k.host, "user": k.user, "clear": k.clear}))
                     .collect();
                 return reply.say(json!({ "kept": kept }));
             }

@@ -54,16 +54,12 @@ with its own name and icon, and with fixes of its own.
   updates. Blocking ads and trackers, reading mode (⇧⌘R), the floating video,
   120 Hz pages, middle-button scrolling and the tab bar's icons, reading progress
   and ⌘ numbers are all in there too.
-- **Bring things over**, Search's sheet: Settings › General › Bring Over finds Search
-  and the Chromium browsers on this Mac (Chrome, Arc, Brave, Edge, Dia, Vivaldi, Opera
-  and more), counts what each holds, and lets you pick the browser, its profile (or all
-  of them), and what comes: **passwords**, bookmarks, history, and open tabs with their
-  groups ([#841](https://github.com/driceroland/Search/pull/841)). A Chromium
-  browser's passwords take one macOS question, for its keychain key. Search's
-  passwords are each the Search app's own keychain item, so they come as you use them:
-  offered under sign-in boxes at once, and macOS asks once for each, the first time you
-  pick it. File… takes a passwords CSV another browser exported. Nothing in the other
-  browser changes, and tabs already open aren't opened twice.
+- **Bring things over**: Settings › General › Bring Over imports passwords, bookmarks,
+  history and open tabs from Chrome on this Mac. macOS asks for Chrome's keychain key
+  to import passwords. Safari requires an exported browsing-data ZIP; Tap imports its
+  supported passwords, bookmarks and history, but not open tabs. Safari exports may
+  contain passwords in plain text: delete the file when you no longer need it. File…
+  also takes a passwords CSV or a Tap profile backup.
 - **Passwords**, Search's way, in the macOS keychain under Tap's name: click a sign-in
   box and the accounts kept for the site hang from it, one click fills it in; after a
   sign-in that took, Tap offers to save or update the password (or never ask on that
@@ -71,10 +67,7 @@ with its own name and icon, and with fixes of its own.
 - **Your profile on your other Mac.** File › Export Tap Profile… writes one offline
   file of your tabs and their groups, history, bookmarks and settings, and offers it to
   AirDrop; open it on the other Mac and it all comes in, groups folded or open as they
-  were. Search's profile files
-  ([#845](https://github.com/driceroland/Search/pull/845)) come in too, and
-  `cargo xtask search-profile` packs the Search on this Mac as one. Sign-ins,
-  passwords and cookies never go in the file.
+  were. Sign-ins, passwords and cookies never go in the file.
 - **It updates itself**: checked against Apple's notarization and the developer's
   signature, installed when Tap quits, or at once with Restart Now.
 - **Tabs come back** where you left them, and cost nothing until you look at them.
@@ -116,7 +109,7 @@ Everything else Search does, including:
 - **A Passwords page** of Tap's own (Settings › Passwords › Open… shows them in
   Keychain Access meanwhile), **passkeys**, Apple's Passwords app under the sign-in
   box, and **Chrome extensions** on WebKit's own extension engine.
-- **More to bring over**: Safari and Firefox, extensions, and Arc's spaces and pins.
+- **Extensions** imported from another browser.
 
 ## Building
 

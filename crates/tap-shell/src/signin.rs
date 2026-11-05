@@ -342,8 +342,7 @@ fn pick(row: usize) {
         forms::fill(&web, &kept.user, None, &scheme, &host, |_| {});
         return;
     }
-    // Its secret is read now that it is picked, off the main thread: one of Search's is
-    // the keychain's to hand over, and macOS asks first.
+    // Read the selected secret off the main thread.
     let tab = up.tab;
     std::thread::spawn(move || {
         let login = vault::login(&kept);
@@ -536,13 +535,8 @@ impl Card {
                 ),
                 &palette::INK.resolve(dark),
             );
-            let detail = if kept.search {
-                format!("{} · from Search", kept.host)
-            } else {
-                kept.host.clone()
-            };
             palette::draw_text(
-                &detail,
+                &kept.host,
                 NSRect::new(
                     NSPoint::new(left, rect.origin.y + 19.0),
                     NSSize::new(width, 17.0),
@@ -565,11 +559,9 @@ pub fn credentials(tab: TabId, host: String, user: String, password: String, cle
     // Off the main thread: reading a kept password is the keychain's to allow, and a
     // window never waits on it.
     std::thread::spawn(move || {
-        // Only Tap's own are compared: reading one of Search's would put a macOS question
-        // in front of you the moment a sign-in took. Typed by hand, it becomes Tap's own.
         let ours: Vec<vault::Kept> = vault::kept_for(&host)
             .into_iter()
-            .filter(|k| !k.search && k.user == user)
+            .filter(|k| k.user == user)
             .collect();
         if let Some(same) = ours.first()
             && let Some(mut login) = vault::login(same)
@@ -857,7 +849,7 @@ pub fn snapshot() -> serde_json::Value {
     STATE.with_borrow(|s| {
         serde_json::json!({
             "list": s.up.as_ref().map(|u| u.logins.iter().map(|k| serde_json::json!({
-                "host": k.host, "user": k.user, "search": k.search,
+                "host": k.host, "user": k.user,
             })).collect::<Vec<_>>()),
             "nameOnly": s.up.as_ref().map(|u| u.name_only),
             "offer": s.offer.as_ref().map(|o| serde_json::json!({

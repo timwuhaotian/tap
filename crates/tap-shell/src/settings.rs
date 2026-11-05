@@ -10,7 +10,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    fmt::Write as _,
     path::PathBuf,
 };
 
@@ -930,24 +929,14 @@ fn detail_of(item: &Item, kept: &prefs::Kept) -> String {
             Some(found) => format!(
                 "Passwords, bookmarks, history and open tabs from {found} on this Mac, or from a file"
             ),
-            None => "No other browser with something to bring is on this Mac; a passwords CSV or a Tap or Search profile file comes in here".to_owned(),
+            None => "No other browser with something to bring is on this Mac; a passwords CSV or a Tap backup comes in here".to_owned(),
         },
         "passwords.open" => {
-            let kept = crate::vault::all();
-            let search = kept.iter().filter(|k| k.search).count();
-            let ours = kept.len() - search;
-            let mut said = match ours {
+            match crate::vault::all().len() {
                 0 => "None kept by Tap yet".to_owned(),
                 1 => "1 kept by Tap in the macOS keychain".to_owned(),
                 n => format!("{n} kept by Tap in the macOS keychain"),
-            };
-            if search > 0 {
-                let _ = write!(
-                    said,
-                    "; {search} of Search's come as you pick them under a sign-in box"
-                );
             }
-            said
         }
         "general.default" if is_default_browser() => {
             "Tap opens the links other apps send".to_owned()

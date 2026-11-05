@@ -1,14 +1,6 @@
 //! Where passwords live (Search's `Vault.swift`): the macOS keychain, under Tap's own
 //! label, as internet passwords keyed by site and account. Nothing is written to disk in
 //! any other form, and nothing is ever logged.
-//!
-//! Search's own drawer is read too, once Search's passwords have been brought over
-//! (Settings › Bring things over). Its items are the Search release's: macOS hands their
-//! names to anyone, and each secret only after asking you, once per item, because Tap is
-//! signed by someone else. So they aren't copied all at once — that would be one macOS
-//! question per password, hundreds of them. They are offered under sign-in boxes beside
-//! Tap's, and the first time one is picked macOS asks for it; from then on it is Tap's
-//! own, in Tap's drawer, and never asked for again.
 
 use std::{
     collections::BTreeSet,
@@ -32,8 +24,6 @@ pub struct Kept {
     pub used: Option<f64>,
     /// Kept from a page sent over plain http: offered only on such a page.
     pub clear: bool,
-    /// Still in Search's drawer: macOS asks once before it is handed over.
-    pub search: bool,
 }
 
 /// One account with its secret, for the paths that hand a password over.
@@ -45,8 +35,6 @@ pub struct Login {
 }
 
 const NEVER: &str = "passwords.never";
-/// Search's passwords were brought over: its drawer is offered beside Tap's.
-pub const FROM_SEARCH: &str = "passwords.fromSearch";
 
 fn world() -> Option<String> {
     identity::world(std::env::var(identity::PROBE_ENV).ok().as_deref())
@@ -67,61 +55,21 @@ fn ours(label: &str) -> keychain::Drawer<'_> {
     }
 }
 
-/// Search's drawer, as Search keeps it: a label and no domain.
-pub fn search_drawer(label: &str) -> keychain::Drawer<'_> {
-    keychain::Drawer {
-        label,
-        domain: None,
-    }
-}
-
-/// Search's drawer: its release's label, or a made-up one in a test run's world, never
-/// the real one.
-pub fn search_label() -> String {
-    match world() {
-        Some(world) => format!("Search (tap-{world})"),
-        None => "Search".to_owned(),
-    }
-}
-
-fn kept_from(row: keychain::Row, search: bool) -> Kept {
+fn kept_from(row: keychain::Row) -> Kept {
     Kept {
         host: row.server,
         user: row.account,
         used: row.comment.and_then(|c| c.parse().ok()),
         clear: row.clear,
-        search,
     }
 }
 
-/// Whether Search's drawer is offered.
-pub fn search_on() -> bool {
-    prefs::Kept::new()
-        .get(FROM_SEARCH)
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-/// What `label` keeps, narrowed to `host` if given, with Search's beside it when it is
-/// on; one of Search's that Tap already keeps under the same name isn't said twice.
+/// What Tap keeps, narrowed to `host` if given.
 fn listed(host: Option<&str>) -> Vec<Kept> {
-    let mut out: Vec<Kept> = keychain::rows(&label(), host)
+    keychain::rows(&label(), host)
         .into_iter()
-        .map(|r| kept_from(r, false))
-        .collect();
-    if search_on() {
-        let ours: BTreeSet<(String, String)> = out
-            .iter()
-            .map(|k| (k.host.clone(), k.user.clone()))
-            .collect();
-        out.extend(
-            keychain::rows(&search_label(), host)
-                .into_iter()
-                .map(|r| kept_from(r, true))
-                .filter(|k| !ours.contains(&(k.host.clone(), k.user.clone()))),
-        );
-    }
-    out
+        .map(kept_from)
+        .collect()
 }
 
 /// What is kept for a host, exactly.
@@ -146,7 +94,7 @@ pub fn kept_matching(host: &str, wide: bool) -> Vec<Kept> {
     out
 }
 
-/// Every account Tap keeps (and Search's, when on): for counting.
+/// Every account Tap keeps: for counting.
 pub fn all() -> Vec<Kept> {
     listed(None)
 }
@@ -157,25 +105,9 @@ fn belongs(server: &str, host: &str, domain: &str) -> bool {
     server == host || (domain.contains('.') && registrable(server) == domain)
 }
 
-/// One account's secret: Tap's at once; Search's after macOS asks, so this is called off
-/// the main thread. One of Search's that macOS hands over is kept in Tap's drawer from
-/// then on.
+/// One account's secret, read off the main thread.
 pub fn login(kept: &Kept) -> Option<Login> {
-    let password = if kept.search {
-        keychain::secret(search_drawer(&search_label()), &kept.host, &kept.user)?
-    } else {
-        keychain::secret(ours(&label()), &kept.host, &kept.user)?
-    };
-    if kept.search {
-        keychain::save(
-            ours(&label()),
-            &kept.host,
-            &kept.user,
-            &password,
-            kept.used,
-            kept.clear,
-        );
-    }
+    let password = keychain::secret(ours(&label()), &kept.host, &kept.user)?;
     Some(Login {
         host: kept.host.clone(),
         user: kept.user.clone(),

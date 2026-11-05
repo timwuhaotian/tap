@@ -1,24 +1,11 @@
-//! Bring things over (Search's `ImportPanel`): from another browser on this Mac, all in
-//! one sheet — which browser, which of its profiles, and what of it: passwords,
-//! bookmarks, history, and its open tabs and groups.
-//!
-//! What each browser holds is counted as the sheet opens, off the main thread and from
-//! its files alone: no key is asked for and nothing is decrypted, so nothing prompts
-//! until Bring them in is pressed. Then macOS asks once for that browser's key, if it
-//! keeps one, and every password comes with it.
-//!
-//! Search is offered too, the browser Tap comes from. Its passwords are each the Search
-//! release's own keychain item, and macOS would ask once per item; so they come as they
-//! are used instead (`vault`): offered under sign-in boxes at once, each asked for once,
-//! the first time it is picked.
-//!
-//! Nothing in the other browser changes. Its tabs already open here aren't opened again,
-//! so bringing the same browser over twice adds only what is new.
+//! Bring things over from Chrome or a Safari export, a profile, or a passwords CSV.
+//! Chrome is counted without decrypting passwords; its key is requested only on import.
 
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::Write as _,
+    io::Read as _,
     path::{Path, PathBuf},
 };
 
@@ -35,16 +22,17 @@ use objc2_app_kit::{
     NSWindowStyleMask,
 };
 use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
-use serde_json::{Map, Value};
-use tap_core::{history, identity, settings_index::Prefs as _};
+use serde_json::Value;
+use tap_core::{history, identity};
 use tap_import::{
     Source,
     chromium::{self, Pick},
-    from_search, passwords,
+    passwords,
     profile::Incoming,
+    safari,
 };
 
-use crate::{keychain, palette, prefs, profile, rt, store, vault, window};
+use crate::{keychain, palette, profile, rt, store, vault, window};
 
 fn probing() -> bool {
     std::env::var_os(identity::PROBE_ENV).is_some()
@@ -61,9 +49,14 @@ fn base() -> PathBuf {
     home.join("Library/Application Support")
 }
 
-/// The browsers here with something to bring, Search first.
+/// Chrome when installed, and Safari's export-file import.
 pub fn found() -> Vec<Source> {
-    tap_import::found(&base())
+    let mut sources: Vec<_> = tap_import::found(&base())
+        .into_iter()
+        .filter(|source| matches!(source, Source::Chromium(browser) if browser.name == "Chrome"))
+        .collect();
+    sources.push(Source::Safari);
+    sources
 }
 
 fn named(name: &str) -> Option<Source> {
@@ -73,15 +66,6 @@ fn named(name: &str) -> Option<Source> {
 /// The addresses open in this window now.
 fn open_here() -> HashSet<String> {
     rt::read(|b| b.tabs().iter().map(|t| t.url().to_owned()).collect()).unwrap_or_default()
-}
-
-/// Search's settings under the profile allowlist, read on the main thread. A test run
-/// takes none: they would be the real Search's.
-fn settings_of(source: Source) -> Map<String, Value> {
-    match source {
-        Source::Search if !probing() => prefs::for_profile_of(from_search::DOMAIN),
-        _ => Map::new(),
-    }
 }
 
 /// The profile chosen: `None` the one used last, `Some("")` all of them, else a folder.
@@ -94,17 +78,10 @@ fn pick_of(chosen: Option<&str>) -> Pick<'_> {
 }
 
 /// Everything `source` has to bring but its passwords, less the tabs open here already.
-fn read(
-    source: Source,
-    settings: Map<String, Value>,
-    open: &HashSet<String>,
-    chosen: Option<&str>,
-) -> Result<Incoming, String> {
+fn read(source: Source, open: &HashSet<String>, chosen: Option<&str>) -> Result<Incoming, String> {
     let base = base();
     let mut incoming = match source {
-        Source::Search => {
-            from_search::read(&base.join(from_search::FOLDER), settings, history::now())?
-        }
+        Source::Safari => return Err("Choose a Safari export file".to_owned()),
         Source::Chromium(browser) => {
             chromium::read(browser, &base, history::now(), pick_of(chosen))
                 .ok_or_else(|| format!("{} has no profile on this Mac", browser.name))?
@@ -115,19 +92,13 @@ fn read(
     Ok(incoming)
 }
 
-/// Search's passwords: its drawer's items, by name only.
-fn search_passwords() -> usize {
-    keychain::rows(&vault::search_label(), None).len()
-}
-
 /// How many passwords `source` has, from its files alone: no key, no question.
 fn password_count(source: Source, chosen: Option<&str>) -> usize {
     match source {
-        Source::Search => search_passwords(),
         Source::Chromium(browser) if browser.safe_storage().is_some() => {
             chromium::password_count(browser, &base(), pick_of(chosen))
         }
-        Source::Chromium(_) => 0,
+        Source::Safari | Source::Chromium(_) => 0,
     }
 }
 
@@ -148,13 +119,13 @@ fn passphrase(browser: &chromium::Browser) -> Option<String> {
 /// What came of the passwords, read off the main thread.
 enum Passwords {
     Chromium(chromium::Passwords),
-    Search(usize),
+    Export(Vec<passwords::Login>, usize),
     Trouble(String),
 }
 
 fn read_passwords(source: Source, chosen: Option<&str>) -> Passwords {
     match source {
-        Source::Search => Passwords::Search(search_passwords()),
+        Source::Safari => Passwords::Trouble("Choose a Safari export file".to_owned()),
         Source::Chromium(browser) => {
             if browser.safe_storage().is_none() {
                 return Passwords::Trouble(format!(
@@ -225,6 +196,7 @@ fn counted(count: usize, one: &str, many: &str) -> String {
 
 /// What was read, brought in on the main thread and said, line by line (Search's
 /// `bring(from:)`).
+#[allow(clippy::too_many_lines)] // one report covering each imported category
 fn land(
     source: Source,
     incoming: Result<Incoming, String>,
@@ -250,23 +222,31 @@ fn land(
             } else {
                 String::new()
             };
+            let failed = found.logins.len() - kept;
+            let unsaved = if failed > 0 {
+                format!(" — {} couldn't be saved", n(failed))
+            } else {
+                String::new()
+            };
             said.push((
-                kept > 0 || found.undecrypted == 0,
+                failed == 0 && found.undecrypted == 0,
                 format!(
-                    "{}{skipped}{locked}",
+                    "{}{skipped}{locked}{unsaved}",
                     counted(kept, "password", "passwords")
                 ),
             ));
         }
-        Some(Passwords::Search(count)) => {
-            prefs::Kept::new().set(vault::FROM_SEARCH, Value::Bool(true));
-            said.push((
-                true,
-                format!(
-                    "{} — offered under sign-in boxes now; macOS asks once for each, the first time you pick it",
-                    counted(count, "password", "passwords")
-                ),
-            ));
+        Some(Passwords::Export(found, skipped)) => {
+            let kept = vault::keep(&found, Vec::new());
+            let failed = found.len() - kept;
+            let mut text = counted(kept, "password", "passwords");
+            if skipped > 0 {
+                let _ = write!(text, ", {} skipped", n(skipped));
+            }
+            if failed > 0 {
+                let _ = write!(text, " — {} couldn't be saved", n(failed));
+            }
+            said.push((failed == 0, text));
         }
         Some(Passwords::Trouble(why)) => said.push((false, why)),
         None => {}
@@ -337,12 +317,15 @@ fn land(
 /// If no such browser is here.
 pub fn take(name: &str, wants: Wants) -> Result<Vec<Said>, String> {
     let source = named(name).ok_or_else(|| format!("{name} isn't on this Mac"))?;
-    let incoming = read(source, settings_of(source), &open_here(), None);
+    if source == Source::Safari {
+        return Err("Safari requires an export file selected in the import sheet".to_owned());
+    }
+    let incoming = read(source, &open_here(), None);
     let found = wants.passwords.then(|| read_passwords(source, None));
     Ok(land(source, incoming, found, wants))
 }
 
-/// Settings' words for what was found: "Search, Chrome and Arc".
+/// Settings' words for what was found.
 pub fn listed(found: &[Source]) -> Option<String> {
     let (last, rest) = found.split_last()?;
     Some(if rest.is_empty() {
@@ -363,6 +346,13 @@ pub fn take_csv(path: &Path) -> Result<String, String> {
         return Err("That file has no passwords in a shape Tap knows".to_owned());
     }
     let kept = vault::keep(&found.logins, Vec::new());
+    if kept < found.logins.len() {
+        return Err(format!(
+            "{} — {} couldn't be saved; the exported file holds your passwords in the clear: delete it when no longer needed",
+            counted(kept, "password", "passwords"),
+            n(found.logins.len() - kept)
+        ));
+    }
     let mut said = counted(kept, "password", "passwords");
     if found.skipped > 0 {
         let _ = write!(said, ", {} skipped", n(found.skipped));
@@ -483,12 +473,12 @@ fn close() {
 fn look() {
     std::thread::spawn(|| {
         let base = base();
-        let sources = tap_import::found(&base);
+        let sources = found();
         let profiles: Vec<(&'static str, Profiles)> = sources
             .iter()
             .filter_map(|s| match s {
                 Source::Chromium(b) => Some((b.name, chromium::profile_list(b, &base))),
-                Source::Search => None,
+                Source::Safari => None,
             })
             .collect();
         dispatch2::DispatchQueue::main().exec_async(move || {
@@ -517,16 +507,19 @@ fn look() {
 
 /// What a browser holds in the profile chosen for it, unless counted already.
 fn count(source: Source) {
-    let Some((chosen, settings, open)) = SHEET.with_borrow(|slot| {
+    if source == Source::Safari {
+        return;
+    }
+    let Some((chosen, open)) = SHEET.with_borrow(|slot| {
         let sheet = slot.as_ref()?;
         let chosen = chosen_of(sheet, source);
         (!sheet.previews.contains_key(&key(source, chosen.as_deref())))
-            .then(|| (chosen, settings_of(source), open_here()))
+            .then(|| (chosen, open_here()))
     }) else {
         return;
     };
     std::thread::spawn(move || {
-        let incoming = read(source, settings, &open, chosen.as_deref());
+        let incoming = read(source, &open, chosen.as_deref());
         let preview = Preview {
             tabs: incoming.as_ref().map_or(0, Incoming::tabs),
             groups: incoming.as_ref().map_or(0, Incoming::groups),
@@ -557,6 +550,9 @@ fn preview_of(sheet: &Sheet, source: Source) -> Option<Preview> {
 
 /// The row's line under a browser's name: "2 profiles · 368 bookmarks · 2,000 places".
 fn detail(sheet: &Sheet, source: Source) -> String {
+    if source == Source::Safari {
+        return "Choose a Safari export file".to_owned();
+    }
     let Some(preview) = preview_of(sheet, source) else {
         return "Counting…".to_owned();
     };
@@ -584,7 +580,12 @@ fn detail(sheet: &Sheet, source: Source) -> String {
 }
 
 fn bring() {
-    let Some((source, chosen, wants, settings, open, preview)) = SHEET.with_borrow_mut(|slot| {
+    if SHEET.with_borrow(|slot| slot.as_ref().and_then(|sheet| sheet.pick) == Some(Source::Safari))
+    {
+        choose_safari();
+        return;
+    }
+    let Some((source, chosen, wants, open, preview)) = SHEET.with_borrow_mut(|slot| {
         let sheet = slot.as_mut()?;
         let source = sheet.pick?;
         if sheet.bringing {
@@ -593,14 +594,7 @@ fn bring() {
         sheet.bringing = true;
         let chosen = chosen_of(sheet, source);
         let preview = preview_of(sheet, source).unwrap_or_default();
-        Some((
-            source,
-            chosen,
-            sheet.wants,
-            settings_of(source),
-            open_here(),
-            preview,
-        ))
+        Some((source, chosen, sheet.wants, open_here(), preview))
     }) else {
         return;
     };
@@ -609,7 +603,7 @@ fn bring() {
     // no passwords.
     let passwords = wants.passwords && preview.passwords > 0;
     std::thread::spawn(move || {
-        let incoming = read(source, settings, &open, chosen.as_deref());
+        let incoming = read(source, &open, chosen.as_deref());
         let found = passwords.then(|| read_passwords(source, chosen.as_deref()));
         dispatch2::DispatchQueue::main().exec_async(move || {
             let said = land(source, incoming, found, wants);
@@ -624,24 +618,110 @@ fn bring() {
     });
 }
 
-/// File…: a passwords CSV another browser exported, or a Tap or Search profile.
+fn choose_safari() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let panel = NSOpenPanel::openPanel(mtm);
+    #[allow(deprecated)]
+    panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[NSString::from_str(
+        "zip",
+    )])));
+    panel.setAllowsMultipleSelection(false);
+    panel.setCanChooseDirectories(false);
+    panel.setPrompt(Some(&NSString::from_str("Bring In")));
+    panel.setMessage(Some(&NSString::from_str(
+        "Choose the file exported from Safari.",
+    )));
+    if panel.runModal() != NSModalResponseOK {
+        return;
+    }
+    let Some(path) = panel.URL().and_then(|u| u.path()) else {
+        return;
+    };
+    let path = PathBuf::from(path.to_string());
+    let open = open_here();
+    let Some(wants) = SHEET.with_borrow_mut(|slot| {
+        let sheet = slot.as_mut()?;
+        if sheet.bringing {
+            return None;
+        }
+        sheet.bringing = true;
+        Some(sheet.wants)
+    }) else {
+        return;
+    };
+    render();
+    std::thread::spawn(move || {
+        const ZIP_LIMIT: u64 = 256 << 20;
+        let result = (|| {
+            let file =
+                std::fs::File::open(path).map_err(|_| "That file couldn't be read".to_owned())?;
+            if file
+                .metadata()
+                .map_err(|_| "That file couldn't be read".to_owned())?
+                .len()
+                > ZIP_LIMIT
+            {
+                return Err("Safari export exceeds compressed size limit".to_owned());
+            }
+            let mut bytes = Vec::new();
+            file.take(ZIP_LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "That file couldn't be read".to_owned())?;
+            if bytes.len() as u64 > ZIP_LIMIT {
+                return Err("Safari export exceeds compressed size limit".to_owned());
+            }
+            safari::read(&bytes)
+        })();
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            let mut said = match result {
+                Ok(mut export) => {
+                    export.incoming.leave_out(&open);
+                    let found = (wants.passwords
+                        && (!export.passwords.is_empty() || export.password_skipped > 0))
+                        .then_some(Passwords::Export(export.passwords, export.password_skipped));
+                    let mut said = land(Source::Safari, Ok(export.incoming), found, wants);
+                    if said.is_empty() {
+                        said.push((false, "That file has nothing Tap can bring in".to_owned()));
+                    }
+                    said
+                }
+                Err(why) => vec![(false, why)],
+            };
+            said.push((
+                false,
+                "The export may hold passwords in the clear: delete it when no longer needed"
+                    .to_owned(),
+            ));
+            SHEET.with_borrow_mut(|slot| {
+                if let Some(sheet) = slot.as_mut() {
+                    sheet.bringing = false;
+                    sheet.brought = Some(said);
+                }
+            });
+            render();
+        });
+    });
+}
+
+/// File…: a passwords CSV another browser exported, or a Tap profile.
 fn choose_file() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
     let panel = NSOpenPanel::openPanel(mtm);
-    #[allow(deprecated)] // the profile extensions are Tap's and Search's own
+    #[allow(deprecated)] // Tap's profile extension is custom
     panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[
         NSString::from_str("csv"),
         NSString::from_str(tap_import::profile::EXTENSION),
-        NSString::from_str(tap_import::profile::SEARCH_EXTENSION),
         NSString::from_str("zip"),
     ])));
     panel.setAllowsMultipleSelection(false);
     panel.setCanChooseDirectories(false);
     panel.setPrompt(Some(&NSString::from_str("Bring In")));
     panel.setMessage(Some(&NSString::from_str(
-        "A file another browser exported: passwords (.csv) — or a Tap or Search profile.",
+        "A passwords CSV or a Tap profile.",
     )));
     if panel.runModal() != NSModalResponseOK {
         return;
@@ -873,13 +953,14 @@ fn render() {
         } else {
             let wants = sheet.wants;
             let preview = sheet.pick.and_then(|s| preview_of(sheet, s));
-            let something = preview.is_some_and(|p| {
-                (wants.passwords && p.passwords > 0)
-                    || (wants.bookmarks && p.bookmarks > 0)
-                    || (wants.history && p.places > 0)
-                    || (wants.tabs && p.tabs > 0)
-                    || (wants.settings && sheet.pick == Some(Source::Search))
-            });
+            let something = (sheet.pick == Some(Source::Safari)
+                && (wants.passwords || wants.bookmarks || wants.history))
+                || preview.is_some_and(|p| {
+                    (wants.passwords && p.passwords > 0)
+                        || (wants.bookmarks && p.bookmarks > 0)
+                        || (wants.history && p.places > 0)
+                        || (wants.tabs && p.tabs > 0)
+                });
             let go = button(
                 if sheet.bringing {
                     "Bringing…"
@@ -977,7 +1058,7 @@ fn options(mtm: MainThreadMarker, sheet: &Sheet, source: Source, top: f64) -> f6
     let password_detail = match source {
         Source::Chromium(b) if b.safe_storage().is_none() => format!("Not supported for {name}"),
         _ if none(preview.map(|p| p.passwords)) => format!("None in {name}"),
-        Source::Search => "Each comes the first time you pick it under a sign-in box: macOS asks once for it, since they are the Search app's own".to_owned(),
+        Source::Safari => "From a Safari export file".to_owned(),
         Source::Chromium(_) => format!("macOS asks once for {name}'s keychain key"),
     };
     let unsupported = matches!(source, Source::Chromium(b) if b.safe_storage().is_none());
@@ -1033,14 +1114,10 @@ fn options(mtm: MainThreadMarker, sheet: &Sheet, source: Source, top: f64) -> f6
             none(preview.map(|p| p.tabs)),
         ),
     ];
-    if source == Source::Search {
-        lines.push((
-            Kind::Settings,
-            "Settings",
-            "The ones Tap has too, set as Search has them".to_owned(),
-            sheet.wants.settings,
-            false,
-        ));
+    if source == Source::Safari {
+        lines.pop();
+        "From a Safari export file".clone_into(&mut lines[1].2);
+        "From a Safari export file".clone_into(&mut lines[2].2);
     }
     for (kind, title, detail, on, disabled) in lines {
         if !first {

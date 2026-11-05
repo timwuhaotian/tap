@@ -40,15 +40,6 @@ impl Kept {
     pub fn new() -> Kept {
         Kept(defaults())
     }
-
-    /// Another app's settings, read only: Search's, for its profile packed on this Mac.
-    fn of(domain: &str) -> Option<Kept> {
-        NSUserDefaults::initWithSuiteName(
-            NSUserDefaults::alloc(),
-            Some(&NSString::from_str(domain)),
-        )
-        .map(Kept)
-    }
 }
 
 impl Prefs for Kept {
@@ -71,13 +62,6 @@ impl Prefs for Kept {
 /// what was never set isn't written, so another Mac keeps its own defaults for it.
 pub fn for_profile() -> Map<String, Value> {
     allowlisted(&Kept::new())
-}
-
-/// The same, from another app's settings under the same keys: Search's, by its domain.
-pub fn for_profile_of(domain: &str) -> Map<String, Value> {
-    Kept::of(domain)
-        .map(|kept| allowlisted(&kept))
-        .unwrap_or_default()
 }
 
 fn allowlisted(kept: &Kept) -> Map<String, Value> {
