@@ -195,6 +195,7 @@ doesn't mean no Foundation. `fnd` wraps:
 | Command | What it does |
 |---|---|
 | `icon` | Renders `packaging/icon.svg` (the source of truth) with `resvg` into `packaging/app-icon.png` (1024²), `app-icon-dev.png` (graphite plate) and `docs/icon.png` (README). The files are committed, as Kil's are, and CI fails if they drift from the SVG |
+| `check` | The release gate's own step (§12): the committed icon PNGs match `packaging/icon.svg` (nothing is rewritten), and the parity tracker (Appendix A) lists every Swift file in Search's `Sources/Search` exactly once with its line count — read at `d1639aa`, or at the reference build `6d6effd` for a row marked `(#nnn branch)`. Search comes from `$SEARCH_DIR`, by default `~/code/Search` |
 | `fresh` | Port of Search's `fresh.sh`: a first launch in a wiped test world |
 | `extract-js [--check]`, `sync-tests` | JS assets (§5.4) and the vendored Python suite (§9) |
 | `parity`, `diff-run`, `ax-dump`, `perf` | Parity and perf tooling (§9, §10) |
@@ -1771,6 +1772,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-05 | The page-load path is audited end to end at the user's request and tightened in seven places (§10 "The page-load path"), all behaviour-preserving, as a PR like the one before it. |
 | 2026-11-05 | At the user's request, agents drive Tap through a `tap` CLI and a skill Tap installs, not MCP (§8 "Agents use Tap"): every agent here has a shell, a skill loads only when a task needs it, and one install in `~/.agents/skills` reaches them all. The bench switch is on by default (`fixed-deviation`). Delivered as a PR at the user's request. |
 | 2026-11-05 | At the user's request ("tab的拖拽应该是整个tab都可以拖拽 而不只是四周；…tab拖拽会容易跟着整个app拖拽…tab拖拽到group，自动可以加入这个group"): a press takes a strip slot by its whole column, the strip's full 52-point height and the gap to its right, not just its 30-point pill. The bands above, below and between the pills had been empty title bar, so a press meant for a tab dragged the window. Only the row's truly empty ends still move the window. Tabs carried over another group (heading or tabs) stop moving along their own block, the group shows a plate of its colour, and on release they join it beside the tab under the hand, or at its end over the heading or a folded group (Search's `GroupDropFrames.resolve` and `move(_:toGroup:)`: `groups::drop_target`, `Browser::drop_into_group`). Not done: dragging a grouped tab out among the loose tabs (Remove from Group does that). The bench's `row` now reports each slot's rect. Delivered as a PR at the user's request, against the 2026-11-04 no-PR decision above. |
+| 2026-11-05 | `cargo xtask check`, step 1 of §12's release steps, is built. The plan had required it since 0.1.0, but it never existed, so releases ran without it. It checks the icon PNGs against the SVG and the parity tracker against Search, and on its first run it found `SearchProfile.swift` at 355 lines in the reference build, not 350. xtask no longer depends on `tap-shell`: it is quick to build, and `search-profile` is gone. |
 
 ## Appendix A — Parity tracker
 
@@ -1888,7 +1890,7 @@ added below this one as M1 starts.
 | RecordingIndicator.swift | 217 | s/ui/recording_indicator | M5 | todo |
 | Registrable.swift | 25 | c/registrable | M1 | done (0.1.5, in `vault.rs`) |
 | Scripting.swift | 80 | s/app/scripting | M8 | todo |
-| SearchProfile.swift (#845 branch) | 350 | i/profile, i/from_search, s/profile (#845) | M6 | partial |
+| SearchProfile.swift (#845 branch) | 355 | i/profile, i/from_search, s/profile (#845) | M6 | partial |
 | Session.swift | 195 | c/session | M1/M2 | partial |
 | Settings.swift | 1454 | s/settings | M3 | partial |
 | SettingsIndex.swift | 656 | c/settings_index | M3 | tested |
@@ -1931,4 +1933,4 @@ added below this one as M1 starts.
 | Windows.swift | 504 | c/windows, s/app/windows | M1/M4 | todo |
 | WindowTitle.swift | 46 | c/window_title, s/ui/window_title | M2 | todo |
 | YouTubeAds.swift | 216 | c/youtube_ads, a | M5 | todo |
-| **140 files** | **75788** | | | |
+| **140 files** | **75793** | | | |
