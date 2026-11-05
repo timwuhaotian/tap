@@ -154,6 +154,10 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setTitlebarAppearsTransparent(true);
     window.setBackgroundColor(Some(&palette::GROUND.dynamic()));
+    // The window is moved only by the strip's empty ends, through
+    // `performWindowDragWithEvent`: with `isMovable` off, AppKit's titlebar drag
+    // never steals a press meant for a tab, wherever in the row it lands.
+    window.setMovable(false);
     window.setMinSize(NSSize::new(560.0, 360.0));
     window.center();
     window.setFrameAutosaveName(&NSString::from_str("Tap"));

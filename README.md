@@ -40,7 +40,8 @@ with its own name and icon, and with fixes of its own.
 - **Pick several tabs** with ⌘-click or ⇧-click: ⌘C copies their addresses, one to a
   line, ⌘W closes them, and a drag moves them together. Drag a tab to reorder it, onto
   another group to join it, or a group by its name; everything in the row glides where
-  it goes, and a press anywhere in a tab's column takes the tab, not the window.
+  it goes, and a press anywhere in a tab's column takes the tab, not the window — the
+  window itself is moved only by the row's empty ends.
 - **Right-click a tab** to move it into a group (or a new one), rename it, reload,
   duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones
   to its right or all the others, or reopen a closed one; right-click a group's name to

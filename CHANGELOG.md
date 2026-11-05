@@ -7,6 +7,15 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.4 — 2026-11-05
+
+Dragging a tab no longer drags the window; the empty row stops opening new tabs.
+
+- **Dragging a tab never moves the window**: the window is unmovable, and only the
+  empty ends of the tab row move it, so a press meant for a tab stays a tab press
+  wherever in the row it lands. Double-clicking the empty row no longer opens a new
+  tab either — the empty row is the titlebar, and a blank tab is still one ⌘T away.
+
 ## 0.2.3 — 2026-11-05
 
 Moving tabs stay under the hand; ⌘W closes without surprises; the empty row brings tabs back.

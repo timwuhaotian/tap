@@ -1031,12 +1031,10 @@ impl Strip {
             }
             Spot::Plus => rt::dispatch(|browser| browser.begin_editing(true)),
             Spot::Nothing => {
-                // The empty row is title bar: a press moves the window, and a
-                // double click opens a new tab instead of zooming, as
-                // Search's `DragStrip` has it — the plus, without the aim.
-                if event.clickCount() == 2 {
-                    rt::dispatch(|browser| browser.begin_editing(true));
-                } else if let Some(window) = self.window() {
+                // The empty row is the titlebar: a press moves the window, wherever
+                // it came from. Not Search's double-click new tab: a blank tab is
+                // one ⌘T away, and the empty row is nobody's button.
+                if let Some(window) = self.window() {
                     window.performWindowDragWithEvent(event);
                 }
             }
