@@ -2,10 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- tap.entitlements' set, plus passkeys for any site. Apple grants the browser entitlement
-	     on request; it only works with the matching Developer ID provisioning profile embedded
-	     in the app, which scripts/release.sh does when packaging/Tap.provisionprofile exists.
-	     The two identifiers tie the app to that profile. -->
+	<!-- Reserved for a future passkey-enabled build. The browser entitlement requires Apple's
+	     grant and a matching Developer ID provisioning profile embedded in the app. -->
 	<key>com.apple.security.device.camera</key>
 	<true/>
 	<key>com.apple.security.device.audio-input</key>

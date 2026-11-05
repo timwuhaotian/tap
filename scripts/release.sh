@@ -8,9 +8,6 @@
 #
 # Signing: TAP_SIGN_IDENTITY, default "Developer ID Application" (the one such identity in the
 # login keychain).
-# Passkeys: with packaging/Tap.provisionprofile present, it is embedded and the app is signed with
-# packaging/tap.passkeys.entitlements; without it, the regular entitlements are used and
-# passkeys stay unavailable in that build.
 # Notarization credentials, the first of:
 #   TAP_NOTARY_KEY, TAP_NOTARY_KEY_ID, TAP_NOTARY_ISSUER   an App Store Connect API key
 #   TAP_NOTARY_PROFILE   a `xcrun notarytool store-credentials` profile
@@ -23,7 +20,6 @@ cd "$root"
 
 identity="${TAP_SIGN_IDENTITY:-Developer ID Application}"
 work="target/release/dist"
-profile="packaging/Tap.provisionprofile"
 
 # Submits $1 and waits; fails unless Apple accepts it.
 notarize() {
@@ -50,23 +46,13 @@ if ! grep -qF "($link)" README.md; then
   echo "README.md must link the release as $link" >&2
   exit 1
 fi
-if [ -f "$profile" ]; then
-  entitlements="packaging/tap.passkeys.entitlements"
-else
-  entitlements="packaging/tap.entitlements"
-  echo "no $profile: passkeys will not work in this build." >&2
-fi
-
 app="$(sh scripts/bundle.sh release | tail -n 1)"
 # After the build: before it, `cargo pkgid` still reports the version in Cargo.lock, and a
 # bumped Cargo.toml only reaches the lock there. Read it late, or the last line reports the
 # version it replaces.
 version="$(cargo pkgid -p tap-app | sed 's/.*[#@]//')"
-if [ -f "$profile" ]; then
-  cp "$profile" "$app/Contents/embedded.provisionprofile"
-fi
 codesign --force --timestamp --options runtime \
-  --entitlements "$entitlements" \
+  --entitlements packaging/tap.entitlements \
   --sign "$identity" "$app"
 codesign --verify --strict --verbose=2 "$app"
 
