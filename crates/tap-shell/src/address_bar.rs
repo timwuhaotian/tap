@@ -67,11 +67,9 @@ fn badge_rect(capsule: NSRect) -> NSRect {
     )
 }
 
+/// The address's line, centred in the capsule as the badge is.
 fn text_rect(capsule: NSRect) -> NSRect {
-    NSRect::new(
-        NSPoint::new(capsule.origin.x + TEXT, capsule.origin.y + 5.5),
-        NSSize::new((capsule.size.width - TEXT - 10.0).max(0.0), 17.0),
-    )
+    palette::text_line(capsule, TEXT, 10.0)
 }
 
 /// What the bar shows, read from the model in one go.
@@ -285,13 +283,10 @@ impl AddressBar {
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 
-    /// Where the field sits while it is open in the bar: over the address.
+    /// Where the field sits while it is open in the bar: on the address's own line,
+    /// so the text stays level with the badge as the field opens.
     pub fn field_rect(&self) -> NSRect {
-        let text = text_rect(capsule(self.bounds().size.width));
-        NSRect::new(
-            NSPoint::new(text.origin.x - 2.0, text.origin.y - 1.5),
-            NSSize::new(text.size.width + 4.0, 20.0),
-        )
+        palette::field_frame(text_rect(capsule(self.bounds().size.width)))
     }
 
     fn press(&self, event: &NSEvent) {

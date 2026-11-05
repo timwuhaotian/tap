@@ -12,7 +12,9 @@ use objc2_app_kit::{
     NSForegroundColorAttributeName, NSLineBreakMode, NSMutableParagraphStyle,
     NSParagraphStyleAttributeName, NSShadow, NSStringDrawing, NSView,
 };
-use objc2_foundation::{NSArray, NSAttributedStringKey, NSDictionary, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSArray, NSAttributedStringKey, NSDictionary, NSPoint, NSRect, NSSize, NSString,
+};
 
 /// A grey for a light window and one for a dark.
 #[derive(Clone, Copy, Debug)]
@@ -265,9 +267,83 @@ pub fn draw_text(text: &str, rect: NSRect, color: &NSColor) {
     }
 }
 
+/// How tall one line of chrome text is as `draw_text` lays it out: the font's
+/// line, not a guess, so a line can be centred in a row whatever its height.
+#[must_use]
+pub fn line_height() -> f64 {
+    thread_local! {
+        static HEIGHT: f64 = {
+            let attributes = attributes(None);
+            // SAFETY: each attribute holds the type AppKit expects for its name.
+            unsafe { NSString::from_str("Ag").sizeWithAttributes(Some(&attributes)) }.height
+        };
+    }
+    HEIGHT.with(|h| *h)
+}
+
+/// The rect one line of chrome text is drawn in so it sits centred in `rect`'s
+/// height, `left` and `right` in from its ends. Every line of the chrome goes
+/// through here, so text in a tab, a chip, the address bar and a suggestion
+/// shares one baseline rule instead of each its own offset.
+#[must_use]
+pub fn text_line(rect: NSRect, left: f64, right: f64) -> NSRect {
+    centred_line(rect, line_height(), left, right)
+}
+
+fn centred_line(rect: NSRect, line: f64, left: f64, right: f64) -> NSRect {
+    NSRect::new(
+        NSPoint::new(
+            rect.origin.x + left,
+            rect.origin.y + (rect.size.height - line) / 2.0,
+        ),
+        NSSize::new((rect.size.width - left - right).max(0.0), line),
+    )
+}
+
+/// An editing field's frame that shows its text where `draw_text` drew it in
+/// `line`: the borderless field's cell keeps two points of air at either end and
+/// none above, so the text doesn't jump when the field opens over a drawn line.
+#[must_use]
+pub fn field_frame(line: NSRect) -> NSRect {
+    NSRect::new(
+        NSPoint::new(line.origin.x - FIELD_INSET, line.origin.y),
+        NSSize::new(line.size.width + 2.0 * FIELD_INSET, line.size.height),
+    )
+}
+
+/// The air a borderless `NSTextField`'s cell keeps at each end of its text.
+const FIELD_INSET: f64 = 2.0;
+
 /// How wide a line of chrome text is, in points.
 #[must_use]
 pub fn text_width(text: &str) -> f64 {
     // SAFETY: as above.
     unsafe { NSString::from_str(text).sizeWithAttributes(Some(&attributes(None))) }.width
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_line_sits_centred_in_any_row() {
+        let row = NSRect::new(NSPoint::new(100.0, 11.0), NSSize::new(186.0, 30.0));
+        let line = centred_line(row, 16.0, 12.0, 30.0);
+        assert!((line.origin.y - 18.0).abs() < 1e-9, "7 above and 7 below");
+        assert!((line.origin.x - 112.0).abs() < 1e-9);
+        assert!((line.size.width - 144.0).abs() < 1e-9);
+        let narrow = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(10.0, 28.0));
+        assert!(centred_line(narrow, 16.0, 12.0, 12.0).size.width.abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_field_opens_on_the_drawn_line() {
+        let line = NSRect::new(NSPoint::new(126.0, 11.0), NSSize::new(300.0, 16.0));
+        let frame = field_frame(line);
+        // Same top and height: the text doesn't move up or down as the field opens.
+        assert!((frame.origin.y - line.origin.y).abs() < 1e-9);
+        assert!((frame.size.height - line.size.height).abs() < 1e-9);
+        // And the cell's own inset puts the first letter where the drawn one was.
+        assert!((frame.origin.x + FIELD_INSET - line.origin.x).abs() < 1e-9);
+    }
 }

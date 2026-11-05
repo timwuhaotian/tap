@@ -7,6 +7,9 @@ Info.plist.
 
 ## Unreleased
 
+- **The chrome's text and pills line up**: a group's chip is as tall as a tab; the
+  address no longer jumps above the lock when you click into it, nor a tab's title
+  when it opens for editing; every line of chrome text is centred by one rule.
 - **→ completes the address**: with the caret at the end of what you typed, the right
   arrow takes the grey completion, as Tab does; elsewhere it moves the caret.
 
