@@ -968,7 +968,7 @@ brought forward as a patch release.
   on `passwords.fromSearch`; its drawer's accounts are listed beside Tap's (names
   only); a pick reads the secret off the main thread (macOS asks once) and copies it
   into Tap's drawer.
-- [x] **Forms** (`forms.js` is Search's script word for word but for its names;
+- [x] **Forms** (`forms.js` is based on Search's script;
   `forms.rs`, `signin.rs`): the accounts hang under the box (five at most, newest
   first, the name the first step sent first; only plain-http ones on a plain-http
   page; a half second before a click counts), a pick fills through the field's own
@@ -1531,6 +1531,20 @@ it).
 |---|---|---|---|---|---|---|
 | 2026-11-04 | M0 first window (placeholder, no browser yet) | — | — | — | — | 337 KB executable, 652 KB app, 448 KB DMG (arm64, release, stripped) |
 
+### Form presence checks (2026-11-06)
+
+`forms.js` shares the first positive-size password-box query between pairing and
+presence-only checks (`hasPassword`, `named`, `tell`, and both `look` checks).
+Only pairing walks the inputs in the password's scope; visibility and pairing rules
+remain unchanged. `TAP_PROBE=<world> scripts/bench test-forms` exercises the script
+in WebKit with synthetic events and controlled timers/observer callbacks; it needs a
+running Tap in that test world and is not part of `cargo test`. It checks behaviour
+and input-query counts, not end-to-end timing or real-site compatibility.
+
+A clean runtime flush after the window's first update also skips building its view
+snapshot and updating AppKit; effects and dirty changes still take the normal path.
+This reduces redundant work, but has not been measured against real page-load times.
+
 ### The page-load path (audited 2026-11-05)
 
 An audit of everything between Return and the page being drawn found the load's own
@@ -1555,10 +1569,11 @@ changes, each behaviour-preserving:
 4. **KVO changes are read per key** (`web.rs`). The observer matched on the key
    path and read only what it says, instead of re-reading all seven observed
    properties and calling all five model methods per tick.
-5. **Progress is quantised to 1/128 before it counts as change** (`browser.rs`),
-   and `window::update` marks the strip for redraw only when a drawn thing
-   changed — a background tab's progress line is drawn nowhere. The bar redraws
-   only for window fields or the active tab.
+5. **A progress notification marks a change only if its step is at least 1/128**
+   (`browser.rs`), and `window::update` marks the strip for redraw only when a
+   drawn thing changed — a background tab's progress line is drawn nowhere. The bar
+   redraws only for window fields or the active tab. Small consecutive steps are
+   compared with the last notification, so their accumulated movement can be missed.
 6. **`window::update` does its always-work only on change** (`window.rs`). The
    reload/stop symbol is rebuilt and `setTitle` called only when loading or the
    title moved; the downloads door refresh moved to launch, Settings and download

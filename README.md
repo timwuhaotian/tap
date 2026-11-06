@@ -67,7 +67,8 @@ with its own name and icon, and with fixes of its own.
 - **Passwords**, Search's way, in the macOS keychain under Tap's name: click a sign-in
   box and the accounts kept for the site hang from it, one click fills it in; after a
   sign-in that took, Tap offers to save or update the password (or never ask on that
-  site). A page sent over plain http is only ever offered what was kept from one.
+  site). Sign-in detection avoids unnecessary input scans as pages change. A page sent
+  over plain http is only ever offered what was kept from one.
 - **Your profile on your other Mac.** File › Export Tap Profile… writes one offline
   file of your tabs and their groups, history, bookmarks and settings, and offers it to
   AirDrop; open it on the other Mac and it all comes in, groups folded or open as they

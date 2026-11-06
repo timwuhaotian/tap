@@ -3,8 +3,8 @@
 //! for the site can hang from it, and when a name and password have just been sent, so
 //! the password can be offered a place in the keychain.
 //!
-//! The script is Search's, word for word but for its names (`forms.js`), in Tap's own
-//! content world and the main frame only, where a page can't see or replace it. Filling
+//! The script (`forms.js`) is based on Search's, in Tap's own content world and the
+//! main frame only, where a page can't see or replace it. Filling
 //! goes through the field's own setter and fires the events a keystroke would.
 //!
 //! Whether a sign-in worked is only known afterwards: a page that comes back without a

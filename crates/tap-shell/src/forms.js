@@ -1,17 +1,21 @@
-// Search's form script (Forms.swift `FormRelay.script`), word for word but for its
-// names: `__tapForms` and the `tapForms` handler. See forms.rs.
+// Based on Search's form script (Forms.swift `FormRelay.script`). See forms.rs.
 (function () {
   if (window.__tapForms) return;
 
-  // The password box, and the last box before it that could hold a name.
-  function pair() {
+  // The first visible password box.
+  function passwordBox() {
     var boxes = document.querySelectorAll('input[type="password"]');
-    var pass = null;
     for (var p = 0; p < boxes.length; p++) {
       var b = boxes[p];
       var r = b.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) { pass = b; break; }
+      if (r.width > 0 && r.height > 0) return b;
     }
+    return null;
+  }
+
+  // The password box, and the last box before it that could hold a name.
+  function pair() {
+    var pass = passwordBox();
     if (!pass) return null;
     var scope = pass.form || (pass.closest && pass.closest('form')) || document;
     var all = scope.querySelectorAll('input');
@@ -149,7 +153,7 @@
   // caret is in, or else the one box on the page that is. A page with
   // more than a handful of boxes to type in is not a first step.
   function named() {
-    if (pair()) return null;
+    if (passwordBox()) return null;
     var el = document.activeElement;
     if (nameBox(el)) return el;
     var all = document.querySelectorAll('input'), seen = [];
@@ -220,7 +224,7 @@
     },
     // Whether there is still a sign-in on the page. Asked after a
     // password went out, to tell a sign-in that took from one refused.
-    hasPassword: function () { return !!pair(); },
+    hasPassword: function () { return !!passwordBox(); },
     // What a box would be offered, for the tests: null, or whether a
     // pick puts in the name alone and whether the site's other hosts'
     // accounts come too.
@@ -268,7 +272,7 @@
 
   var told = false;
   function tell() {
-    if (told || !pair()) return;
+    if (told || !passwordBox()) return;
     told = true;
     window.webkit.messageHandlers.tapForms.postMessage({ kind: 'form' });
   }
@@ -290,11 +294,11 @@
   function look() {
     looking = null;
     if (!told) { tell(); return; }
-    if (pair()) return;
+    if (passwordBox()) return;
     told = false;
     clearTimeout(settling);
     settling = setTimeout(function () {
-      if (pair()) return;
+      if (passwordBox()) return;
       window.webkit.messageHandlers.tapForms.postMessage({ kind: 'settled' });
     }, 400);
   }

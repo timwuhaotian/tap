@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.8 — 2026-11-06
+
+### Changed
+
+- **Less work during page loads**: unchanged browser state no longer triggers a window
+  update, and sign-in detection avoids unnecessary input scans on changing pages.
+
 ## 0.2.7 — 2026-11-06
 
 ### Fixed

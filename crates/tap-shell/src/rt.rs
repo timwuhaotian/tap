@@ -11,7 +11,7 @@ use std::{
     collections::VecDeque,
 };
 
-use tap_core::browser::{Browser, Effect};
+use tap_core::browser::{Browser, BrowserFields, Effect, TabFields, TabId};
 
 use crate::{web, window};
 
@@ -21,11 +21,14 @@ thread_local! {
     static BROWSER: RefCell<Option<Browser>> = const { RefCell::new(None) };
     static DEPTH: Cell<u32> = const { Cell::new(0) };
     static PENDING: RefCell<VecDeque<Change>> = const { RefCell::new(VecDeque::new()) };
+    // Launch can consume the initial dirty marks before the window exists.
+    static WINDOW_UPDATED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Hands the model over. Once, at launch.
 pub fn install(browser: Browser) {
     BROWSER.with_borrow_mut(|slot| *slot = Some(browser));
+    WINDOW_UPDATED.set(false);
 }
 
 /// Changes the model, then carries out its effects and redraws.
@@ -81,12 +84,26 @@ fn settle_inner() {
     }
 }
 
+type Flush = (
+    BrowserFields,
+    Vec<(TabId, TabFields)>,
+    Vec<Effect>,
+    window::View,
+);
+
+fn take_flush(browser: &mut Browser, window_updated: bool) -> Option<Flush> {
+    let (window_dirty, tab_dirty) = browser.take_dirty();
+    let effects = browser.take_effects();
+    if window_updated && window_dirty.is_empty() && tab_dirty.is_empty() && effects.is_empty() {
+        return None;
+    }
+    Some((window_dirty, tab_dirty, effects, window::View::of(browser)))
+}
+
 fn flush() {
     let Some((window_dirty, tab_dirty, effects, view)) = BROWSER.with_borrow_mut(|slot| {
-        let browser = slot.as_mut()?;
-        let (window_dirty, tab_dirty) = browser.take_dirty();
-        let effects = browser.take_effects();
-        Some((window_dirty, tab_dirty, effects, window::View::of(browser)))
+        slot.as_mut()
+            .and_then(|browser| take_flush(browser, WINDOW_UPDATED.get()))
     }) else {
         return;
     };
@@ -99,7 +116,98 @@ fn flush() {
         web::perform(effect);
     }
     window::update(window_dirty, &tab_dirty, &view);
+    if !WINDOW_UPDATED.get() && window::main_window().is_some() {
+        WINDOW_UPDATED.set(true);
+    }
     for effect in focus {
         web::perform(effect);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_load_notifications_skip_snapshots_after_window_update() {
+        let mut browser = Browser::new();
+        let tab = browser.active().unwrap();
+        browser.take_dirty();
+        browser.take_effects();
+
+        for _ in 0..100 {
+            browser.page_loading(tab, false, 0.0);
+            assert!(take_flush(&mut browser, true).is_none());
+        }
+    }
+
+    #[test]
+    fn clean_flush_still_initializes_window() {
+        let mut browser = Browser::new();
+        browser.take_dirty();
+        browser.take_effects();
+
+        assert!(take_flush(&mut browser, false).is_some());
+    }
+
+    #[test]
+    fn dirty_load_notification_updates_window() {
+        let mut browser = Browser::new();
+        let tab = browser.active().unwrap();
+        browser.take_dirty();
+        browser.take_effects();
+        browser.page_loading(tab, true, 0.1);
+
+        let (_, tabs, _, _) = take_flush(&mut browser, true).unwrap();
+        assert!(tabs.iter().any(|(id, fields)| {
+            *id == tab && fields.contains(TabFields::LOADING | TabFields::PROGRESS)
+        }));
+    }
+
+    #[test]
+    fn dirty_window_is_not_skipped() {
+        let mut browser = Browser::new();
+        browser.take_dirty();
+        browser.take_effects();
+        browser.begin_editing(false);
+
+        let (dirty, _, _, _) = take_flush(&mut browser, true).unwrap();
+        assert!(dirty.contains(BrowserFields::EDITING));
+    }
+
+    #[test]
+    fn queued_changes_run_in_order_after_clean_flushes() {
+        use std::rc::Rc;
+
+        install(Browser::new());
+        update(|browser| {
+            browser.take_dirty();
+            browser.take_effects();
+        });
+        WINDOW_UPDATED.set(true);
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let first = Rc::clone(&order);
+        let second = Rc::clone(&order);
+        dispatch(move |_| {
+            dispatch(move |_| first.borrow_mut().push(1));
+            dispatch(move |_| second.borrow_mut().push(2));
+        });
+
+        assert_eq!(*order.borrow(), [1, 2]);
+    }
+
+    #[test]
+    fn clean_flush_keeps_focus_effects() {
+        let mut browser = Browser::new();
+        browser.take_dirty();
+        browser.take_effects();
+        browser.focus_page();
+
+        let (_, _, effects, _) = take_flush(&mut browser, true).unwrap();
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::FocusPage(_)))
+        );
     }
 }

@@ -7,6 +7,7 @@
     scripts/bench keyeq key=t                      # ⌘T
     scripts/bench keyeq key=tab modifiers='["control"]'
     scripts/bench eval id=3 js='document.title'
+    scripts/bench test-forms                         # WebKit form regression tests
 
 Values are read as JSON when they parse (true, 3, ["a"]) and as text otherwise. The
 world is TAP_PROBE's, as for the app: `TAP_PROBE=dev scripts/bench probe` talks to the
@@ -15,6 +16,7 @@ Tap started with TAP_PROBE=dev. One JSON object per line out, as the bench answe
 
 import json
 import os
+from pathlib import Path
 import re
 import socket
 import sys
@@ -33,9 +35,153 @@ def socket_path():
     return os.path.expanduser(f"~/Library/Application Support/{folder}/bench.sock")
 
 
+def request(body):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.connect(socket_path())
+        conn.sendall((json.dumps(body) + "\n").encode())
+        answer = b""
+        while not answer.endswith(b"\n"):
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            answer += chunk
+    result = json.loads(answer)
+    if "error" in result:
+        raise RuntimeError(result["error"])
+    return result
+
+
+def test_forms():
+    if world() is None:
+        raise RuntimeError("test-forms requires TAP_PROBE and an isolated test world")
+    source = Path(os.environ.get("TAP_FORMS_SCRIPT", Path(__file__).resolve().parent.parent / "crates/tap-shell/src/forms.js")).read_text()
+    tab = request({"do": "open", "url": "about:blank"})["id"]
+    try:
+        request({"do": "wait", "id": tab})
+        js = r'''(() => {
+          const source = SOURCE;
+          try {
+          let checks = 0;
+          function check(ok, message) { checks++; if (!ok) throw new Error(message); }
+          function page(html) {
+            const frame = document.createElement('iframe');
+            document.body.appendChild(frame);
+            const w = frame.contentWindow, d = w.document;
+            d.body.innerHTML = html;
+            const messages = [], timers = [];
+            let observer, scans = 0;
+            for (const proto of [w.Document.prototype, w.Element.prototype]) {
+              const query = proto.querySelectorAll;
+              proto.querySelectorAll = function (selector) {
+                if (selector === 'input') scans++;
+                return query.call(this, selector);
+              };
+            }
+            Object.defineProperty(w, 'webkit', { configurable: true, value: {
+              messageHandlers: { tapForms: { postMessage: m => messages.push(m) } }
+            }});
+            w.setTimeout = (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; };
+            w.clearTimeout = t => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); };
+            w.MutationObserver = class { constructor(fn) { observer = fn; } observe() {} };
+            w.eval(source);
+            return { w, d, messages, frame, reset: () => { scans = 0; }, scans: () => scans,
+              mutate: () => observer([]), timer: ms => {
+                const i = timers.findIndex(t => t.ms === ms);
+                check(i >= 0, 'missing timer ' + ms);
+                timers.splice(i, 1)[0].fn();
+              }};
+          }
+          function kinds(p) { return p.messages.map(m => m.kind); }
+          function done(p) { p.frame.remove(); }
+
+          let p = page('<form><input id="hidden" type="password" style="display:none"><input id="u1"><input id="u2" type="email"><input id="pw" type="password"><input id="after"></form>');
+          let d = p.d, f = p.w.__tapForms, u = d.querySelector('#u2'), pw = d.querySelector('#pw');
+          p.reset();
+          check(f.hasPassword() && p.scans() === 0, 'hasPassword must not scan usernames');
+          p.reset();
+          check(!f.name('ignored') && p.scans() === 0, 'named must not scan usernames when a password is present');
+          check(f.verdict(u).wide && !f.verdict(u).name && f.verdict(d.querySelector('#u1')) === null, 'last preceding username verdict');
+          check(f.verdict(pw).wide && f.verdict(d.querySelector('#after')) === null, 'password verdict');
+          let events = [];
+          for (const el of [u, pw]) for (const type of ['input', 'change']) el.addEventListener(type, () => events.push(el.id + ':' + type));
+          check(f.fill('alice', 'secret') && u.value === 'alice' && pw.value === 'secret', 'fill selected pair');
+          check(events.join(',') === 'u2:input,u2:change,pw:input,pw:change', 'fill events');
+          f.fill('bob', 'other');
+          check(u.value === 'alice' && pw.value === 'other', 'fill preserves existing username');
+          d.dispatchEvent(new p.w.Event('submit'));
+          let sent = p.messages.filter(m => m.kind === 'submit').pop();
+          check(sent.user === 'alice' && sent.password === 'other', 'submit reports selected pair');
+          pw.focus();
+          d.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter' }));
+          check(p.messages.filter(m => m.kind === 'submit').length === 2, 'Enter reports the pair');
+          pw.setAttribute('autocomplete', 'new-password');
+          check(f.verdict(pw) === null && f.verdict(u) === null && f.hasPassword(), 'new password still counts but is not offered');
+          done(p);
+
+          p = page('<form><input id="user" autocomplete="username"><button>Next</button></form><input type="password" style="width:0;height:0;padding:0;border:0">');
+          d = p.d; f = p.w.__tapForms; u = d.querySelector('#user');
+          check(!f.hasPassword() && !f.fill('x', 'y'), 'hidden password is absent');
+          check(f.verdict(u).name && f.name('alice') && u.value === 'alice', 'first-step name');
+          d.dispatchEvent(new p.w.Event('submit'));
+          check(p.messages.some(m => m.kind === 'name' && m.user === 'alice'), 'first-step submit');
+          done(p);
+
+          p = page('<form id="a"><input id="outside-user"></form><form id="b"><input id="chosen" type="tel" disabled><input id="pw" type="password"></form><input type="password">');
+          d = p.d; f = p.w.__tapForms;
+          check(f.fill('alice', 'secret') && d.querySelector('#chosen').value === 'alice' && d.querySelector('#outside-user').value === '', 'form scope and disabled preceding username');
+          check(d.querySelectorAll('input[type=password]')[1].value === '', 'first visible password wins');
+          done(p);
+
+          p = page('<input id="user"><input id="pw" type="password">');
+          d = p.d; f = p.w.__tapForms;
+          check(f.fill('alice', 'secret') && d.querySelector('#user').value === 'alice', 'document scope without form');
+          done(p);
+
+          p = page('<form id="login"><input id="user"></form><input id="pw" type="password" form="login" style="visibility:hidden">');
+          d = p.d; f = p.w.__tapForms;
+          check(f.hasPassword() && f.fill('alice', 'secret') && d.querySelector('#user').value === 'alice', 'visibility:hidden counts and external form supplies scope');
+          done(p);
+
+          p = page('<input id="pw" type="password">');
+          d = p.d; f = p.w.__tapForms;
+          check(f.fill('alice', 'secret') && d.querySelector('#pw').value === 'secret', 'password without username');
+          d.dispatchEvent(new p.w.Event('submit'));
+          check(p.messages.some(m => m.kind === 'submit' && m.user === '' && m.password === 'secret'), 'submit without username');
+          done(p);
+
+          p = page('<form><input id="user"><input id="pw" type="password" style="display:none"></form>');
+          d = p.d; pw = d.querySelector('#pw');
+          p.reset(); pw.style.display = ''; p.timer(700);
+          check(kinds(p).filter(k => k === 'form').length === 1 && p.scans() === 0, 'tell finds a newly visible password without username scan');
+          p.reset(); p.mutate(); p.timer(250);
+          check(p.scans() === 0 && !kinds(p).includes('settled'), 'look with password does not scan usernames');
+          pw.remove(); p.mutate(); p.timer(250);
+          d.querySelector('form').appendChild(pw); p.reset(); p.timer(400);
+          check(p.scans() === 0 && !kinds(p).includes('settled'), 'restored password cancels settled');
+          p.mutate(); p.timer(250); pw.remove(); p.mutate(); p.timer(250); p.reset(); p.timer(400);
+          check(p.scans() === 0 && kinds(p).filter(k => k === 'settled').length === 1, 'removed password settles without username scan');
+          done(p);
+          return { checks };
+          } catch (error) { return { error: String(error) + '\n' + error.stack }; }
+        })()'''.replace("SOURCE", json.dumps(source), 1)
+        result = request({"do": "eval", "id": tab, "js": js})["value"]
+        if "error" in result:
+            raise RuntimeError(result["error"])
+        print(f"forms: {result['checks']} checks passed in WebKit")
+    finally:
+        request({"do": "close", "id": tab})
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
+        return 0
+    if argv[0] == "test-forms":
+        try:
+            test_forms()
+        except (OSError, RuntimeError, KeyError, ValueError) as error:
+            print(f"forms: {error}", file=sys.stderr)
+            return 1
         return 0
     request = {"do": argv[0]}
     for pair in argv[1:]:
