@@ -1,74 +1,101 @@
-//! What a blank tab shows behind the field: a quiet instrument, drawn, not a page.
+//! What the stage shows where there is no page to show yet: a small, quiet mark —
+//! a dot with rings rippling slowly out of it, a tap on still water.
 //!
-//! Search leaves a new tab empty ground; Tap draws a small isometric
-//! signal-bench there instead — base on feet, ticked rails, a carriage on
-//! bushings, a dial whose needle breathes, one softly lit signal dot. Pure
-//! ambience: nothing clickable, no model state, and no WebKit view, so a blank
-//! tab stays as cheap as Search's. The motion is one 12 s loop on the display
-//! link, paused while another tab is in front; Reduce Motion gets a single
-//! still frame (plan §5.1.6, `motion::reduced`).
+//! Search leaves a new tab empty ground; Tap draws this there instead, and keeps it
+//! up while a tab's first page is on its way, so a new tab or a link opened in one
+//! never flashes WebKit's empty white. While it waits the rings quicken, the dot takes
+//! the accent and the site's name sits under it; once the page arrives the ground
+//! fades away over it. Pure ambience: nothing clickable, no model state of its own,
+//! no WebKit view. Its frames run only while it is in front, and redraw only the
+//! mark; Reduce Motion (and light motion) get a still frame and no fades (plan
+//! §5.1.6, `motion::reduced`).
 
-use std::{
-    cell::{Cell, RefCell},
-    time::Instant,
-};
+use std::cell::{Cell, RefCell};
 
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
     runtime::NSObject, sel,
 };
 use objc2_app_kit::{NSBezierPath, NSColor, NSResponder, NSView};
-use objc2_foundation::{NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use objc2_quartz_core::CADisplayLink;
 
-use crate::{motion, palette};
+use crate::{
+    motion::{self, Curve, Follow, Frames},
+    palette,
+};
 
-/// How long one calm loop lasts, in seconds.
-pub const LOOP: f64 = 12.0;
+/// How many rings are out at once.
+pub const RINGS: usize = 3;
+/// Seconds for one ring to travel out, at rest and while a page is on its way.
+pub const CALM: f64 = 7.2;
+pub const BUSY: f64 = 2.1;
+/// Where a ring is born and where it has faded by, in points from the dot.
+pub const INNER: f64 = 5.0;
+pub const OUTER: f64 = 38.0;
+/// How far under the mark the site's name sits.
+const LABEL_GAP: f64 = 16.0;
 
-/// Where the loop is at `t` seconds: 0 to 1, wrapping.
-#[must_use]
-pub fn cycle(t: f64) -> f64 {
-    (t % LOOP) / LOOP
+/// What the ground shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ground {
+    /// Nothing: the tab in front has a page (or a page of Tap's own) to show.
+    Away,
+    /// A blank tab: the mark at rest.
+    Calm,
+    /// A tab's first page is on its way to `host`; `busy` while it is loading.
+    Waiting { host: String, busy: bool },
 }
 
-/// The dial needle's angle at `t` seconds, in radians: rest plus a slow breath.
+/// Ring `k` at `phase` (0 to 1, one ring's trip): how far out and how strong. It
+/// eases out as a ripple does, and comes in from nothing so none is born at full
+/// strength.
 #[must_use]
-pub fn needle_angle(t: f64) -> f64 {
-    const REST: f64 = -0.8;
-    REST + 0.35 * (std::f64::consts::TAU * cycle(t)).sin()
+pub fn ring(phase: f64, k: usize) -> (f64, f64) {
+    #[allow(clippy::cast_precision_loss)] // three rings
+    let p = (phase + k as f64 / RINGS as f64).rem_euclid(1.0);
+    let eased = 1.0 - (1.0 - p).powi(3);
+    let radius = INNER + (OUTER - INNER) * eased;
+    let strength = (p / 0.12).min(1.0) * (1.0 - p).powf(1.4);
+    (radius, strength)
 }
 
-/// How far the carriage and the lit dot drift at `t` seconds, in points.
+/// Where the mark's dot sits in a stage of `size`: across the middle, a little above
+/// halfway down, where the eye puts the middle of a page.
 #[must_use]
-pub fn drift(t: f64) -> (f64, f64) {
-    let a = std::f64::consts::TAU * cycle(t);
-    (6.0 * a.sin(), 4.0 * (a + 1.3).sin())
+pub fn centre(size: NSSize) -> NSPoint {
+    NSPoint::new(size.width / 2.0, (size.height * 0.44).round())
 }
 
-/// How strongly the signal dot glows at `t` seconds: 0.55 to 1.0.
-#[must_use]
-pub fn signal_alpha(t: f64) -> f64 {
-    0.775 + 0.225 * (std::f64::consts::TAU * cycle(t) + 0.6).sin()
-}
-
-/// Where the instrument sits in a stage of `size`: its centre and its unit, so
-/// the bench fills about three fifths of the smaller side.
-#[must_use]
-pub fn fit(size: NSSize) -> (f64, f64, f64) {
-    let smaller = size.width.min(size.height).max(1.0);
-    (size.width / 2.0, size.height / 2.0, smaller / 120.0)
+/// The band the mark and its label are drawn in, all the frames ever redraw.
+fn band(size: NSSize) -> NSRect {
+    let mid = centre(size);
+    NSRect::new(
+        NSPoint::new(0.0, mid.y - OUTER - 4.0),
+        NSSize::new(
+            size.width,
+            2.0 * OUTER + LABEL_GAP + 2.0 * palette::line_height(),
+        ),
+    )
 }
 
 pub struct Ivars {
-    time: Cell<f64>,
-    /// Frames while a blank tab is in front, paused when it isn't.
-    link: RefCell<Option<Retained<CADisplayLink>>>,
-    last_frame: Cell<Option<Instant>>,
+    /// How far the rings have come, 0 to 1, wrapping.
+    phase: Cell<f64>,
+    /// 0 at rest, 1 while a page loads: the rings' pace and the dot's colour.
+    busy: RefCell<Follow>,
+    /// How strongly the site's name shows.
+    label: RefCell<Follow>,
+    host: RefCell<String>,
+    /// The whole ground's alpha: 1 in front, to 0 as a page arrives over it.
+    veil: RefCell<Follow>,
+    /// Drawn still: Reduce Motion or light motion when it was last shown.
+    still: Cell<bool>,
+    frames: Frames,
 }
 
 define_class!(
-    /// The instrument behind a blank tab's field.
+    /// The ground behind a blank tab's field, and in front of a first page loading.
     #[unsafe(super(NSView, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "TapBlank"]
@@ -81,14 +108,20 @@ define_class!(
             true
         }
 
+        /// Not opaque: it fades over the page as the page arrives.
         #[unsafe(method(isOpaque))]
         fn is_opaque(&self) -> bool {
-            true
+            false
         }
 
         #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            draw_in(self);
+        fn draw_rect(&self, dirty: NSRect) {
+            draw_in(self, dirty);
+        }
+
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn appearance_changed(&self) {
+            self.setNeedsDisplay(true);
         }
 
         /// One frame of motion, from the display link.
@@ -102,99 +135,97 @@ define_class!(
 impl BlankView {
     pub fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars {
-            time: Cell::new(0.0),
-            link: RefCell::new(None),
-            last_frame: Cell::new(None),
+            phase: Cell::new(0.0),
+            busy: RefCell::new(Follow::at(0.0)),
+            label: RefCell::new(Follow::at(0.0)),
+            host: RefCell::new(String::new()),
+            veil: RefCell::new(Follow::at(1.0)),
+            still: Cell::new(false),
+            frames: Frames::default(),
         });
         // SAFETY: NSView's designated initialiser.
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        // Its own layer, so the fade is the layer's opacity, not a redraw.
+        view.setWantsLayer(true);
         view
     }
 
-    /// Starts the loop when a blank tab comes to the front, stops it when one
-    /// goes. Under Reduce Motion (or while the Mac wants light motion) one
-    /// still frame is drawn and no link runs.
-    pub fn set_animating(&self, on: bool) {
-        if !on || motion::reduced() || motion::light() {
-            if let Some(link) = self.ivars().link.borrow().as_ref() {
-                link.setPaused(true);
+    /// Shows `ground`. `fade`: the page it gives way to arrived in the same tab, so
+    /// the ground fades over it; anything else (another tab in front) is at once.
+    pub fn show(&self, ground: &Ground, fade: bool) {
+        let ivars = self.ivars();
+        let still = motion::reduced() || motion::light();
+        ivars.still.set(still);
+        let (busy, label) = match ground {
+            Ground::Away => {
+                if self.isHidden() {
+                    return;
+                }
+                if fade && !still {
+                    ivars.veil.borrow_mut().aim(0.0, Curve::FADE);
+                    ivars.frames.run(self, sel!(blankFrame:));
+                } else {
+                    self.put_away();
+                }
+                return;
             }
-            self.ivars().last_frame.set(None);
-            if !on {
-                self.ivars().time.set(0.0);
+            Ground::Calm => (0.0, 0.0),
+            Ground::Waiting { host, busy } => {
+                ivars.host.replace(host.clone());
+                (if *busy { 1.0 } else { 0.0 }, 1.0)
             }
-            self.setNeedsDisplay(true);
-            return;
+        };
+        let fresh = self.isHidden() || ivars.veil.borrow().target() < 1.0;
+        ivars.veil.borrow_mut().set(1.0);
+        self.setAlphaValue(1.0);
+        self.setHidden(false);
+        if fresh || still {
+            // Coming to the front: as it is, not easing in from the last tab's look.
+            ivars.busy.borrow_mut().set(busy);
+            ivars.label.borrow_mut().set(label);
+        } else {
+            ivars.busy.borrow_mut().aim(busy, Curve::FADE);
+            ivars.label.borrow_mut().aim(label, Curve::FADE);
         }
-        let mut slot = self.ivars().link.borrow_mut();
-        if slot.is_none() {
-            let target: &NSObject = self.as_ref();
-            // SAFETY: `blankFrame:` is this class's own method and takes the
-            // link; the link keeps the view, which lives for the app's life.
-            let link = unsafe { self.displayLinkWithTarget_selector(target, sel!(blankFrame:)) };
-            // SAFETY: the main run loop and its common modes, so frames keep
-            // coming while a menu is up.
-            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
-            link.setPaused(true);
-            *slot = Some(link);
+        self.setNeedsDisplay(true);
+        if still {
+            ivars.frames.pause();
+        } else {
+            ivars.frames.run(self, sel!(blankFrame:));
         }
-        if let Some(link) = slot.as_ref()
-            && link.isPaused()
-        {
-            self.ivars().last_frame.set(None);
-            link.setPaused(false);
-        }
+    }
+
+    /// Hidden, with no frames, and whole again for the next time it is shown.
+    fn put_away(&self) {
+        let ivars = self.ivars();
+        ivars.frames.pause();
+        self.setHidden(true);
+        ivars.veil.borrow_mut().set(1.0);
+        self.setAlphaValue(1.0);
+        ivars.phase.set(0.0);
     }
 
     fn frame_tick(&self) {
-        let now = Instant::now();
-        let dt = self
-            .ivars()
-            .last_frame
-            .replace(Some(now))
-            .map_or(1.0 / 60.0, |then| now.duration_since(then).as_secs_f64())
-            .min(1.0 / 15.0);
-        self.ivars().time.set(self.ivars().time.get() + dt);
-        self.setNeedsDisplay(true);
-    }
-}
-
-/// Projects world units onto the view: x and y on the floor, z up. The view
-/// is flipped, so up is negative y.
-fn project(center_x: f64, center_y: f64, scale: f64, wx: f64, wy: f64, wz: f64) -> NSPoint {
-    NSPoint::new(
-        center_x + (wx - wy) * 0.866 * scale,
-        center_y + wx.midpoint(wy) * scale - wz * scale,
-    )
-}
-
-fn path_of(points: &[NSPoint], close: bool) -> Retained<NSBezierPath> {
-    let path = NSBezierPath::new();
-    let mut first = true;
-    for p in points {
-        if first {
-            path.moveToPoint(*p);
-            first = false;
-        } else {
-            path.lineToPoint(*p);
+        let ivars = self.ivars();
+        let dt = ivars.frames.dt();
+        let busy = ivars.busy.borrow().value().clamp(0.0, 1.0);
+        let pace = (1.0 - busy) / CALM + busy / BUSY;
+        ivars
+            .phase
+            .set((ivars.phase.get() + dt * pace).rem_euclid(1.0));
+        ivars.busy.borrow_mut().step(dt);
+        ivars.label.borrow_mut().step(dt);
+        let fading = ivars.veil.borrow_mut().step(dt);
+        let veil = ivars.veil.borrow().value().clamp(0.0, 1.0);
+        if ivars.veil.borrow().target() <= 0.0 && (!fading || veil <= 0.001) {
+            self.put_away();
+            return;
         }
+        if fading {
+            self.setAlphaValue(veil);
+        }
+        self.setNeedsDisplayInRect(band(self.bounds().size));
     }
-    if close {
-        path.closePath();
-    }
-    path
-}
-
-fn fill_poly(points: &[NSPoint], color: &NSColor) {
-    color.setFill();
-    path_of(points, true).fill();
-}
-
-fn stroke_poly(points: &[NSPoint], color: &NSColor, width: f64) {
-    color.setStroke();
-    let path = path_of(points, false);
-    path.setLineWidth(width);
-    path.stroke();
 }
 
 fn dot(at: NSPoint, r: f64, color: &NSColor) {
@@ -206,7 +237,7 @@ fn dot(at: NSPoint, r: f64, color: &NSColor) {
     .fill();
 }
 
-fn ring(at: NSPoint, r: f64, color: &NSColor, width: f64) {
+fn ring_path(at: NSPoint, r: f64, color: &NSColor, width: f64) {
     color.setStroke();
     let path = NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
         NSPoint::new(at.x - r, at.y - r),
@@ -216,236 +247,50 @@ fn ring(at: NSPoint, r: f64, color: &NSColor, width: f64) {
     path.stroke();
 }
 
-/// The whole bench, back to front: base, rails, carriage, dial, mast and dot.
-#[allow(clippy::too_many_lines)] // one instrument, drawn in order
-fn draw_in(view: &BlankView) {
+/// The ground, then the rings, the dot, and the site's name while one is awaited.
+fn draw_in(view: &BlankView, dirty: NSRect) {
     let dark = palette::is_dark(view);
-    let bounds = view.bounds();
     palette::GROUND.resolve(dark).setFill();
-    NSBezierPath::fillRect(bounds);
+    NSBezierPath::fillRect(dirty);
 
-    let time = view.ivars().time.get();
-    let (center_x, center_y, scale) = fit(bounds.size);
-    let unit = scale.max(0.4);
-    let (dx, dy) = drift(time);
-
-    let hairline = palette::HAIRLINE.resolve(dark);
-    let muted = palette::MUTED.resolve(dark);
-    let ink = palette::INK.resolve(dark);
-    let wash = palette::WASH.resolve(dark);
-
-    // Halo under the bench: it stands on something.
-    dot(
-        project(center_x, center_y, scale, 0.0, 0.0, 0.0),
-        46.0 * scale,
-        &wash,
-    );
-
-    // Base slab: top, left and right faces.
-    let half = 26.0;
-    let top = 5.0;
-    let c00 = project(center_x, center_y, scale, -half, -half, top);
-    let c10 = project(center_x, center_y, scale, half, -half, top);
-    let c11 = project(center_x, center_y, scale, half, half, top);
-    let c01 = project(center_x, center_y, scale, -half, half, top);
-    let e00 = project(center_x, center_y, scale, -half, -half, 0.0);
-    let e10 = project(center_x, center_y, scale, half, -half, 0.0);
-    let e11 = project(center_x, center_y, scale, half, half, 0.0);
-    let e01 = project(center_x, center_y, scale, -half, half, 0.0);
-    let _ = e00;
-    fill_poly(&[e10, e11, c11, c10], &hairline);
-    fill_poly(&[e01, e11, c11, c01], &wash);
-    fill_poly(&[c00, c10, c11, c01], &wash);
-    stroke_poly(&[c00, c10, c11, c01, c00], &muted, 1.0);
-
-    // Feet: four short posts under the corners.
-    for (fx, fy) in [
-        (-half + 4.0, -half + 4.0),
-        (half - 4.0, -half + 4.0),
-        (half - 4.0, half - 4.0),
-        (-half + 4.0, half - 4.0),
-    ] {
-        let top = project(center_x, center_y, scale, fx, fy, 0.0);
-        let bottom = project(center_x, center_y, scale, fx, fy, -4.0);
-        stroke_poly(&[top, bottom], &muted, 2.5 * unit);
-        dot(bottom, 1.6 * unit, &muted);
-    }
-
-    // Corner screws on the top face.
-    for (sx, sy) in [
-        (-half + 3.0, -half + 3.0),
-        (half - 3.0, -half + 3.0),
-        (half - 3.0, half - 3.0),
-        (-half + 3.0, half - 3.0),
-    ] {
-        let at = project(center_x, center_y, scale, sx, sy, top);
-        dot(at, 1.1 * unit, &muted);
-        ring(at, 1.1 * unit, &ink, 0.5);
-    }
-
-    // Label plate with three rule lines, near the front edge.
-    let p00 = project(center_x, center_y, scale, -10.0, half - 9.0, top);
-    let p10 = project(center_x, center_y, scale, 10.0, half - 9.0, top);
-    let p11 = project(center_x, center_y, scale, 10.0, half - 4.0, top);
-    let p01 = project(center_x, center_y, scale, -10.0, half - 4.0, top);
-    stroke_poly(&[p00, p10, p11, p01, p00], &muted, 0.75);
-    for idx in 0..3 {
-        let y = half - 9.0 + f64::from(idx + 1) / 4.0 * 5.0;
-        stroke_poly(
-            &[
-                project(center_x, center_y, scale, -7.0, y, top),
-                project(center_x, center_y, scale, 7.0, y, top),
-            ],
-            &hairline,
-            0.75,
-        );
-    }
-
-    // Rails with tick rulers along both sides.
-    for ry in [-14.0, 14.0] {
-        let q0 = project(center_x, center_y, scale, -half + 3.0, ry - 1.6, top);
-        let q1 = project(center_x, center_y, scale, half - 3.0, ry - 1.6, top);
-        let q2 = project(center_x, center_y, scale, half - 3.0, ry + 1.6, top);
-        let q3 = project(center_x, center_y, scale, -half + 3.0, ry + 1.6, top);
-        fill_poly(&[q0, q1, q2, q3], &hairline);
-        stroke_poly(&[q0, q1, q2, q3, q0], &muted, 0.75);
-        // Ticks every 4 units, a longer one every 5th.
-        let mut pos = -half + 5.0;
-        let mut tick = 0;
-        while pos < half - 4.0 {
-            let len = if tick % 5 == 0 { 2.6 } else { 1.4 };
-            stroke_poly(
-                &[
-                    project(center_x, center_y, scale, pos, ry + 1.6, top),
-                    project(center_x, center_y, scale, pos, ry + 1.6 - len, top),
-                ],
-                &muted,
-                0.6,
-            );
-            pos += 4.0;
-            tick += 1;
-        }
-    }
-
-    // Carriage on bushings, breathing with the loop.
-    let car = 8.0;
-    let k00u = project(center_x + dx, center_y + dy, scale, -car, -16.0, top + 5.0);
-    let k10u = project(center_x + dx, center_y + dy, scale, car, -16.0, top + 5.0);
-    let k11u = project(center_x + dx, center_y + dy, scale, car, 16.0, top + 5.0);
-    let k01u = project(center_x + dx, center_y + dy, scale, -car, 16.0, top + 5.0);
-    let k10 = project(center_x + dx, center_y + dy, scale, car, -16.0, top + 2.0);
-    let k11 = project(center_x + dx, center_y + dy, scale, car, 16.0, top + 2.0);
-    let k01 = project(center_x + dx, center_y + dy, scale, -car, 16.0, top + 2.0);
-    fill_poly(&[k10, k11, k11u, k10u], &hairline);
-    fill_poly(&[k01, k11, k11u, k01u], &wash);
-    fill_poly(&[k00u, k10u, k11u, k01u], &wash);
-    stroke_poly(&[k00u, k10u, k11u, k01u, k00u], &muted, 1.0);
-    for by in [-14.0, 14.0] {
-        let at = project(center_x + dx, center_y + dy, scale, 0.0, by, top + 2.0);
-        ring(at, 2.2 * unit, &muted, 1.0);
-        dot(at, 1.0 * unit, &ink);
-    }
-
-    // Coil springs around the rods behind the carriage.
-    for sy in [-14.0, 14.0] {
-        let mut pts = Vec::with_capacity(16);
-        let mut coil_x = -half + 3.0;
-        let mut up = true;
-        while coil_x < -car {
-            pts.push(project(
-                center_x,
-                center_y,
-                scale,
-                coil_x,
-                if up { sy - 1.2 } else { sy + 1.2 },
-                top + 2.0,
-            ));
-            coil_x += 2.0;
-            up = !up;
-        }
-        stroke_poly(&pts, &muted, 0.8);
-    }
-    // The rods themselves, through the carriage.
-    for ry in [-14.0, 14.0] {
-        stroke_poly(
-            &[
-                project(center_x, center_y, scale, -half + 3.0, ry, top + 2.0),
-                project(center_x, center_y, scale, half - 3.0, ry, top + 2.0),
-            ],
-            &ink,
-            1.0,
-        );
-    }
-
-    // Dial gauge on a post at the back-left.
-    let post = project(center_x, center_y, scale, -18.0, -8.0, top);
-    let post_top = project(center_x, center_y, scale, -18.0, -8.0, top + 12.0);
-    stroke_poly(&[post, post_top], &muted, 2.0 * unit);
-    let face = project(center_x, center_y, scale, -18.0, -8.0, top + 16.0);
-    let face_r = 9.0 * unit;
-    dot(face, face_r + 1.5, &hairline);
-    dot(face, face_r, &wash);
-    ring(face, face_r, &muted, 1.0);
-    // Twelve ticks around the face; the zero mark runs long.
-    for idx in 0..12 {
-        let dial_a = f64::from(idx) / 12.0 * std::f64::consts::TAU;
-        let long = idx == 0;
-        let r0 = face_r - if long { 3.2 } else { 1.8 };
-        let p0 = NSPoint::new(face.x + r0 * dial_a.cos(), face.y + r0 * dial_a.sin());
-        let p1 = NSPoint::new(
-            face.x + (face_r - 0.6) * dial_a.cos(),
-            face.y + (face_r - 0.6) * dial_a.sin(),
-        );
-        stroke_poly(&[p0, p1], if long { &ink } else { &muted }, 0.8);
-    }
-    // The needle breathes; its tail may stop on the bare face (a pointer's tip).
-    let needle_a = needle_angle(time);
-    let tip = NSPoint::new(
-        face.x + (face_r - 2.0) * needle_a.cos(),
-        face.y + (face_r - 2.0) * needle_a.sin(),
-    );
-    stroke_poly(&[face, tip], &ink, 1.2);
-    dot(face, 1.4, &ink);
-
-    // Signal mast at the back-right, with the one lit dot.
-    let mast = project(center_x, center_y, scale, 18.0, -10.0, top);
-    let mast_top = project(
-        center_x + dx * 0.5,
-        center_y + dy * 0.5,
-        scale,
-        18.0,
-        -10.0,
-        top + 20.0,
-    );
-    stroke_poly(&[mast, mast_top], &muted, 2.0 * unit);
-    dot(mast_top, 2.6 * unit, &hairline);
-    let alpha = signal_alpha(time);
-    let lit = if dark {
-        NSColor::colorWithSRGBRed_green_blue_alpha(0.54, 0.71, 0.97, alpha)
+    let ivars = view.ivars();
+    let bounds = view.bounds();
+    let mid = centre(bounds.size);
+    let busy = ivars.busy.borrow().value().clamp(0.0, 1.0);
+    // A still frame shows the rings part way out, as a photograph of the ripple.
+    let phase = if ivars.still.get() {
+        0.18
     } else {
-        NSColor::colorWithSRGBRed_green_blue_alpha(0.10, 0.45, 0.91, alpha)
+        ivars.phase.get()
     };
-    dot(mast_top, 6.5 * unit * alpha + 1.0, &wash);
-    dot(mast_top, 2.2 * unit, &lit);
-
-    // Knurled knob at the front-right corner.
-    let knob = project(center_x, center_y, scale, 20.0, 16.0, top + 2.0);
-    let knob_r = 4.5 * unit;
-    dot(knob, knob_r, &wash);
-    ring(knob, knob_r, &muted, 1.0);
-    for idx in 0..16 {
-        let knob_a = f64::from(idx) / 16.0 * std::f64::consts::TAU;
-        let p0 = NSPoint::new(
-            knob.x + (knob_r - 1.2) * knob_a.cos(),
-            knob.y + (knob_r - 1.2) * knob_a.sin(),
-        );
-        let p1 = NSPoint::new(
-            knob.x + knob_r * knob_a.cos(),
-            knob.y + knob_r * knob_a.sin(),
-        );
-        stroke_poly(&[p0, p1], &muted, 0.6);
+    let muted = palette::MUTED.resolve(dark);
+    for k in 0..RINGS {
+        let (radius, strength) = ring(phase, k);
+        let alpha = strength * (0.42 + 0.3 * busy);
+        if alpha > 0.004 {
+            ring_path(mid, radius, &muted.colorWithAlphaComponent(alpha), 1.0);
+        }
     }
-    dot(knob, 1.2, &ink);
+    // The dot: ink at rest, the accent while a page is on its way.
+    dot(mid, 9.0, &palette::WASH.resolve(dark));
+    if busy < 0.999 {
+        let ink = palette::INK.resolve(dark);
+        dot(mid, 3.2, &ink.colorWithAlphaComponent(0.7 * (1.0 - busy)));
+    }
+    if busy > 0.001 {
+        let accent = NSColor::controlAccentColor();
+        dot(mid, 3.2, &accent.colorWithAlphaComponent(busy));
+    }
+    let label = ivars.label.borrow().value().clamp(0.0, 1.0);
+    let host = ivars.host.borrow();
+    if label > 0.004 && !host.is_empty() {
+        let width = palette::text_width(&host).min(bounds.size.width - 48.0);
+        let rect = NSRect::new(
+            NSPoint::new((bounds.size.width - width) / 2.0, mid.y + OUTER + LABEL_GAP),
+            NSSize::new(width.max(0.0) + 1.0, palette::line_height()),
+        );
+        palette::draw_text(&host, rect, &muted.colorWithAlphaComponent(label));
+    }
 }
 
 #[cfg(test)]
@@ -453,44 +298,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_loop_wraps_and_the_needle_breathes() {
-        assert!((cycle(0.0) - 0.0).abs() < f64::EPSILON);
-        assert!((cycle(LOOP) - 0.0).abs() < f64::EPSILON);
-        assert!((cycle(LOOP / 2.0) - 0.5).abs() < 1e-9);
-        let rest = needle_angle(0.0);
-        let quarter = needle_angle(LOOP / 4.0);
-        assert!(
-            (quarter - rest - 0.35).abs() < 1e-9,
-            "full breath up: {quarter}"
-        );
-        assert!((needle_angle(LOOP) - rest).abs() < 1e-9, "wraps cleanly");
+    fn a_ring_ripples_out_and_fades_and_none_is_born_at_full_strength() {
+        let (born, at_birth) = ring(0.0, 0);
+        assert!((born - INNER).abs() < 1e-9 && at_birth.abs() < 1e-9);
+        let mut last = born;
+        for step in 1..100 {
+            let (radius, strength) = ring(f64::from(step) / 100.0, 0);
+            assert!(radius > last, "always outwards");
+            assert!((0.0..=1.0).contains(&strength));
+            last = radius;
+        }
+        assert!(last <= OUTER + 1e-9, "never past the mark's edge: {last}");
+        let (_, late) = ring(0.97, 0);
+        assert!(late < 0.01, "faded by the edge: {late}");
     }
 
     #[test]
-    fn drift_stays_small_and_the_signal_pulses_softly() {
-        for millis in [0, 1500, 3000, 6000, 9000, 11500] {
-            let secs = f64::from(millis) / 1000.0;
-            let (dx, dy) = drift(secs);
-            assert!(dx.abs() <= 6.5 && dy.abs() <= 4.5, "calm: {dx},{dy}");
-            let glow = signal_alpha(secs);
-            assert!((0.5..=1.0).contains(&glow), "soft pulse: {glow}");
+    fn the_rings_are_spread_evenly_and_the_loop_wraps() {
+        let radii: Vec<f64> = (0..RINGS).map(|k| ring(0.1, k).0).collect();
+        assert!(radii[0] < radii[1] && radii[1] < radii[2], "{radii:?}");
+        for k in 0..RINGS {
+            let (a, b) = (ring(0.0, k), ring(1.0, k));
+            assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9);
         }
     }
 
     #[test]
-    fn the_bench_fits_any_stage() {
-        for (wide, high) in [
-            (300.0, 200.0),
-            (1280.0, 768.0),
-            (560.0, 360.0),
-            (4000.0, 200.0),
-        ] {
-            let (mid_x, mid_y, mag) = fit(NSSize::new(wide, high));
-            assert!((mid_x - wide / 2.0).abs() < f64::EPSILON);
-            assert!((mid_y - high / 2.0).abs() < f64::EPSILON);
-            assert!(mag > 0.0, "a positive unit: {mag}");
-            // The bench (about ±46 world units wide on screen) stays inside.
-            assert!(46.0 * 0.866 * mag < wide / 2.0, "fits width {wide}: {mag}");
+    fn the_mark_is_small_and_sits_a_little_above_the_middle_of_any_stage() {
+        for (wide, high) in [(560.0, 300.0), (1280.0, 768.0), (3000.0, 1800.0)] {
+            let size = NSSize::new(wide, high);
+            let mid = centre(size);
+            assert!((mid.x - wide / 2.0).abs() < f64::EPSILON);
+            assert!(mid.y < high / 2.0 && mid.y > high / 3.0);
+            // The same few points across whatever the window is: a mark, not a picture.
+            let band = band(size);
+            assert!(band.size.height < 140.0, "{band:?}");
+            assert!(band.origin.y >= 0.0 && band.origin.y + band.size.height <= high);
         }
     }
 }

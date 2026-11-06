@@ -41,6 +41,8 @@ bitflags! {
         const ICON = 1 << 7;
         /// Whether everything on the page came over a secure connection.
         const SECURITY = 1 << 8;
+        /// A first page arrived: what stood in for it can go.
+        const COMMITTED = 1 << 9;
     }
 
     /// What changed on the window's model since the views last looked.
@@ -294,6 +296,11 @@ impl Tab {
     #[must_use]
     pub fn awake(&self) -> bool {
         self.awake
+    }
+    /// A page has arrived in it since it was made: until then it has nothing to show.
+    #[must_use]
+    pub fn committed(&self) -> bool {
+        self.committed
     }
     /// Nothing loaded and nothing asked for: a new tab.
     #[must_use]
@@ -2066,7 +2073,12 @@ impl Browser {
     /// A page arrived in the tab (WebKit committed its navigation).
     pub fn page_committed(&mut self, id: TabId) {
         if let Some(tab) = self.tab_mut(id) {
-            tab.committed = true;
+            Tab::set(
+                &mut tab.committed,
+                true,
+                &mut tab.dirty,
+                TabFields::COMMITTED,
+            );
         }
         // A new page under an open find bar: the old page's answers are retired; the new
         // one is asked once it has finished loading.
@@ -3678,6 +3690,29 @@ mod tests {
         assert!(
             !browser.take_effects().contains(&Effect::Reload(behind)),
             "once"
+        );
+    }
+
+    #[test]
+    fn a_first_commit_is_news_and_a_later_one_is_not() {
+        let mut browser = with_pages(&["https://mail.example"]);
+        let id = browser.tabs()[0].id;
+        assert!(!browser.tabs()[0].committed());
+        browser.take_dirty();
+        browser.page_committed(id);
+        assert!(browser.tabs()[0].committed());
+        let (_, tabs) = browser.take_dirty();
+        assert!(
+            tabs.iter()
+                .any(|(t, f)| *t == id && f.contains(TabFields::COMMITTED))
+        );
+        browser.page_committed(id);
+        let (_, tabs) = browser.take_dirty();
+        assert!(
+            !tabs
+                .iter()
+                .any(|(t, f)| *t == id && f.contains(TabFields::COMMITTED)),
+            "the next page in the same tab has the old one to stand in for it"
         );
     }
 

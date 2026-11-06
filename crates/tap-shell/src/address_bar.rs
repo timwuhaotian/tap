@@ -6,12 +6,13 @@
 //! the field there; a click on the badge says what the connection is and whose
 //! certificate the site showed. Settings › Show the address bar hides it.
 
-use std::{collections::HashMap, ffi::c_void};
+use std::{cell::RefCell, collections::HashMap, ffi::c_void};
 
 use objc2::{
-    MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, NSObject},
+    sel,
 };
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSCursor, NSEvent, NSFontWeightMedium, NSImage,
@@ -20,6 +21,7 @@ use objc2_app_kit::{
 use objc2_foundation::{
     NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSPoint, NSRect, NSSize, NSString,
 };
+use objc2_quartz_core::CADisplayLink;
 use serde_json::{Value, json};
 use tap_core::{
     browser::{Browser, TabId},
@@ -27,7 +29,10 @@ use tap_core::{
     settings_index,
 };
 
-use crate::{palette, prefs, rt, web};
+use crate::{
+    motion::{Frames, Loading},
+    palette, prefs, rt, web,
+};
 
 /// Where the address's capsule starts: after the helm's three doors.
 const LEAD: f64 = palette::HELM + 6.0;
@@ -227,10 +232,18 @@ pub fn describe() -> Value {
     })
 }
 
+/// The load's line along the capsule's foot, and the frames it moves on.
+#[derive(Default)]
+pub struct Ivars {
+    line: RefCell<Loading>,
+    frames: Frames,
+}
+
 define_class!(
     #[unsafe(super(NSView, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "TapAddressBar"]
+    #[ivars = Ivars]
     pub struct AddressBar;
 
     impl AddressBar {
@@ -273,12 +286,23 @@ define_class!(
         fn mouse_down(&self, event: &NSEvent) {
             self.press(event);
         }
+
+        /// One frame of the load's line, from the display link.
+        #[unsafe(method(barFrame:))]
+        fn bar_frame(&self, _link: &CADisplayLink) {
+            let dt = self.ivars().frames.dt();
+            let moving = self.ivars().line.borrow_mut().step(dt);
+            self.setNeedsDisplayInRect(foot(capsule(self.bounds().size.width)));
+            if !moving {
+                self.ivars().frames.pause();
+            }
+        }
     }
 );
 
 impl AddressBar {
     pub fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(());
+        let this = Self::alloc(mtm).set_ivars(Ivars::default());
         // SAFETY: NSView's designated initialiser.
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
@@ -384,27 +408,61 @@ impl AddressBar {
         if !shown.editing {
             draw_address(&shown, text_rect(capsule), dark);
         }
-        if shown.loading && !shown.editing {
-            // Along the capsule's foot, as far as the load has come.
-            // From zero, so an early load shows nothing yet rather than a stub.
-            let done = shown.progress.clamp(0.0, 1.0);
-            if done > 0.0 {
-                NSColor::controlAccentColor().setFill();
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                    NSRect::new(
-                        NSPoint::new(
-                            capsule.origin.x + palette::RADIUS,
-                            capsule.origin.y + capsule.size.height - 2.5,
-                        ),
-                        NSSize::new((capsule.size.width - 2.0 * palette::RADIUS) * done, 2.0),
-                    ),
-                    1.0,
-                    1.0,
-                )
-                .fill();
-            }
+        // The line follows the model on every draw; between draws its own frames
+        // move it, redrawing only the capsule's foot.
+        let wants = self
+            .ivars()
+            .line
+            .borrow_mut()
+            .update(shown.tab, shown.loading, shown.progress);
+        if wants {
+            self.ivars().frames.run(self, sel!(barFrame:));
+        }
+        if !shown.editing
+            && let Some((done, alpha)) = self.ivars().line.borrow().drawn()
+        {
+            load_line(capsule, done, alpha);
         }
     }
+}
+
+/// Where the load's line runs: the capsule's foot, inside its rounded ends.
+fn foot(capsule: NSRect) -> NSRect {
+    NSRect::new(
+        NSPoint::new(
+            capsule.origin.x,
+            capsule.origin.y + capsule.size.height - 4.0,
+        ),
+        NSSize::new(capsule.size.width, 4.0),
+    )
+}
+
+/// The load's line, `done` of the way along the capsule's foot: the accent, with a
+/// brighter head so it reads as moving even while it creeps.
+fn load_line(capsule: NSRect, done: f64, alpha: f64) {
+    let span = capsule.size.width - 2.0 * palette::RADIUS;
+    let width = span * done;
+    let rect = NSRect::new(
+        NSPoint::new(
+            capsule.origin.x + palette::RADIUS,
+            capsule.origin.y + capsule.size.height - 2.5,
+        ),
+        NSSize::new(width, 2.0),
+    );
+    let accent = NSColor::controlAccentColor();
+    accent.colorWithAlphaComponent(0.55 * alpha).setFill();
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 1.0, 1.0).fill();
+    let head = width.min(36.0);
+    accent.colorWithAlphaComponent(alpha).setFill();
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+        NSRect::new(
+            NSPoint::new(rect.origin.x + width - head, rect.origin.y),
+            NSSize::new(head, 2.0),
+        ),
+        1.0,
+        1.0,
+    )
+    .fill();
 }
 
 /// The address in its runs: "Not secure" first where it must be said, then the

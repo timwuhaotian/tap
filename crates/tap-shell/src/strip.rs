@@ -14,7 +14,6 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    time::Instant,
 };
 
 use block2::RcBlock;
@@ -30,7 +29,7 @@ use objc2_app_kit::{
     NSGraphicsContext, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_core_graphics::CGContext;
-use objc2_foundation::{NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSTimer};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSTimer};
 use objc2_quartz_core::CADisplayLink;
 use tap_core::{
     browser::{Browser, Tab, TabId},
@@ -43,7 +42,7 @@ use tap_core::{
 use crate::{
     downloads, icons,
     menu::Commands,
-    motion::{self, Aim, Curve, Flock, Glide},
+    motion::{self, Aim, Curve, Flock, Follow, Frames, Glide, Loading},
     palette, prefs, rt,
     tabmenu::{self, TabState},
     web,
@@ -514,17 +513,32 @@ fn lifted(draw: impl FnOnce()) {
 
 /// What a draw of the row reads once.
 #[derive(Clone, Copy)]
-struct Paint {
+struct Paint<'a> {
     dark: bool,
     look: Look,
     spot: Spot,
-    pressed: Option<usize>,
-    press_scale: f64,
+    /// The tab drawn sunk, by its place among the tabs, and how far: 1 up, 0.97 down.
+    giving: Option<usize>,
+    give: f64,
+    /// Each hover wash still showing, coming or going, and how strongly.
+    wash: &'a [(TabId, Follow)],
+    /// The live tab's load line: how far along, and how strongly.
+    line: Option<(f64, f64)>,
     cmd_held: bool,
     active: Option<TabId>,
     editing: Option<usize>,
     /// The group carried tabs would join if let go now, by its place.
     drop: Option<usize>,
+}
+
+impl Paint<'_> {
+    /// How strongly `tab`'s hover wash shows this frame.
+    fn wash_of(&self, tab: TabId) -> f64 {
+        self.wash
+            .iter()
+            .find(|(id, _)| *id == tab)
+            .map_or(0.0, |(_, wash)| wash.value().clamp(0.0, 1.0))
+    }
 }
 
 pub struct Ivars {
@@ -534,10 +548,20 @@ pub struct Ivars {
     spot: Cell<Spot>,
     inside: Cell<bool>,
     tracking: RefCell<Option<Retained<NSTrackingArea>>>,
-    /// The tab under a press still down, by its place among the tabs, for its give.
+    /// The tab under a press still down, by its place among the tabs.
     pressed: Cell<Option<usize>>,
-    /// How far the pressed tab has sunk, 1 down to Search's 0.97, eased by the tick.
-    press_scale: Cell<f64>,
+    /// The tab drawn sunk (Search's `Give`), by its place: from the press until it
+    /// has come back up, which is after the press is over.
+    giving: Cell<Option<usize>>,
+    /// How far it has sunk, 1 down to Search's 0.97, on the strip's frames.
+    give: RefCell<Follow>,
+    /// The hover washes on their way in or out: one coming under the pointer, the
+    /// one it left fading, so a sweep along the row reads as one light moving.
+    wash: RefCell<Vec<(TabId, Follow)>>,
+    /// The live tab's load line, while the address bar is away and the strip says it.
+    line: RefCell<Loading>,
+    /// Where it is drawn, so a frame that moves only it redraws only there.
+    line_rect: Cell<Option<NSRect>>,
     cmd_held: Cell<bool>,
     last_look: Cell<Option<Look>>,
     poll_ticks: Cell<u8>,
@@ -554,8 +578,7 @@ pub struct Ivars {
     drop: RefCell<Option<GroupDrop>>,
     click: RefCell<Option<Click>>,
     /// Frames while something moves, paused when nothing does.
-    link: RefCell<Option<Retained<CADisplayLink>>>,
-    last_frame: Cell<Option<Instant>>,
+    frames: Frames,
     /// The live tab's pill on its way from the tab that was live (Search's
     /// `matchedGeometryEffect("live")` on `glide`): from, to, and how far along.
     live: RefCell<(Option<TabId>, Option<TabId>, Glide)>,
@@ -697,7 +720,11 @@ impl Strip {
             inside: Cell::new(false),
             tracking: RefCell::new(None),
             pressed: Cell::new(None),
-            press_scale: Cell::new(1.0),
+            giving: Cell::new(None),
+            give: RefCell::new(Follow::at(1.0)),
+            wash: RefCell::new(Vec::new()),
+            line: RefCell::new(Loading::default()),
+            line_rect: Cell::new(None),
             cmd_held: Cell::new(false),
             last_look: Cell::new(None),
             poll_ticks: Cell::new(0),
@@ -708,8 +735,7 @@ impl Strip {
             grab: RefCell::new(None),
             drop: RefCell::new(None),
             click: RefCell::new(None),
-            link: RefCell::new(None),
-            last_frame: Cell::new(None),
+            frames: Frames::default(),
             live: RefCell::new((None, None, Glide::default())),
         });
         // SAFETY: NSView's designated initialiser.
@@ -720,8 +746,9 @@ impl Strip {
     }
 
     /// The tick's work, twenty times a second: watch ⌘ and Kept for changes no model
-    /// change announces, ease a pressed tab, and ask for a reading report four times
-    /// a second while that setting is on.
+    /// change announces, and ask for a reading report four times a second while that
+    /// setting is on. Nothing that moves runs on it: twenty steps a second read as
+    /// steps, so motion runs on the display's frames.
     fn tick(&self) {
         let look = look();
         if self.ivars().last_look.get() != Some(look) {
@@ -732,32 +759,6 @@ impl Strip {
             && NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Command);
         if held != self.ivars().cmd_held.get() {
             self.ivars().cmd_held.set(held);
-            self.setNeedsDisplay(true);
-        }
-        let target = if look.give && self.ivars().pressed.get().is_some() {
-            0.97
-        } else {
-            1.0
-        };
-        let scale = self.ivars().press_scale.get();
-        if (scale - target).abs() > 0.001 {
-            // Down answers at once, back up settles, as Search's `Give` has it.
-            // With no motion to spare the sink lands at once rather than easing.
-            let step = if motion::reduced() || look.light {
-                1.0
-            } else if target < scale {
-                0.45
-            } else {
-                0.3
-            };
-            let next = scale + (target - scale) * step;
-            self.ivars()
-                .press_scale
-                .set(if (next - target).abs() <= 0.001 {
-                    target
-                } else {
-                    next
-                });
             self.setNeedsDisplay(true);
         }
         if look.reading {
@@ -935,8 +936,74 @@ impl Strip {
         if spot != self.ivars().spot.get() || inside != self.ivars().inside.get() {
             self.ivars().spot.set(spot);
             self.ivars().inside.set(inside);
+            // The draw moves the wash onto whichever tab is now under the pointer.
             self.setNeedsDisplay(true);
         }
+    }
+
+    /// The hover wash onto `under` (none: off the tabs), and off every other tab.
+    /// Asked on every draw, by what is under the pointer's place now: a tab that
+    /// slides in under a still pointer (its neighbour closed by its cross) takes the
+    /// wash and its cross at once, ready for the next click.
+    fn wash_to(&self, under: Option<TabId>) {
+        let settled = {
+            let wash = self.ivars().wash.borrow();
+            wash.iter()
+                .all(|(id, follow)| (follow.target() > 0.0) == (Some(*id) == under))
+                && under.is_none_or(|id| wash.iter().any(|(t, _)| *t == id))
+        };
+        if settled {
+            return;
+        }
+        let curve = Curve::QUICK.now();
+        let mut wash = self.ivars().wash.borrow_mut();
+        let mut moved = false;
+        for (id, follow) in wash.iter_mut() {
+            let target = if Some(*id) == under { 1.0 } else { 0.0 };
+            if (follow.target() - target).abs() > f64::EPSILON {
+                follow.aim(target, curve);
+                moved = true;
+            }
+        }
+        if let Some(id) = under
+            && !wash.iter().any(|(t, _)| *t == id)
+        {
+            let mut follow = Follow::at(0.0);
+            follow.aim(1.0, curve);
+            wash.push((id, follow));
+            moved = true;
+        }
+        if curve == Curve::Instant {
+            wash.retain(|(_, follow)| follow.target() > 0.0);
+        }
+        drop(wash);
+        if moved {
+            self.animate();
+        }
+    }
+
+    /// The give: the tab at `down` sinks, or (none) the one sunk comes back up.
+    /// `at_once`: a carry took it into the hand, which has no give.
+    fn give(&self, down: Option<usize>, at_once: bool) {
+        let mut give = self.ivars().give.borrow_mut();
+        match down {
+            Some(index) => {
+                self.ivars().giving.set(Some(index));
+                give.aim(0.97, Curve::QUICK.now());
+            }
+            None if at_once => {
+                self.ivars().giving.set(None);
+                give.set(1.0);
+            }
+            // Down answers at once, back up settles, as Search's `Give` has it.
+            None => give.aim(1.0, Curve::SETTLE.now()),
+        }
+        if (give.value() - give.target()).abs() < 1e-9 && give.target() >= 1.0 {
+            self.ivars().giving.set(None);
+        }
+        drop(give);
+        self.animate();
+        self.setNeedsDisplay(true);
     }
 
     fn press(&self, event: &NSEvent) {
@@ -966,10 +1033,13 @@ impl Strip {
             }
             return;
         }
-        // A tab (or its cross) goes down under the press; the tick sinks it if
-        // Settings says tabs give, and `mouseUp:` lets it back up.
+        // A tab (or its cross) goes down under the press, and sinks if Settings says
+        // tabs give; `mouseUp:` lets it back up.
         if let Spot::Tab(index) | Spot::Close(index) = spot {
             self.ivars().pressed.set(Some(index));
+            if self.look_now().give {
+                self.give(Some(index), false);
+            }
             self.setNeedsDisplay(true);
         }
         self.ivars().grab.replace(None);
@@ -1080,7 +1150,9 @@ impl Strip {
                 // In the hand now: no click on release, and no give under it.
                 grab.carrying = true;
                 self.ivars().click.replace(None);
-                self.ivars().pressed.set(None);
+                if self.ivars().pressed.take().is_some() {
+                    self.give(None, true);
+                }
                 // One of several picked: the others of its block gather beside it
                 // and go along.
                 if let Carried::Tabs { lead, run } = &mut grab.what {
@@ -1099,9 +1171,9 @@ impl Strip {
     }
 
     fn release(&self) {
-        // The press is over wherever it lands; the tick eases the tab back up.
+        // The press is over wherever it lands; the tab springs back up.
         if self.ivars().pressed.take().is_some() {
-            self.setNeedsDisplay(true);
+            self.give(None, false);
         }
         let grab = self.ivars().grab.take();
         let click = self.ivars().click.take();
@@ -1220,46 +1292,44 @@ impl Strip {
 
     /// Frames from now on, until nothing moves.
     fn animate(&self) {
-        let mut slot = self.ivars().link.borrow_mut();
-        if slot.is_none() {
-            let target: &NSObject = self.as_ref();
-            // SAFETY: `stripFrame:` is this class's own method and takes the link; the
-            // link keeps the strip, which lives for the app's life anyway.
-            let link = unsafe { self.displayLinkWithTarget_selector(target, sel!(stripFrame:)) };
-            // SAFETY: the main run loop and its common modes, so frames keep coming
-            // while a menu is up or the hand is down.
-            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
-            link.setPaused(true);
-            *slot = Some(link);
-        }
-        if let Some(link) = slot.as_ref()
-            && link.isPaused()
-        {
-            self.ivars().last_frame.set(None);
-            link.setPaused(false);
-        }
+        self.ivars().frames.run(self, sel!(stripFrame:));
     }
 
     fn frame_tick(&self) {
-        let now = Instant::now();
-        let dt = self
-            .ivars()
-            .last_frame
-            .replace(Some(now))
-            .map_or(1.0 / 60.0, |then| now.duration_since(then).as_secs_f64())
-            .min(1.0 / 15.0);
-        let moving = self.ivars().flock.borrow_mut().step(dt);
-        let gliding = self.ivars().live.borrow_mut().2.step(dt);
-        let moving = moving || gliding;
-        self.setNeedsDisplay(true);
-        if !moving && !self.carrying() {
-            if let Some(link) = self.ivars().link.borrow().as_ref() {
-                link.setPaused(true);
+        let ivars = self.ivars();
+        let dt = ivars.frames.dt();
+        let moving = ivars.flock.borrow_mut().step(dt);
+        let gliding = ivars.live.borrow_mut().2.step(dt);
+        let washing = {
+            let mut wash = ivars.wash.borrow_mut();
+            let mut any = false;
+            wash.retain_mut(|(_, follow)| {
+                let on = follow.step(dt);
+                any |= on;
+                on || follow.target() > 0.0
+            });
+            any
+        };
+        let giving = {
+            let mut give = ivars.give.borrow_mut();
+            let on = give.step(dt);
+            if !on && give.target() >= 1.0 {
+                ivars.giving.set(None);
             }
-            self.ivars().last_frame.set(None);
+            on
+        };
+        let lining = ivars.line.borrow_mut().step(dt);
+        let row = moving || gliding || washing || giving;
+        match ivars.line_rect.get() {
+            // Only the load's line moved: only it is drawn again, not every tab.
+            Some(rect) if lining && !row && !self.carrying() => self.setNeedsDisplayInRect(rect),
+            _ => self.setNeedsDisplay(true),
+        }
+        if !row && !lining && !self.carrying() {
+            ivars.frames.pause();
             // What the gone slots said is no longer wanted.
-            let flock = self.ivars().flock.borrow();
-            self.ivars()
+            let flock = ivars.flock.borrow();
+            ivars
                 .faces
                 .borrow_mut()
                 .retain(|key, _| flock.place(key).is_some());
@@ -1501,12 +1571,32 @@ impl Strip {
             let layout = layout(bounds.size.width, &slots, editing, trailing);
             self.aim(browser, &row, &layout);
             let carried = self.hold_carried(browser, &row, &layout);
+            // The live tab's load line, here only while the address bar is away.
+            let front = browser.active_tab().filter(|_| !look.bar);
+            let wants = self.ivars().line.borrow_mut().update(
+                front.map(|tab| tab.id),
+                front.is_some_and(Tab::loading),
+                front.map_or(0.0, Tab::progress),
+            );
+            if wants {
+                self.animate();
+            }
+            let spot = self.ivars().spot.get();
+            self.wash_to(match spot {
+                Spot::Tab(index) | Spot::Close(index) if !self.carrying() => {
+                    browser.tabs().get(index).map(|tab| tab.id)
+                }
+                _ => None,
+            });
+            let wash = self.ivars().wash.borrow();
             let paint = Paint {
                 dark,
                 look,
                 spot: self.ivars().spot.get(),
-                pressed: self.ivars().pressed.get(),
-                press_scale: self.ivars().press_scale.get(),
+                giving: self.ivars().giving.get(),
+                give: self.ivars().give.borrow().value(),
+                wash: &wash,
+                line: self.ivars().line.borrow().drawn(),
                 cmd_held: self.ivars().cmd_held.get(),
                 active: browser.active(),
                 editing,
@@ -1546,9 +1636,16 @@ impl Strip {
                 drop_plate(browser, &row, &layout, place, dark);
             }
             // The live tab's pill, under every tab, gliding when another is picked.
-            if let Some(rect) = self.live_pill(browser, &row, &layout, &at) {
+            let pill = self.live_pill(browser, &row, &layout, &at);
+            if let Some(rect) = pill {
                 live_pill(rect, dark);
             }
+            self.ivars().line_rect.set(pill.map(|rect| {
+                NSRect::new(
+                    NSPoint::new(rect.origin.x, rect.origin.y + rect.size.height - 5.0),
+                    NSSize::new(rect.size.width, 6.0),
+                )
+            }));
             let mut faces = self.ivars().faces.borrow_mut();
             for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
                 let key = key_of(browser, item);
@@ -1852,11 +1949,13 @@ fn draw_tab(
     let look = paint.look;
     let editing_here = slot.is_some() && paint.editing == slot;
     let live = !gone && Some(tab.id) == paint.active;
-    let under = !gone && matches!(paint.spot, Spot::Tab(i) | Spot::Close(i) if i == index);
+    // How strongly the pointer's wash is on it, fading in as the pointer comes and
+    // out as it goes, rather than snapping on and off.
+    let wash = if gone { 0.0 } else { paint.wash_of(tab.id) };
     // A pressed tab sinks where it stands; its hit rect stays the laid-out
     // one, as SwiftUI's scale leaves the row's geometry alone.
-    let rect = &if !gone && paint.pressed == Some(index) && !editing_here {
-        sunk(rect, paint.press_scale)
+    let rect = &if !gone && paint.giving == Some(index) && !editing_here {
+        sunk(rect, paint.give)
     } else {
         rect
     };
@@ -1876,16 +1975,18 @@ fn draw_tab(
             .setStroke();
         plate.setLineWidth(1.0);
         plate.stroke();
-    } else if under && !live {
-        palette::HOVER.resolve(dark).setFill();
-        let plate = palette::pill_path(*rect);
-        plate.fill();
-        palette::stroke_hairline(&plate, dark);
-    } else if under && live {
+    } else if wash > 0.0 && !live {
+        faded(wash, || {
+            palette::HOVER.resolve(dark).setFill();
+            let plate = palette::pill_path(*rect);
+            plate.fill();
+            palette::stroke_hairline(&plate, dark);
+        });
+    } else if wash > 0.0 && live {
         // Over the live pill, so only a breath of hover lest it cover the live one.
         palette::HOVER
             .resolve(dark)
-            .colorWithAlphaComponent(0.5)
+            .colorWithAlphaComponent(0.5 * wash)
             .setFill();
         palette::pill_path(*rect).fill();
     }
@@ -1904,7 +2005,9 @@ fn draw_tab(
     if editing_here {
         return;
     }
-    let crossed = (under || live) && titled;
+    // The cross comes and goes with the wash; the live tab always has one.
+    let cross = if live { 1.0 } else { wash };
+    let crossed = cross > 0.001 && titled;
     let number = if paint.cmd_held && !gone {
         shortcut_number(index, browser.tabs().len())
     } else {
@@ -1993,9 +2096,16 @@ fn draw_tab(
         } else {
             None
         };
-        match said.filter(|_| !under) {
-            Some(said) => draw_rest(&said, text, dark),
-            None => palette::draw_text(&tab.label(), text, &ink.resolve(dark)),
+        // Under the pointer the title comes back through where the page is, the
+        // two crossfading with the wash rather than one snapping to the other.
+        match said {
+            Some(said) if wash < 0.999 => {
+                faded(1.0 - wash, || draw_rest(&said, text, dark));
+                faded(wash, || {
+                    palette::draw_text(&tab.label(), text, &ink.resolve(dark));
+                });
+            }
+            _ => palette::draw_text(&tab.label(), text, &ink.resolve(dark)),
         }
         if let Some(number) = number {
             let digit = number.to_string();
@@ -2009,15 +2119,24 @@ fn draw_tab(
     }
     if crossed {
         let square = close_rect(*rect);
-        if paint.spot == Spot::Close(index) {
-            palette::HAIRLINE.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0).fill();
-        }
-        cross(square, &palette::MUTED.resolve(dark));
+        faded(cross, || {
+            if paint.spot == Spot::Close(index) {
+                palette::HAIRLINE.resolve(dark).setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0).fill();
+            }
+            self::cross(square, &palette::MUTED.resolve(dark));
+        });
     }
     // The load's progress: along the pill's foot, unless the address bar says it.
-    if live && tab.loading() && !look.bar {
-        progress(*rect, tab.progress(), &palette::INK.resolve(dark));
+    if live
+        && !look.bar
+        && let Some((done, alpha)) = paint.line
+    {
+        progress(
+            *rect,
+            done,
+            &palette::INK.resolve(dark).colorWithAlphaComponent(alpha),
+        );
     }
 }
 
@@ -2300,9 +2419,10 @@ fn plus(rect: NSRect, color: &NSColor) {
     path.stroke();
 }
 
-/// How far the live tab's page has come, as a thin line along the pill's foot.
+/// How far the live tab's page has come, as a thin line along the pill's foot. It
+/// grows smoothly out of nothing (`motion::Loading`), so it needs no stub to start.
 fn progress(rect: NSRect, done: f64, color: &NSColor) {
-    let width = (rect.size.width - 2.0 * palette::RADIUS) * done.clamp(0.08, 1.0);
+    let width = (rect.size.width - 2.0 * palette::RADIUS) * done.clamp(0.0, 1.0);
     color.setFill();
     NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
         NSRect::new(

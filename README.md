@@ -36,7 +36,8 @@ with its own name and icon, and with fixes of its own.
   (including sites whose only icon is an SVG); blank cached icons are fetched again.
 - **An address bar** under the tabs, with back, forward and reload on its left: the
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
-  the load's progress. Settings can hide it.
+  the load's progress as a line that glides forward and fades once the page is in.
+  Settings can hide it.
 - **Tab groups** in colours of their own: a group's name heads its tabs on a chip of
   its colour (right-click it to choose another), and a click folds it away or opens it.
 - **Pick several tabs** with ⌘-click or ⇧-click: ⌘C copies their addresses, one to a
@@ -44,7 +45,8 @@ with its own name and icon, and with fixes of its own.
   another group to join it, or a group by its name; everything in the row glides where
   it goes, and a press anywhere in a tab's column takes the tab, not the window — the
   window itself is moved only by the row's empty ends. Tabs and address suggestions
-  move on gentle springs, with less motion when your Mac asks for it.
+  move on gentle springs, hover highlights fade in and out, and a pressed tab sinks
+  and springs back, with less motion when your Mac asks for it.
 - **Right-click a tab** to move it into a group (or a new one), rename it, reload,
   duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones
   to its right or all the others, or reopen a closed one; right-click a group's name to
@@ -86,8 +88,9 @@ with its own name and icon, and with fixes of its own.
 - **It can be your browser.** Choose Tap under System Settings › Desktop & Dock ›
   Default web browser; links from other apps open in it, and so do HTML files.
 - **New tabs pile up.** +/⌘T always opens a fresh blank tab instead of reusing the
-  blank one in front; a blank tab draws a quiet animated instrument behind the
-  field, and stays cheap with no web view.
+  blank one in front; a blank tab shows a small rippling mark, and stays cheap with
+  no web view. A tab's first page fades in from that mark, with the site's name under
+  it, instead of flashing an empty white page.
 - **A click on any tab lands in the field**, its address selected and ready to type.
 - **Coding agents browse with it.** Tap puts a `tap` command in `~/.local/bin` and a
   skill where Claude Code, Codex, Gemini and opencode look, so an agent on this Mac

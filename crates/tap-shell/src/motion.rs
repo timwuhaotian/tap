@@ -5,13 +5,20 @@
 //! than where it stands (docs/PLAN.md §5.1.6, "0.1.6").
 
 use std::{
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     hash::Hash,
+    time::Instant,
 };
 
-use objc2_app_kit::NSWorkspace;
-use objc2_foundation::NSProcessInfo;
-use tap_core::settings_index;
+use objc2::{
+    rc::Retained,
+    runtime::{NSObject, Sel},
+};
+use objc2_app_kit::{NSView, NSWorkspace};
+use objc2_foundation::{NSProcessInfo, NSRunLoop, NSRunLoopCommonModes};
+use objc2_quartz_core::CADisplayLink;
+use tap_core::{browser::TabId, settings_index};
 
 use crate::prefs;
 
@@ -41,6 +48,24 @@ impl Curve {
         response: 0.12,
         damping: 1.0,
     };
+    /// For what answers the pointer: a hover's wash coming and going, a press's give.
+    /// Quick and damped all the way, so it never wobbles under the hand.
+    pub const QUICK: Curve = Curve::Spring {
+        response: 0.16,
+        damping: 1.0,
+    };
+    /// For what fades in front of the page: the ground giving way to a page that has
+    /// come, the load's line once it is done.
+    pub const FADE: Curve = Curve::Spring {
+        response: 0.34,
+        damping: 1.0,
+    };
+    /// The load's line chasing the load: unhurried and never past where it is going,
+    /// so WebKit's coarse steps read as one movement.
+    pub const CREEP: Curve = Curve::Spring {
+        response: 0.6,
+        damping: 1.0,
+    };
 
     /// `settle` as the Mac wants it now: nothing with Reduce Motion, the light one
     /// while it saves power and Settings says so.
@@ -55,7 +80,10 @@ impl Curve {
         Curve::GLIDE.now()
     }
 
-    fn now(self) -> Curve {
+    /// This curve as the Mac wants it now: nothing with Reduce Motion, the light one
+    /// while it saves power and Settings says so.
+    #[must_use]
+    pub fn now(self) -> Curve {
         if reduced() {
             Curve::Instant
         } else if light() {
@@ -181,6 +209,223 @@ impl Glide {
     #[must_use]
     pub fn progress(&self) -> f64 {
         self.spring.value
+    }
+}
+
+/// One value, 0 to 1, on its way to a target on a curve: a wash fading, a press
+/// sinking, the ground giving way. What `Glide` is for a fixed trip, for one whose
+/// end may change on the way.
+#[derive(Clone, Copy, Debug)]
+pub struct Follow {
+    spring: Spring,
+    curve: Curve,
+}
+
+impl Follow {
+    #[must_use]
+    pub fn at(value: f64) -> Follow {
+        Follow {
+            spring: Spring::at(value),
+            curve: Curve::Instant,
+        }
+    }
+
+    /// Off towards `target` on `curve`, from wherever it is now and at whatever
+    /// speed: a change of mind on the way carries on rather than restarting.
+    pub fn aim(&mut self, target: f64, curve: Curve) {
+        self.curve = curve;
+        self.spring.target = target;
+        if curve == Curve::Instant {
+            self.spring.rest();
+        }
+    }
+
+    /// There at once, still.
+    pub fn set(&mut self, value: f64) {
+        self.spring = Spring::at(value);
+    }
+
+    /// `dt` seconds on. Answers whether it is still on its way.
+    pub fn step(&mut self, dt: f64) -> bool {
+        if self.spring.settled(0.001) {
+            self.spring.rest();
+            return false;
+        }
+        self.spring.step(self.curve, dt);
+        true
+    }
+
+    #[must_use]
+    pub fn value(&self) -> f64 {
+        self.spring.value
+    }
+
+    #[must_use]
+    pub fn target(&self) -> f64 {
+        self.spring.target
+    }
+}
+
+/// Where the load's line stops while WebKit says nothing new: close to the end but
+/// short of it, so a stalled load still reads as on its way and never as done.
+const CREEP_CAP: f64 = 0.92;
+/// How quickly the line edges on by itself, as a time constant in seconds: an
+/// eighth of the way left in about half a second, slower the further it gets.
+const CREEP_PACE: f64 = 4.0;
+
+/// The front tab's load as a line that moves, not one that jumps. WebKit's
+/// `estimatedProgress` comes in a handful of coarse steps (a tenth, a third, nine
+/// tenths), and drawn as it comes the line lurches from one to the next and then
+/// vanishes. Here it chases the larger of what was said and a slow creep of its own,
+/// on `CREEP`, never back; once the load is done it runs to the end and fades.
+#[derive(Clone, Copy, Debug)]
+pub struct Loading {
+    tab: Option<TabId>,
+    running: bool,
+    /// Where the line would be by itself, edging on between WebKit's reports.
+    creep: f64,
+    width: Follow,
+    alpha: Follow,
+    /// The curve the load runs on, read once as it starts rather than on each frame.
+    curve: Curve,
+    /// How a curve is taken as the Mac wants it: `Curve::now`, but for tests.
+    pace: fn(Curve) -> Curve,
+}
+
+impl Default for Loading {
+    fn default() -> Self {
+        Loading {
+            tab: None,
+            running: false,
+            creep: 0.0,
+            width: Follow::at(0.0),
+            alpha: Follow::at(0.0),
+            curve: Curve::CREEP,
+            pace: Curve::now,
+        }
+    }
+}
+
+impl Loading {
+    /// What the model says of the front tab now. Another tab in front takes its line
+    /// as it stands, nothing carried over from the last. Answers whether the line
+    /// wants frames.
+    pub fn update(&mut self, tab: Option<TabId>, loading: bool, reported: f64) -> bool {
+        let reported = reported.clamp(0.0, 1.0);
+        if tab != self.tab {
+            self.tab = tab;
+            self.running = loading;
+            self.curve = (self.pace)(Curve::CREEP);
+            self.creep = reported;
+            self.width.set(if loading { reported } else { 0.0 });
+            self.alpha.set(if loading { 1.0 } else { 0.0 });
+            return self.busy();
+        }
+        if loading && !self.running {
+            // A load starts: from nothing, so the line grows out of the capsule's end.
+            self.curve = (self.pace)(Curve::CREEP);
+            self.creep = 0.0;
+            self.width.set(0.0);
+            self.alpha.set(1.0);
+        }
+        if loading {
+            let goal = reported.max(self.creep).max(self.width.target());
+            self.creep = self.creep.max(reported);
+            self.width.aim(goal, self.curve);
+        } else if self.running {
+            // Done (or stopped): to the end, quickly, then away.
+            self.width.aim(1.0, (self.pace)(Curve::QUICK));
+        }
+        self.running = loading;
+        self.busy()
+    }
+
+    /// `dt` seconds on. Answers whether the line still wants frames.
+    pub fn step(&mut self, dt: f64) -> bool {
+        if self.running && self.curve != Curve::Instant {
+            if self.creep < CREEP_CAP {
+                self.creep += (CREEP_CAP - self.creep) * (1.0 - (-dt / CREEP_PACE).exp());
+            }
+            if self.creep > self.width.target() {
+                self.width.aim(self.creep, self.curve);
+            }
+        }
+        if !self.running && self.alpha.target() > 0.0 && self.width.value() >= 0.995 {
+            self.alpha.aim(0.0, (self.pace)(Curve::FADE));
+        }
+        let width = self.width.step(dt);
+        let alpha = self.alpha.step(dt);
+        // While a load runs the line creeps, so it wants frames; under Reduce Motion it
+        // only ever moves when WebKit says so.
+        (self.running && self.curve != Curve::Instant) || width || alpha
+    }
+
+    /// Whether there is anything to move: a load running, or a line on its way out.
+    #[must_use]
+    pub fn busy(&self) -> bool {
+        (self.running && self.curve != Curve::Instant)
+            || (self.width.value() - self.width.target()).abs() > 0.001
+            || self.alpha.value() > 0.001
+    }
+
+    /// The line to draw this frame: how far along, 0 to 1, and how strongly. `None`
+    /// once it has gone.
+    #[must_use]
+    pub fn drawn(&self) -> Option<(f64, f64)> {
+        let alpha = self.alpha.value().clamp(0.0, 1.0);
+        let width = self.width.value().clamp(0.0, 1.0);
+        (alpha > 0.001 && width > 0.001).then_some((width, alpha))
+    }
+}
+
+/// Frames from the display a view is on, only while something moves: the strip's,
+/// the bar's and the ground's motion each run on one, paused the rest of the time.
+#[derive(Default)]
+pub struct Frames {
+    link: RefCell<Option<Retained<CADisplayLink>>>,
+    last: Cell<Option<Instant>>,
+}
+
+impl Frames {
+    /// Frames from now on to `view`'s `selector`, which takes the link, until
+    /// `pause`. Already running, it carries on.
+    pub fn run(&self, view: &NSView, selector: Sel) {
+        let mut slot = self.link.borrow_mut();
+        if slot.is_none() {
+            let target: &NSObject = view.as_ref();
+            // SAFETY: the selector is the view's own method taking the link; the link
+            // keeps the view, and each of these views lives for the app's life.
+            let link = unsafe { view.displayLinkWithTarget_selector(target, selector) };
+            // SAFETY: the main run loop and its common modes, so frames keep coming
+            // while a menu is up or the hand is down.
+            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
+            link.setPaused(true);
+            *slot = Some(link);
+        }
+        if let Some(link) = slot.as_ref()
+            && link.isPaused()
+        {
+            self.last.set(None);
+            link.setPaused(false);
+        }
+    }
+
+    /// No more frames until `run` again.
+    pub fn pause(&self) {
+        if let Some(link) = self.link.borrow().as_ref() {
+            link.setPaused(true);
+        }
+        self.last.set(None);
+    }
+
+    /// Seconds since the last frame, the first a 60th, and never more than a 15th,
+    /// so a stall (a page hogging the main thread) slows the motion, not skips it.
+    pub fn dt(&self) -> f64 {
+        let now = Instant::now();
+        self.last
+            .replace(Some(now))
+            .map_or(1.0 / 60.0, |then| now.duration_since(then).as_secs_f64())
+            .min(1.0 / 15.0)
     }
 }
 
@@ -411,6 +656,116 @@ mod tests {
             flock.step(1.0 / 60.0);
             left -= 1.0 / 60.0;
         }
+    }
+
+    fn line() -> Loading {
+        Loading {
+            pace: |curve| curve,
+            ..Loading::default()
+        }
+    }
+
+    fn load(line: &mut Loading, seconds: f64) -> Vec<f64> {
+        let mut seen = Vec::new();
+        let mut left = seconds;
+        while left > 0.0 {
+            line.step(1.0 / 60.0);
+            seen.push(line.drawn().map_or(0.0, |(w, _)| w));
+            left -= 1.0 / 60.0;
+        }
+        seen
+    }
+
+    #[test]
+    fn the_load_line_moves_on_between_coarse_reports_and_never_back() {
+        let mut line = line();
+        line.update(Some(TabId(1)), false, 0.0);
+        assert!(line.drawn().is_none(), "nothing loading, nothing drawn");
+        assert!(
+            line.update(Some(TabId(1)), true, 0.1),
+            "a load wants frames"
+        );
+        let mut seen = load(&mut line, 0.3);
+        // WebKit jumps from a tenth to two thirds: the line goes there smoothly.
+        line.update(Some(TabId(1)), true, 0.66);
+        let before = *seen.last().expect("frames");
+        seen.extend(load(&mut line, 0.1));
+        let after = *seen.last().expect("frames");
+        assert!(
+            after > before && after < 0.66,
+            "on its way, not there: {after}"
+        );
+        seen.extend(load(&mut line, 2.0));
+        // Then nothing more for a long while: it still edges on, short of the end.
+        let stalled = *seen.last().expect("frames");
+        seen.extend(load(&mut line, 3.0));
+        let later = *seen.last().expect("frames");
+        assert!(
+            later > stalled && later < CREEP_CAP + 0.01,
+            "creeps: {stalled} → {later}"
+        );
+        // WebKit says less for a redirect: the line doesn't go back.
+        line.update(Some(TabId(1)), true, 0.2);
+        seen.extend(load(&mut line, 0.5));
+        assert!(
+            seen.windows(2).all(|w| w[1] >= w[0] - 1e-9),
+            "never back while loading"
+        );
+        // No single frame jumps by more than a few percent.
+        assert!(seen.windows(2).all(|w| (w[1] - w[0]).abs() < 0.05));
+    }
+
+    #[test]
+    fn a_finished_load_runs_to_the_end_then_fades_and_stops() {
+        let mut line = line();
+        line.update(Some(TabId(1)), true, 0.5);
+        load(&mut line, 1.0);
+        line.update(Some(TabId(1)), false, 1.0);
+        load(&mut line, 0.25);
+        let (width, alpha) = line.drawn().expect("still there as it finishes");
+        assert!(width > 0.99, "at the end first: {width}");
+        assert!(alpha <= 1.0);
+        load(&mut line, 1.5);
+        assert!(line.drawn().is_none(), "gone");
+        assert!(!line.step(1.0 / 60.0), "and asks for no more frames");
+    }
+
+    #[test]
+    fn another_tab_in_front_takes_its_own_line_at_once() {
+        let mut line = line();
+        line.update(Some(TabId(1)), true, 0.3);
+        load(&mut line, 1.0);
+        line.update(Some(TabId(2)), false, 1.0);
+        assert!(
+            line.drawn().is_none(),
+            "a loaded tab shows no line, no fade"
+        );
+        line.update(Some(TabId(3)), true, 0.7);
+        let (width, _) = line.drawn().expect("a loading tab shows where it is");
+        assert!((width - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_follow_changes_its_mind_without_a_jump() {
+        let mut wash = Follow::at(0.0);
+        wash.aim(1.0, Curve::QUICK);
+        for _ in 0..4 {
+            wash.step(1.0 / 60.0);
+        }
+        let halfway = wash.value();
+        assert!(halfway > 0.0 && halfway < 1.0);
+        wash.aim(0.0, Curve::QUICK);
+        wash.step(1.0 / 60.0);
+        assert!((wash.value() - halfway).abs() < 0.1, "from where it was");
+        for _ in 0..60 {
+            wash.step(1.0 / 60.0);
+        }
+        assert!(wash.value().abs() < 0.002 && !wash.step(1.0 / 60.0));
+        wash.aim(1.0, Curve::Instant);
+        assert!(
+            (wash.value() - 1.0).abs() < f64::EPSILON,
+            "no motion: there at once"
+        );
     }
 
     #[test]

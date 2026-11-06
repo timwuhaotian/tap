@@ -7,6 +7,18 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.9 — 2026-11-06
+
+### Changed
+
+- **Smoother page loads**: the address bar's loading line glides forward between
+  updates instead of jumping, then runs to the end and fades out.
+- **A loading transition instead of a white page**: a tab's first page shows a small
+  rippling mark and the site's name, then fades into the page once it arrives.
+- **A quieter new tab**: the large drawn instrument is replaced by a small ripple mark.
+- **Smoother tabs**: hover highlights and the close button fade in and out, and a
+  pressed tab sinks and springs back on the display's frames.
+
 ## 0.2.8 — 2026-11-06
 
 ### Changed

@@ -39,13 +39,13 @@ use tap_core::{
     engine::{self, Engine},
     identity,
     internal::Page,
-    keyword,
+    keyword, location,
     settings_index::{flag, text},
 };
 
 use crate::{
     address_bar::{self, AddressBar},
-    blank::BlankView,
+    blank::{BlankView, Ground},
     dialogs, downloads, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
@@ -68,6 +68,8 @@ pub struct View {
     can_forward: bool,
     loading: bool,
     blank: bool,
+    /// What stands in for the page on the stage while it has none to show.
+    ground: Ground,
     title: String,
     find: findbar::State,
 }
@@ -84,8 +86,28 @@ impl View {
             can_forward: tab.is_some_and(tap_core::browser::Tab::can_forward),
             loading: tab.is_some_and(tap_core::browser::Tab::loading),
             blank: tab.is_some_and(tap_core::browser::Tab::is_blank),
+            ground: tab.map_or(Ground::Away, ground_of),
             title: tab.map_or_else(|| "Tap".to_owned(), tap_core::browser::Tab::label),
             find: findbar::State::of(browser),
+        }
+    }
+}
+
+/// What the stage shows where the tab has no page to: the mark at rest on a blank
+/// tab, the mark waiting while a tab's first page is on its way, nothing otherwise.
+/// A tab that has shown a page keeps showing it while the next one loads, as WebKit
+/// does; only one with nothing yet would show WebKit's empty white.
+fn ground_of(tab: &tap_core::browser::Tab) -> Ground {
+    if tab.page().is_some() || tab.failure().is_some() {
+        Ground::Away
+    } else if tab.is_blank() {
+        Ground::Calm
+    } else if tab.committed() || tab.is_internal() {
+        Ground::Away
+    } else {
+        Ground::Waiting {
+            host: location::split(tab.url()).1.to_owned(),
+            busy: tab.loading(),
         }
     }
 }
@@ -513,7 +535,13 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         }
 
         if dirty.intersects(BrowserFields::ACTIVE | BrowserFields::TABS)
-            || active_dirty.intersects(TabFields::AWAKE | TabFields::FAILURE | TabFields::URL)
+            || active_dirty.intersects(
+                TabFields::AWAKE
+                    | TabFields::FAILURE
+                    | TabFields::URL
+                    | TabFields::COMMITTED
+                    | TabFields::LOADING,
+            )
             || *views.shown.borrow() != view.active
         {
             show_page(views, view);
@@ -561,9 +589,9 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
 /// The active tab's page in the stage, or what it says in place of the page.
 fn show_page(views: &Views, view: &View) {
     show_own_page(views, view.page);
-    show_blank(views, view);
     let web = view.active.and_then(web::existing);
     let previous = views.shown.replace(view.active);
+    show_ground(views, view, previous == view.active);
     if previous != view.active
         && let Some(old) = previous.and_then(web::existing)
     {
@@ -602,13 +630,11 @@ fn show_page(views: &Views, view: &View) {
     }
 }
 
-/// The instrument behind a blank tab's field, or put away when the tab in
-/// front has a page of its own to show.
-fn show_blank(views: &Views, view: &View) {
-    let show = view.blank && view.page.is_none();
+/// The ground over the stage, or put away. It fades only when the page it stood in
+/// for arrived in the same tab; another tab in front has its own at once.
+fn show_ground(views: &Views, view: &View, same_tab: bool) {
     views.blank.setFrame(views.stage.bounds());
-    views.blank.setHidden(!show);
-    views.blank.set_animating(show);
+    views.blank.show(&view.ground, same_tab);
 }
 
 /// One of Tap's own pages in the stage, below the find bar and the field like a web page,
