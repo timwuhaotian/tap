@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.19 — 2026-11-07
+
 ### Fixed
 
 - **Agents see into iframes**: `tap snapshot`, `tap click`/`fill`/`press` and
