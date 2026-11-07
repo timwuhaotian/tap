@@ -7,6 +7,15 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.21 — 2026-11-07
+
+### Fixed
+
+- **The floating video closes from its own window**: leaving a tab floated its
+  video into a borderless panel with no way out but ⇧⌘P or jumping back to
+  its tab. A ✕ button now lands the page home and pauses the video, staying
+  on the tab in front.
+
 ## 0.2.20 — 2026-11-07
 
 ### Fixed
