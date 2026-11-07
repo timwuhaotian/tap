@@ -399,12 +399,14 @@ fn move_page(tab: TabId, why: Why) {
     });
 }
 
-/// Two quiet buttons over the picture: pause, and back to its tab. Shown always —
-/// Search's fade in on hover, over a layer it draws; a small window whose only
-/// job is the picture does not need the fade to be usable.
+/// Two quiet buttons over the picture, and one to put it away: pause, back to
+/// its tab, and close (back into its tab and paused, staying where you are).
+/// Shown always — Search's fade in on hover, over a layer it draws; a small
+/// window whose only job is the picture does not need the fade to be usable.
 fn add_controls(mtm: MainThreadMarker, ground: &NSView, size: NSSize) {
     let target = target(mtm);
     for (title, action, x) in [
+        ("✕", sel!(dismiss:), size.width - 112.0),
         ("❚❚", sel!(play_pause:), size.width - 76.0),
         ("↗", sel!(go_back:), size.width - 40.0),
     ] {
@@ -477,6 +479,16 @@ fn toggle_play() {
         return;
     };
     eval(&page, TOGGLE, |_| {});
+}
+
+/// ✕ on the little window: paused first, while the mark is still on it, then
+/// home into its tab, staying on the tab in front.
+fn dismiss() {
+    let origin = OUT.with_borrow(|out| out.as_ref().map(|o| o.origin));
+    if let Some(page) = origin.and_then(web::existing) {
+        eval(&page, PAUSE, |_| {});
+    }
+    land();
 }
 
 /// The video playing in `tab` into macOS's picture in picture (Search's
@@ -653,6 +665,13 @@ const TOGGLE: &str = r"(async () => {
   return !video.paused;
 })()";
 
+/// The marked video stopped, never started (see `dismiss`).
+const PAUSE: &str = r"(async () => {
+  var video = document.querySelector('[data-office-float]') || document.querySelector('video');
+  if (video) video.pause();
+  return true;
+})()";
+
 /// Sites with a player worth following into the little window (Search's `Players`,
 /// shortened): anywhere else, a playing video is as likely to be a background as
 /// a film. A host suffix, and for shops that also stream, the path that separates
@@ -765,6 +784,11 @@ define_class!(
             toggle_play();
         }
 
+        #[unsafe(method(dismiss:))]
+        fn dismiss_action(&self, _sender: Option<&AnyObject>) {
+            dismiss();
+        }
+
         #[unsafe(method(go_back:))]
         fn go_back_action(&self, _sender: Option<&AnyObject>) {
             go_back();
@@ -792,6 +816,12 @@ mod tests {
         assert!(!knows_player("https://www.amazon.com/dp/B0"));
         assert!(!knows_player("https://example.com/watch"));
         assert!(!knows_player("not a url"));
+    }
+
+    #[test]
+    fn dismiss_pauses_without_playing() {
+        assert!(PAUSE.contains(".pause()"));
+        assert!(!PAUSE.contains(".play()"));
     }
 
     #[test]
