@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.16 — 2026-11-07
+
 ### Added
 
 - **Downloads say what they are doing**: the strip's downloads door fills a ring
