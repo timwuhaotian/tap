@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.23 — 2026-11-08
+
 ### Fixed
 
 - **Apple Store sign-in and Add to Bag go through**: pages read Tap's window as
