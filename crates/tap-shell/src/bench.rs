@@ -830,9 +830,16 @@ fn handle(request: &Value, reply: Reply) {
             reply.say(json!({ "sent": sent, "row": rt::read(row).unwrap_or_default() }));
         }
         "click" => {
-            // A click at `x`, `y` with `modifiers` held ("command", "shift").
+            // A click at `x`, `y` with `modifiers` held ("command", "shift"), the
+            // `count`th of a run (2 for the second of a double click). The answer
+            // carries the window's frame, which a double click on the empty row zooms.
             let x = request.get("x").and_then(Value::as_f64).unwrap_or(0.0);
             let y = request.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+            let count = request
+                .get("count")
+                .and_then(Value::as_i64)
+                .and_then(|c| isize::try_from(c).ok())
+                .unwrap_or(1);
             let mut flags = NSEventModifierFlags::empty();
             for held in request
                 .get("modifiers")
@@ -847,9 +854,17 @@ fn handle(request: &Value, reply: Reply) {
                     _ => NSEventModifierFlags::empty(),
                 };
             }
-            let sent = mouse_with(NSEventType::LeftMouseDown, (x, y), flags)
-                && mouse_with(NSEventType::LeftMouseUp, (x, y), flags);
-            reply.say(json!({ "sent": sent, "selected": rt::read(Browser::selection_count) }));
+            let sent = mouse_with(NSEventType::LeftMouseDown, (x, y), flags, count)
+                && mouse_with(NSEventType::LeftMouseUp, (x, y), flags, count);
+            let frame = window::main_window().map(|w| {
+                let f = w.frame();
+                [f.origin.x, f.origin.y, f.size.width, f.size.height]
+            });
+            reply.say(json!({
+                "sent": sent,
+                "selected": rt::read(Browser::selection_count),
+                "frame": frame,
+            }));
         }
         "mouseup" => {
             let x = request.get("x").and_then(Value::as_f64).unwrap_or(0.0);
@@ -1075,11 +1090,16 @@ fn field(request: &Value, reply: Reply) {
 
 /// A mouse event through the window, at a point in its points from its top left.
 fn mouse(kind: NSEventType, at: (f64, f64)) -> bool {
-    mouse_with(kind, at, NSEventModifierFlags::empty())
+    mouse_with(kind, at, NSEventModifierFlags::empty(), 1)
 }
 
-/// As `mouse`, with keys held.
-fn mouse_with(kind: NSEventType, (x, y): (f64, f64), flags: NSEventModifierFlags) -> bool {
+/// As `mouse`, with keys held and the click's place in a run of clicks.
+fn mouse_with(
+    kind: NSEventType,
+    (x, y): (f64, f64),
+    flags: NSEventModifierFlags,
+    count: isize,
+) -> bool {
     let Some(window) = window::main_window() else {
         return false;
     };
@@ -1092,7 +1112,7 @@ fn mouse_with(kind: NSEventType, (x, y): (f64, f64), flags: NSEventModifierFlags
         window.windowNumber(),
         None,
         0,
-        1,
+        count,
         1.0,
     ) else {
         return false;

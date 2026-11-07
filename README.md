@@ -44,7 +44,8 @@ with its own name and icon, and with fixes of its own.
   line, ⌘W closes them, and a drag moves them together. Drag a tab to reorder it, onto
   another group to join it, or a group by its name; everything in the row glides where
   it goes, and a press anywhere in a tab's column takes the tab, not the window — the
-  window itself is moved only by the row's empty ends. Tabs and address suggestions
+  window itself is moved only by the row's empty ends, and a double click there zooms
+  it to the screen and back. Tabs and address suggestions
   move on gentle springs, hover highlights fade in and out, and a pressed tab sinks
   and springs back, with less motion when your Mac asks for it.
 - **Right-click a tab** to move it into a group (or a new one), rename it, reload,

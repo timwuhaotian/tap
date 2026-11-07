@@ -26,10 +26,10 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSEventModifierFlags,
-    NSGraphicsContext, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSGraphicsContext, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
 };
 use objc2_core_graphics::CGContext;
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSTimer};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer, NSUserDefaults};
 use objc2_quartz_core::CADisplayLink;
 use tap_core::{
     browser::{Browser, Tab, TabId},
@@ -423,6 +423,21 @@ fn contains(rect: NSRect, point: NSPoint) -> bool {
         && point.x < rect.origin.x + rect.size.width
         && point.y >= rect.origin.y
         && point.y < rect.origin.y + rect.size.height
+}
+
+/// The window's answer to a double click on its title bar, as System Settings ›
+/// Desktop & Dock sets it (`AppleActionOnDoubleClick` in the global domain): Minimize
+/// puts it in the Dock, None leaves it, anything else (Zoom, Fill, unset) zooms it to
+/// the screen and back. The strip covers the title bar, so AppKit never sees the click.
+fn title_bar_double_click(window: &NSWindow) {
+    let action = NSUserDefaults::standardUserDefaults()
+        .stringForKey(&NSString::from_str("AppleActionOnDoubleClick"))
+        .map(|a| a.to_string());
+    match action.as_deref() {
+        Some("Minimize") => window.miniaturize(None),
+        Some("None") => {}
+        _ => window.zoom(None),
+    }
 }
 
 fn tab_at(index: usize) -> Option<TabId> {
@@ -1102,9 +1117,14 @@ impl Strip {
             Spot::Plus => rt::dispatch(|browser| browser.begin_editing(true)),
             Spot::Nothing => {
                 // The empty row is the titlebar: a press moves the window, wherever
-                // it came from. Not Search's double-click new tab: a blank tab is
-                // one ⌘T away, and the empty row is nobody's button.
-                if let Some(window) = self.window() {
+                // it came from, and a double click does what the system's title-bar
+                // double click does (zoom by default). Not Search's double-click new
+                // tab: a blank tab is one ⌘T away, and the empty row is nobody's
+                // button.
+                let Some(window) = self.window() else { return };
+                if event.clickCount() == 2 {
+                    title_bar_double_click(&window);
+                } else {
                     window.performWindowDragWithEvent(event);
                 }
             }

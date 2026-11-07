@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.10 — 2026-11-07
+
+### Added
+
+- **Double-click the tab bar to zoom**: a double click on the empty part of the tab row
+  fills the screen with the window and, again, puts it back, as a title bar does. It
+  follows the system's title-bar double-click setting (Desktop & Dock).
+
 ## 0.2.9 — 2026-11-06
 
 ### Changed
