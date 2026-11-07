@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.20 — 2026-11-07
+
 ### Fixed
 
 - **Apple's sign-in boots again**: the console collector no longer wraps the page's
