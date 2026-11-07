@@ -7,6 +7,16 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.12 — 2026-11-07
+
+### Fixed
+
+- **Video full-screen buttons work**: a player's full-screen button was often
+  refused, most visibly with the window itself in full screen. The tab bar's reading
+  progress asked the page how far it was scrolled four times a second, and each ask
+  cancelled the click that had just happened, as far as the page could tell. The page
+  now reports its own scrolling, as Search's does, and a click stays a click.
+
 ## 0.2.11 — 2026-11-07
 
 ### Fixed

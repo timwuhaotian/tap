@@ -45,7 +45,6 @@ use crate::{
     motion::{self, Aim, Curve, Flock, Follow, Frames, Glide, Loading},
     palette, prefs, rt,
     tabmenu::{self, TabState},
-    web,
 };
 
 /// The strip's look, read from Kept on every draw (and on every tick), so a Settings
@@ -91,19 +90,9 @@ thread_local! {
     static TICKER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
 }
 
-/// What the tick asks the live tab's page, in Tap's own content world: Search's
-/// `ScrollRelay` fraction, read on demand rather than pushed, since the strip may
-/// not add a script-message handler to WebKit's shared configuration.
-const READING_SCRIPT: &str = r"(() => {
-  const root = document.documentElement;
-  const y = window.scrollY || root.scrollTop || 0;
-  const ceiling = Math.max(1, (root.scrollHeight || 0) - window.innerHeight);
-  return Math.min(1, Math.max(0, y / ceiling));
-})()";
-
 /// Starts the strip's one tick, once: at 20 frames a second it is cheap, and it is
-/// what makes held-⌘ numbers, a pressed tab's give, reading reports and a Settings
-/// change land without a model change to redraw on. Motion has its own frames.
+/// what makes held-⌘ numbers, a pressed tab's give and a Settings change land
+/// without a model change to redraw on. Motion has its own frames.
 fn start_ticker() {
     TICKER.with_borrow_mut(|slot| {
         if slot.is_some() {
@@ -154,30 +143,29 @@ fn redraw_strip() {
     });
 }
 
-/// Asks the live tab's page how far it has been read, and keeps the answer in
-/// hundredths, as Search's `Tab.scrolled` does, so a report that changes nothing
-/// redraws nothing.
-fn poll_reading() {
-    let Some(active) = rt::read(Browser::active).flatten() else {
-        return;
+/// How far a tab's page has been read, as its page reports it while it scrolls
+/// (Search's `ScrollRelay`, through `forms.js`), kept in hundredths as Search's
+/// `Tab.scrolled` does, so a report that changes nothing redraws nothing.
+///
+/// Pushed by the page, never asked for: asking ran a script in the live page four
+/// times a second, and each script run from the app ends the page's user
+/// activation, so a click on a video's full-screen button was refused ("without
+/// transient activation") whenever one landed between the press and the player's
+/// handler.
+pub fn page_read(tab: TabId, y: f64, ceiling: f64) {
+    let fraction = if ceiling > 0.0 {
+        ((y / ceiling).clamp(0.0, 1.0) * 100.0).round() / 100.0
+    } else {
+        0.0
     };
     // Tabs that are gone leave no number behind.
     if let Some(ids) = rt::read(|browser| browser.tabs().iter().map(|t| t.id).collect::<Vec<_>>()) {
         READING.with_borrow_mut(|map| map.retain(|id, _| ids.contains(id)));
     }
-    let Some(page) = web::existing(active) else {
-        return;
-    };
-    web::evaluate_in_world(&page, READING_SCRIPT, move |value| {
-        let Some(fraction) = value.as_ref().and_then(serde_json::Value::as_f64) else {
-            return;
-        };
-        let fraction = (fraction.clamp(0.0, 1.0) * 100.0).round() / 100.0;
-        let changed = READING.with_borrow_mut(|map| map.insert(active, fraction) != Some(fraction));
-        if changed {
-            redraw_strip();
-        }
-    });
+    let changed = READING.with_borrow_mut(|map| map.insert(tab, fraction) != Some(fraction));
+    if changed && rt::read(Browser::active).flatten() == Some(tab) {
+        redraw_strip();
+    }
 }
 
 /// A site icon's side, in points.
@@ -579,7 +567,6 @@ pub struct Ivars {
     line_rect: Cell<Option<NSRect>>,
     cmd_held: Cell<bool>,
     last_look: Cell<Option<Look>>,
-    poll_ticks: Cell<u8>,
     /// Every slot's springs.
     flock: RefCell<Flock<Key>>,
     /// The row's slots as last aimed, in order: a change in them is what moves.
@@ -742,7 +729,6 @@ impl Strip {
             line_rect: Cell::new(None),
             cmd_held: Cell::new(false),
             last_look: Cell::new(None),
-            poll_ticks: Cell::new(0),
             flock: RefCell::new(Flock::default()),
             shown: RefCell::new(Vec::new()),
             folded: RefCell::new(HashMap::new()),
@@ -761,8 +747,7 @@ impl Strip {
     }
 
     /// The tick's work, twenty times a second: watch ⌘ and Kept for changes no model
-    /// change announces, and ask for a reading report four times a second while that
-    /// setting is on. Nothing that moves runs on it: twenty steps a second read as
+    /// change announces. It never runs a script in the page (see `page_read`). Nothing that moves runs on it: twenty steps a second read as
     /// steps, so motion runs on the display's frames.
     fn tick(&self) {
         let look = look();
@@ -775,17 +760,6 @@ impl Strip {
         if held != self.ivars().cmd_held.get() {
             self.ivars().cmd_held.set(held);
             self.setNeedsDisplay(true);
-        }
-        if look.reading {
-            let ticks = self.ivars().poll_ticks.get().saturating_add(1);
-            if ticks >= 4 {
-                self.ivars().poll_ticks.set(0);
-                poll_reading();
-            } else {
-                self.ivars().poll_ticks.set(ticks);
-            }
-        } else {
-            self.ivars().poll_ticks.set(0);
         }
     }
 

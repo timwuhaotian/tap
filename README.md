@@ -52,6 +52,8 @@ with its own name and icon, and with fixes of its own.
   duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones
   to its right or all the others, or reopen a closed one; right-click a group's name to
   rename, fold, ungroup or close it. Right-click the empty tab row to reopen a closed tab.
+- **Videos go full screen** from their player's own button, with Tap's window in
+  full screen or not, and Esc twice brings them back when Settings asks for it.
 - **Settings** (⌘,), laid out as Search's, with only the settings that work — 56
   rows (Search's 81, less translation, plus the address bar's): where new tabs go, what closing one lands on, background links that wait,
   closing tabs you leave alone, a fresh window at launch, sleeping tabs, the search

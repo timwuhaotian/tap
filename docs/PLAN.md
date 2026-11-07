@@ -836,7 +836,11 @@ privacy rows included).
   `motion.light` (the strip's give lands at once while Low Power Mode or a
   serious thermal state holds; Tap has no other chrome springs yet).
 - [x] **Tab bar** (`strip.rs`, read from `Kept` on every draw): `glyph`,
-  `tabs.reading` (a 200 ms scroll poll through Tap's content world),
+  `tabs.reading` (pushed by `forms.js` on scroll, once a frame at most, as Search's
+  `ScrollRelay`; it was a 200 ms poll through Tap's content world until 0.2.12, and
+  each script the app runs in a page ends that page's user activation, so video
+  full-screen buttons were refused "without transient activation" — no periodic
+  script may run in a shown page),
   `tabs.give`, `tabs.shortcuts`, `tabs.address` (a registrable-domain table, not
   the Public Suffix List; IDN stays punycode, never decoded).
 - [x] **Actions** (`settings.rs`, `bench.rs`): `about.feedback` (a GitHub draft

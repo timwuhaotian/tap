@@ -399,6 +399,25 @@
   document.addEventListener('fullscreenchange', immersed, true);
   document.addEventListener('webkitfullscreenchange', immersed, true);
 
+  // How far the page has been read, for the tab's reading fill (Search's
+  // ScrollRelay): said once a frame at most while it scrolls, and once
+  // now. Said from here rather than asked for: a script the app runs in
+  // the page ends the page's user activation, and asking four times a
+  // second had full-screen buttons refused.
+  var reading = false;
+  function read() {
+    var root = document.documentElement;
+    var y = window.scrollY || root.scrollTop || 0;
+    var ceiling = Math.max(1, (root.scrollHeight || 0) - window.innerHeight);
+    window.webkit.messageHandlers.tapForms.postMessage({ kind: 'reading', y: y, max: ceiling });
+  }
+  window.addEventListener('scroll', function () {
+    if (reading) return;
+    reading = true;
+    requestAnimationFrame(function () { reading = false; read(); });
+  }, { passive: true });
+  read();
+
   document.addEventListener('focusin', caret, true);
   document.addEventListener('focusout', function () { setTimeout(caret, 0); }, true);
   document.addEventListener('mouseup', function () { setTimeout(caret, 0); }, true);

@@ -126,6 +126,11 @@ fn received(message: &WKScriptMessage) {
         Some("submit") => sent(tab, &web, &text("user"), &text("password")),
         Some("name") => gave_name(tab, &web, &text("user")),
         Some("settled") => settle(tab, false),
+        Some("reading") => {
+            if let (Some(y), Some(ceiling)) = (body["y"].as_f64(), body["max"].as_f64()) {
+                crate::strip::page_read(tab, y, ceiling);
+            }
+        }
         Some("focus") => {
             let rect = body["rect"].as_object().and_then(|r| {
                 Some(NSRect::new(
