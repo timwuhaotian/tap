@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.22 — 2026-11-07
+
 ### Added
 
 - **`tap eval --frame`**: `tap eval <id> --frame <part> '<js>'` runs inside the
