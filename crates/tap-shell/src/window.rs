@@ -18,9 +18,10 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton,
-    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSResponder,
-    NSTextField, NSTextFieldDelegate, NSTextInputClient, NSTextView, NSView,
-    NSViewFrameDidChangeNotification, NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
+    NSControlTextEditingDelegate, NSEvent, NSFocusRingType, NSFont, NSImage, NSPasteboard,
+    NSPasteboardTypeString, NSResponder, NSText, NSTextField, NSTextFieldDelegate,
+    NSTextInputClient, NSTextView, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSWindowButton, NSWindowDelegate, NSWindowDidBecomeKeyNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidExitFullScreenNotification,
     NSWindowDidResignKeyNotification, NSWindowDidResizeNotification, NSWindowStyleMask,
     NSWindowTitleVisibility,
@@ -121,6 +122,7 @@ struct Views {
     /// The instrument behind a blank tab's field.
     blank: Retained<BlankView>,
     field: Retained<NSTextField>,
+    field_editor: Retained<FieldEditor>,
     plate: Retained<Plate>,
     /// The rows under the field, and the grey rest of the address after its text.
     offers: Retained<Offers>,
@@ -140,6 +142,7 @@ struct Views {
     /// The window's last title, so AppKit is told only when it moves.
     title: RefCell<String>,
     _field_delegate: Retained<FieldDelegate>,
+    _window_delegate: Retained<WindowDelegate>,
 }
 
 thread_local! {
@@ -229,6 +232,10 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
 
     let field_delegate = FieldDelegate::new(mtm);
     let field = field(mtm, &field_delegate);
+    let field_editor = FieldEditor::new(mtm);
+    let window_delegate = WindowDelegate::new(mtm);
+    // The window keeps its delegate weakly; it lives in `VIEWS` for the app's life.
+    window.setDelegate(Some(ProtocolObject::from_ref(&*window_delegate)));
     let plate = Plate::new(
         mtm,
         NSRect::new(
@@ -267,6 +274,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             stage,
             blank,
             field,
+            field_editor,
             plate,
             offers,
             suggest,
@@ -279,6 +287,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             stopping: Cell::new(true),
             title: RefCell::new(String::new()),
             _field_delegate: field_delegate,
+            _window_delegate: window_delegate,
         });
     });
     with_views(arrange);
@@ -1920,6 +1929,91 @@ define_class!(
 );
 
 impl FieldDelegate {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: NSObject's designated initialiser.
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+define_class!(
+    /// The address field's editor: ⌘C on the whole address copies the page's full
+    /// address, with its scheme, rather than the trimmed text the field shows.
+    #[unsafe(super(NSTextView, NSText, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "TapFieldEditor"]
+    struct FieldEditor;
+
+    impl FieldEditor {
+        #[unsafe(method(copy:))]
+        fn copy(&self, sender: Option<&AnyObject>) {
+            if let Some(full) = field_copy_full(self) {
+                let board = NSPasteboard::generalPasteboard();
+                board.clearContents();
+                // SAFETY: the system's own pasteboard type constant, valid for the app's life.
+                let kind = unsafe { NSPasteboardTypeString };
+                board.setString_forType(&NSString::from_str(&full), kind);
+            } else {
+                // SAFETY: the superclass's own, passing the copy on.
+                let _: () = unsafe { msg_send![super(self), copy: sender] };
+            }
+        }
+    }
+);
+
+impl FieldEditor {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: NSTextView's designated initialiser; AppKit sizes the editor over the field.
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
+        this.setFieldEditor(true);
+        this.setRichText(false);
+        this.setImportsGraphics(false);
+        this
+    }
+}
+
+/// What ⌘C in the address field copies: the page's full address when the whole
+/// address is selected and no key changed it, else nothing for the editor's own copy.
+fn field_copy_full(editor: &FieldEditor) -> Option<String> {
+    let range = editor.selectedRange();
+    let shown = editor.string();
+    let selected_all = range.location == 0 && range.length == shown.length();
+    rt::read(|browser| browser.field_copy(&shown.to_string(), selected_all)).flatten()
+}
+
+define_class!(
+    /// The window's delegate: the address field edits in Tap's own editor, whose ⌘C
+    /// copies the page's full address; every other field keeps AppKit's own editor.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "TapWindowDelegate"]
+    struct WindowDelegate;
+
+    unsafe impl NSObjectProtocol for WindowDelegate {}
+
+    unsafe impl NSWindowDelegate for WindowDelegate {}
+
+    impl WindowDelegate {
+        #[unsafe(method_id(windowWillReturnFieldEditor:toObject:))]
+        fn editor_for(
+            &self,
+            _sender: &NSWindow,
+            client: Option<&AnyObject>,
+        ) -> Option<Retained<FieldEditor>> {
+            with_views(|views| (views.field.clone(), views.field_editor.clone()))
+                .filter(|(field, _)| {
+                    client.is_some_and(|client| {
+                        std::ptr::from_ref(client).cast::<()>()
+                            == Retained::as_ptr(field).cast::<()>()
+                    })
+                })
+                .map(|(_, editor)| editor)
+        }
+    }
+);
+
+impl WindowDelegate {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(());
         // SAFETY: NSObject's designated initialiser.

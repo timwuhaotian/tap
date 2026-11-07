@@ -30,13 +30,14 @@ use std::{
 
 use block2::RcBlock;
 use objc2::{
-    MainThreadMarker,
+    MainThreadMarker, msg_send,
     rc::Retained,
     runtime::{AnyObject, Sel},
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSTextInputClient, NSTextView,
+    NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSPasteboard,
+    NSPasteboardTypeString, NSTextInputClient, NSTextView,
 };
 use objc2_foundation::{NSError, NSNotFound, NSPoint, NSRange, NSString};
 use serde_json::{Value, json};
@@ -890,6 +891,32 @@ fn handle(request: &Value, reply: Reply) {
                 );
             let handled = key_equivalent(mtm, &key, &modifiers);
             reply.say(json!({ "handled": handled }));
+        }
+        "front" => {
+            // The app in front with its window key: responder-chain actions (⌘C,
+            // ⌘A) and real keystrokes need a key window, which a background
+            // launch leaves out.
+            NSApplication::sharedApplication(mtm).activate();
+            window::bring_forward();
+            reply.say(json!({ "front": true }));
+        }
+        "copyfield" => {
+            // The field editor's copy:, invoked directly: responder-chain
+            // delivery needs a key window, which a background launch leaves out.
+            let Some(editor) = window::field_editor() else {
+                return reply.say(json!({ "error": "the address field has no editor" }));
+            };
+            // SAFETY: the standard copy action sent to the field editor.
+            let _: () = unsafe { msg_send![&editor, copy: Option::<&AnyObject>::None] };
+            reply.say(json!({ "copied": true }));
+        }
+        "pasteboard" => {
+            // What ⌘C put there: the check on a copied address carrying its scheme.
+            let board = NSPasteboard::generalPasteboard();
+            // SAFETY: the system's own pasteboard type constant, valid for the app's life.
+            let kind = unsafe { NSPasteboardTypeString };
+            let text = board.stringForType(kind).map(|s| s.to_string());
+            reply.say(json!({ "text": text }));
         }
         "quit" => {
             reply.say(json!({ "quitting": true }));

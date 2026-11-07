@@ -167,6 +167,13 @@ pub fn editable(page: &Url) -> String {
     full.to_owned()
 }
 
+/// What ⌘C copies when the field shows `page` for editing unchanged: the full
+/// address, with its scheme. `None` once a key changed what the field opened with.
+#[must_use]
+pub fn copy_full(displayed: &str, page: &Url) -> Option<String> {
+    (displayed == editable(page)).then(|| page.as_str().to_owned())
+}
+
 /// An address as a row shows it: without a leading www.
 #[must_use]
 pub fn without_www(address: &str) -> &str {
@@ -303,6 +310,21 @@ mod tests {
             "http://example.com/"
         );
         assert_eq!(editable(&page("http://localhost:3000/")), "localhost:3000");
+    }
+
+    #[test]
+    fn copy_puts_the_scheme_back() {
+        let page = |s: &str| Url::parse(s).expect("parses");
+        assert_eq!(
+            copy_full("example.com", &page("https://example.com")).as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            copy_full("example.com/a?b=1", &page("https://example.com/a?b=1")).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(copy_full("example.co", &page("https://example.com")), None);
+        assert_eq!(copy_full("", &page("https://example.com")), None);
     }
 
     #[test]

@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.11 — 2026-11-07
+
+### Fixed
+
+- **Copying the address keeps its scheme**: ⌘C on the whole address in the field
+  copies the full page address with its scheme, rather than the trimmed text
+  the field shows.
+
 ## 0.2.10 — 2026-11-07
 
 ### Added

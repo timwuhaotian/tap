@@ -1662,6 +1662,22 @@ impl Browser {
         right_takes_ending(selection, length) && self.accept_ending()
     }
 
+    /// What ⌘C in the field copies when the whole address is selected: the page's
+    /// full address, with its scheme, rather than the trimmed text the field shows
+    /// (Chrome's and Safari's rule). `None` for a partial selection, or once a key
+    /// changed what the field opened with.
+    #[must_use]
+    pub fn field_copy(&self, displayed: &str, selected_all: bool) -> Option<String> {
+        if !selected_all || self.editing.is_none() {
+            return None;
+        }
+        let address = &self.active_tab()?.url;
+        if address.is_empty() {
+            return None;
+        }
+        address::copy_full(displayed, &Url::parse(address)?)
+    }
+
     /// Esc, or a click away: the field closes and nothing is opened.
     pub fn cancel_editing(&mut self) {
         if self.editing.take().is_some() {
@@ -3667,6 +3683,29 @@ mod tests {
             browser.active_tab().map(Tab::url),
             Some("https://example.com")
         );
+    }
+
+    #[test]
+    fn copy_copies_the_full_address_only_when_nothing_changed() {
+        let mut browser = with_pages(&["https://example.com/a?b=1"]);
+        browser.begin_editing(false);
+        let shown = browser
+            .editing()
+            .map(|e| e.typed.clone())
+            .expect("the address");
+        assert_eq!(shown, "example.com/a?b=1");
+        assert_eq!(
+            browser.field_copy(&shown, true).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(browser.field_copy(&shown, false), None, "part selected");
+        assert_eq!(browser.field_copy("example.com", true), None, "edited");
+        browser.cancel_editing();
+        assert_eq!(browser.field_copy(&shown, true), None, "field away");
+
+        let mut blank = Browser::new();
+        blank.begin_editing(false);
+        assert_eq!(blank.field_copy("", true), None, "a new tab has nothing");
     }
 
     #[test]
