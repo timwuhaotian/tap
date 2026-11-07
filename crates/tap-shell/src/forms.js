@@ -214,6 +214,23 @@
       put(both.pass, password);
       return true;
     },
+    // The same pair, filled on its own when the form is found: only into
+    // empty boxes, never a new password, and never a pair the list would
+    // not hang from (a pick is a choice, this is not). A password alone —
+    // the second step of a sign-in — takes it.
+    autofill: function (user, password) {
+      var both = pair();
+      if (!both || newPassword(both.pass) || both.pass.value) return false;
+      if (both.user) {
+        if (both.user.value && both.user.value !== user) return false;
+        if (aside(both.user) || elsewhere(both.user)) return false;
+        var together = !!both.user.form && both.user.form === both.pass.form;
+        if (!together && !claimsName(both.user)) return false;
+        if (!both.user.value) put(both.user, user);
+      }
+      put(both.pass, password);
+      return true;
+    },
     // The name alone, into a first step's box: there is no password
     // box yet, and none is filled anywhere.
     name: function (user) {

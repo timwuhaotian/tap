@@ -1288,6 +1288,31 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### 0.2.14 — Login pages fill themselves in
+
+At the user's request (2026-11-07: "访问某网站/登陆表单应该帮我先自动填入，而不是一定要等我
+focus进输入框才显示选择提示"). A deliberate departure from Search (`fixed-deviation`):
+Search fills nothing on its own ("the way Safari does it"); Tap puts the newest kept
+account in when the form is found, and the list under a focused box is there to switch.
+
+- [x] **Autofill on form found** (`forms.js` `autofill`, `forms.rs` `form`/`autofill`,
+  `signin.rs` `autofill`/`page_finished`/`forget_tab`/`pick_for_autofill`): the page's
+  `form` message, ignored until now, fills the newest account kept for the site
+  (the name the step before was sent with first, as the list does), wide across the
+  site's hosts, plain-http pages only what was kept in the clear, behind
+  `passwords.fill`. The script fills only empty boxes — never a new password, never
+  another name's box, never a pair the list would not hang from — with the page's
+  scheme and host rechecked when it runs. Once per page, cleared for a new document;
+  the secret is read off the main thread and a refused fill may try a later form.
+  The list, the save bar and the picker are unchanged; `passwords.fill` now reads
+  "A login page fills itself in; click a box to switch accounts".
+- Not in: submitting the form, first-step (name-only) pages, passkeys, Apple Passwords.
+- Checked: `cargo test` (tap-core 129, tap-import 35, tap-shell 99, tap-app 7), clippy
+  `-D warnings`, nightly fmt, `scripts/bench test-forms` (36 checks, 6 new). In a test
+  world through the bench against a local login page: saved alice once, the revisit
+  held `alice|Tr0ub4dor&3` with no focus; `passwords.fill` off left the boxes empty
+  and on filled them again; focusing the box still hung alice for a switch.
+
 ### 0.2.13 — Hand a page to an agent
 
 At the user's request (2026-11-07: "从ai agent 友好角度出发…右键点击tab或者页面的时候，可以多一个
@@ -1913,7 +1938,7 @@ added below this one as M1 starts.
 | Find.swift | 135 | s/ui/find_bar | M2 | ported |
 | Float.swift | 1367 | w/float, a/float | M5 | todo |
 | Fold.swift | 554 | s/ui/fold | M3 | todo |
-| Forms.swift | 544 | a/forms, w/relays/form | M5 | partial (0.1.5: `forms.js`, `forms.rs`, `signin.rs`; no passkeys path) |
+| Forms.swift | 544 | a/forms, w/relays/form | M5 | partial (0.1.5: `forms.js`, `forms.rs`, `signin.rs`; no passkeys path; 0.2.14: autofill on form found, `fixed-deviation` from Search's fill-nothing-on-its-own) |
 | FrameRate.swift | 156 | sys/power, w/frame_rate | M5 | todo |
 | FullScreenEscape.swift | 396 | s/ui/full_screen_escape | M5 | todo |
 | Hidden.swift | 87 | s/ui/hidden | M5 | todo |

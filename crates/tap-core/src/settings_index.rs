@@ -653,7 +653,7 @@ pub fn items() -> &'static [Item] {
                 "Asked once per site, never again for a site you refuse")
                 .keys(&["passwords.save"]).words(&["save password"]).control(Control::Switch("passwords.save")),
             Item::new("passwords.fill", "passwords", "rectangle.and.pencil.and.ellipsis", "Fill in sign-ins",
-                "Click a sign-in box and your accounts for the site hang from it")
+                "A login page fills itself in; click a box to switch accounts")
                 .keys(&["passwords.fill"]).words(&["autofill", "login"]).control(Control::Switch("passwords.fill")),
             Item::new("passkeys", "passwords", "person.badge.key", "Offer passkeys",
                 "Touch ID or an iCloud passkey, on sites that offer one")

@@ -123,6 +123,7 @@ fn received(message: &WKScriptMessage) {
     };
     let text = |key: &str| body[key].as_str().unwrap_or_default().to_owned();
     match body["kind"].as_str() {
+        Some("form") => signin::autofill(tab, &web),
         Some("submit") => sent(tab, &web, &text("user"), &text("password")),
         Some("name") => gave_name(tab, &web, &text("user")),
         Some("settled") => settle(tab, false),
@@ -201,8 +202,10 @@ fn sent(tab: TabId, web: &WKWebView, user: &str, password: &str) {
     });
 }
 
-/// A new document has come in: did a sign-in sent before it take?
+/// A new document has come in: did a sign-in sent before it take? A new page may
+/// also fill itself in again.
 pub fn page_finished(tab: TabId) {
+    signin::page_finished(tab);
     settle(tab, true);
 }
 
@@ -266,6 +269,7 @@ fn settle(tab: TabId, navigated: bool) {
 /// A tab gone: what it held goes with it.
 pub fn forget_tab(tab: TabId) {
     HELD_BY_TAB.with_borrow_mut(|held| held.remove(&tab));
+    signin::forget_tab(tab);
 }
 
 /// Puts a remembered name and password where a person would have typed them, if the
@@ -294,6 +298,31 @@ pub fn fill(
     if let Some(password) = password {
         arguments.push(("password", password));
     }
+    web::call_in_world(web, body, &arguments, move |answer| {
+        done(answer == Some(Value::Bool(true)));
+    });
+}
+
+/// A remembered password put in on its own when the form is found, if the page is
+/// still on `scheme` and `host` when the script runs. The script fills only empty
+/// boxes, so a page typed into since gets nothing either. `done` hears whether the
+/// boxes took it.
+pub fn autofill(
+    web: &WKWebView,
+    user: &str,
+    password: &str,
+    scheme: &str,
+    host: &str,
+    done: impl Fn(bool) + 'static,
+) {
+    let body = "location.protocol === scheme + ':' && location.hostname.toLowerCase() === host \
+     && !!(window.__tapForms && window.__tapForms.autofill(user, password))";
+    let arguments = vec![
+        ("user", user),
+        ("password", password),
+        ("scheme", scheme),
+        ("host", host),
+    ];
     web::call_in_world(web, body, &arguments, move |answer| {
         done(answer == Some(Value::Bool(true)));
     });

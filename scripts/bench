@@ -149,6 +149,26 @@ def test_forms():
           check(p.messages.some(m => m.kind === 'submit' && m.user === '' && m.password === 'secret'), 'submit without username');
           done(p);
 
+          p = page('<form><input id="u" name="username"><input id="pw" type="password"></form>');
+          d = p.d; f = p.w.__tapForms; u = d.querySelector('#u'); pw = d.querySelector('#pw');
+          check(f.autofill('alice', 'secret') && u.value === 'alice' && pw.value === 'secret', 'autofill fills empty boxes');
+          check(!f.autofill('bob', 'other') && u.value === 'alice' && pw.value === 'secret', 'autofill leaves filled boxes alone');
+          u.value = 'carol'; pw.value = '';
+          check(!f.autofill('alice', 'secret') && pw.value === '', 'autofill leaves another name alone');
+          u.value = ''; pw.setAttribute('autocomplete', 'new-password');
+          check(!f.autofill('alice', 'secret') && pw.value === '', 'autofill skips a new password');
+          done(p);
+
+          p = page('<form><input id="pw" type="password"></form>');
+          d = p.d; f = p.w.__tapForms; pw = d.querySelector('#pw');
+          check(f.autofill('alice', 'secret') && pw.value === 'secret', 'autofill fills a password alone');
+          done(p);
+
+          p = page('<form><input id="q" name="q"><input id="pw" type="password"></form>');
+          d = p.d; f = p.w.__tapForms; pw = d.querySelector('#pw');
+          check(!f.autofill('alice', 'secret') && pw.value === '', 'autofill skips a pair the list would not hang from');
+          done(p);
+
           p = page('<form><input id="user"><input id="pw" type="password" style="display:none"></form>');
           d = p.d; pw = d.querySelector('#pw');
           p.reset(); pw.style.display = ''; p.timer(700);

@@ -7,6 +7,15 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.14 — 2026-11-07
+
+### Changed
+
+- **Login pages fill themselves in**: opening a site with a saved sign-in puts the
+  newest account straight into the form, instead of waiting for a click into the
+  box. The accounts still hang from a focused box to switch, and Fill in sign-ins
+  off stops it.
+
 ## 0.2.13 — 2026-11-07
 
 ### Added

@@ -1,13 +1,16 @@
 //! Sign-ins on a page, the browser's half (Search's `hang`, `pick`, `onCredentials` and
-//! the `PasswordOffer` bar): with the caret in a sign-in box, the accounts kept for the
-//! site hang from the box, and a click fills the form in — nothing is filled on its own,
-//! the way Safari does it. After a sign-in that took, the password is offered a place in
-//! the keychain, in a bar at the bottom of the page.
+//! the `PasswordOffer` bar): a found form fills itself in with the newest account kept
+//! for the site, and with the caret in a sign-in box the accounts hang from the box, a
+//! click switching to another. After a sign-in that took, the password is offered a place
+//! in the keychain, in a bar at the bottom of the page.
+//!
+//! A deliberate departure from Search, which fills nothing on its own: opening a login
+//! page signs you most of the way in, and the list is there to switch accounts.
 //!
 //! A page that came over plain http can have been written by anyone on the way; it is
 //! offered only what was kept from plain http too.
 
-use std::{cell::RefCell, time::Instant};
+use std::{cell::RefCell, collections::HashMap, time::Instant};
 
 use objc2::{
     AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send,
@@ -75,6 +78,9 @@ struct State {
     looked: Option<Looked>,
     /// Picked into: the list doesn't come straight back for the box still in use.
     picked_into: Option<TabId>,
+    /// Filled on its own: the page the form was found on. Once per page — a refill
+    /// would type over what was just typed — cleared for a new document.
+    filled: HashMap<TabId, (String, bool)>,
     /// Counts lowerings asked for: one overtaken by the caret coming back does nothing.
     lowering: u64,
     offer: Option<Offer>,
@@ -205,6 +211,101 @@ pub fn field(
         });
     });
     show(spot, rows);
+}
+
+/// A sign-in form found on the page: the newest account kept for the site goes in on
+/// its own, without waiting for the caret. The list still hangs from a box when the
+/// caret goes in, to switch accounts. Once per page: the page tells again a moment
+/// later, and a refill would type over what was just typed.
+pub fn autofill(tab: TabId, web: &WKWebView) {
+    if !fills() {
+        return;
+    }
+    let Some((scheme, host)) = forms::page(web) else {
+        return;
+    };
+    if scheme != "https" && scheme != "http" {
+        return;
+    }
+    let clear = scheme == "http";
+    let done = STATE.with_borrow(|s| {
+        s.filled
+            .get(&tab)
+            .is_some_and(|(h, c)| *h == host && *c == clear)
+    });
+    if done {
+        return;
+    }
+    // A password form's accounts: the site's other hosts' too, as a focused box beside
+    // a password is offered. A page over plain http only what was kept in the clear.
+    let bare = host.strip_prefix("www.").unwrap_or(&host);
+    let kept: Vec<vault::Kept> = vault::kept_matching(bare, true)
+        .into_iter()
+        .filter(|k| !clear || k.clear)
+        .collect();
+    let Some(first) = pick_for_autofill(&kept, forms::given_name(tab, &host).as_deref()) else {
+        return;
+    };
+    // Marked before the secret is read: the page tells again a moment later, and a
+    // second read for the same page fills nothing more. Cleared if the boxes refuse it.
+    STATE.with_borrow_mut(|s| {
+        s.filled.insert(tab, (host.clone(), clear));
+    });
+    std::thread::spawn(move || {
+        let login = vault::login(&first);
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            let Some(login) = login else {
+                STATE.with_borrow_mut(|s| s.filled.remove(&tab));
+                return;
+            };
+            let Some(web) = web::existing(tab) else {
+                return;
+            };
+            // The tab may have gone somewhere else while the secret was read: what was
+            // looked up for one site is never put into another's page.
+            let Some((now, now_host)) = forms::page(&web) else {
+                return;
+            };
+            if now_host != host || (now == "http") != clear {
+                return;
+            }
+            let user = login.user.clone();
+            let password = login.password.clone();
+            forms::autofill(&web, &user, &password, &now, &now_host, move |worked| {
+                if worked {
+                    vault::touch(&login);
+                } else {
+                    // Typed into or gone: a later form may still take it.
+                    STATE.with_borrow_mut(|s| s.filled.remove(&tab));
+                }
+            });
+        });
+    });
+}
+
+/// The account a found form fills itself in with: `kept`, newest first as
+/// `vault::kept_matching` answers, or the name the step before was sent with when it is
+/// among them. Pure, so it can be tested without the keychain.
+fn pick_for_autofill(kept: &[vault::Kept], given: Option<&str>) -> Option<vault::Kept> {
+    if kept.is_empty() {
+        return None;
+    }
+    if let Some(given) = given
+        && let Some(found) = kept.iter().find(|k| k.user.eq_ignore_ascii_case(given))
+    {
+        return Some(found.clone());
+    }
+    Some(kept[0].clone())
+}
+
+/// A new document: it may fill itself in again.
+pub fn page_finished(tab: TabId) {
+    STATE.with_borrow_mut(|s| s.filled.remove(&tab));
+}
+
+/// A tab gone: its filled mark goes with it.
+pub fn forget_tab(tab: TabId) {
+    STATE.with_borrow_mut(|s| s.filled.remove(&tab));
 }
 
 /// The box's rect in the stage's points: CSS pixels times the page's zoom, in the web
@@ -879,4 +980,30 @@ pub fn bench_answer(answer: &str) {
         "never" => Answer::Never,
         _ => Answer::Later,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kept(user: &str) -> vault::Kept {
+        vault::Kept {
+            host: "example.com".to_owned(),
+            user: user.to_owned(),
+            used: None,
+            clear: false,
+        }
+    }
+
+    #[test]
+    fn autofill_takes_the_newest_or_the_named_one() {
+        assert!(pick_for_autofill(&[], None).is_none());
+        let kept = vec![kept("bob"), kept("alice")];
+        assert_eq!(pick_for_autofill(&kept, None).unwrap().user, "bob");
+        assert_eq!(
+            pick_for_autofill(&kept, Some("ALICE")).unwrap().user,
+            "alice"
+        );
+        assert_eq!(pick_for_autofill(&kept, Some("carol")).unwrap().user, "bob");
+    }
 }

@@ -69,8 +69,9 @@ with its own name and icon, and with fixes of its own.
   supported passwords, bookmarks and history, but not open tabs. Safari exports may
   contain passwords in plain text: delete the file when you no longer need it. File…
   also takes a passwords CSV or a Tap profile backup.
-- **Passwords**, Search's way, in the macOS keychain under Tap's name: click a sign-in
-  box and the accounts kept for the site hang from it, one click fills it in; after a
+- **Passwords**, Search's way, in the macOS keychain under Tap's name: a login page
+  fills itself in with the newest account kept for the site, and the accounts hang
+  from a sign-in box you click into, one click switching to another; after a
   sign-in that took, Tap offers to save or update the password (or never ask on that
   site). Sign-in detection avoids unnecessary input scans as pages change. A page sent
   over plain http is only ever offered what was kept from one.
