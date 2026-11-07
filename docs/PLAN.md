@@ -1294,7 +1294,7 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
-### Unreleased — Agents see and fill more of the page
+### 0.2.17 — Agents see and fill more of the page
 
 At the user's request (2026-11-07: "检查tap浏览器对ai agent协作的友好度，找优化点和bug",
 then "根据你的建议来优化"), an audit of the agent channel, fixed in the page script and

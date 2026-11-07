@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.17 — 2026-11-07
+
 ### Fixed
 
 - **Agents see and fill more of the page**: a background tab's snapshot (and every
