@@ -1288,6 +1288,56 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### 0.2.13 — Hand a page to an agent
+
+At the user's request (2026-11-07: "从ai agent 友好角度出发…右键点击tab或者页面的时候，可以多一个
+复制tab详情的功能…能绝对定位到某页面和浏览信息"), the first of a three-step list agreed in the same
+conversation. Agents could already drive Tap (0.2.0); the person had no way to point one at
+*this* tab or *this* element. Steps 2 and 3, still open: `tap console`/`errors` (a page-world
+recorder, so only where switched on), a front-tab screenshot, `tap requests`; then a mark on
+agents' tabs, handing a tab back after a sign-in, Copy Details for several picked tabs.
+
+- [x] **Ids that outlast a restart** (`session.rs` `tapID`, `tapNextID`; `browser.rs`
+  `tab_from`, `shape`): a tab comes back under the id it had, unless another tab already
+  has it (a hand-edited or merged session); the next id is kept too, so a closed tab's
+  id is never handed to another page and an agent holding it can't reach the wrong one.
+  Tap's own keys: Search's reader passes over them. Test:
+  `a_tab_keeps_its_id_across_a_restart_and_a_closed_one_s_is_never_reused`.
+- [x] **Copy Tab Details** (`inspect.rs`, `tabmenu.rs`; the strip's tab menu and the
+  page's): a plain-text card an agent can act on: `Tap tab <id> — <label>`, the URL
+  (with a warning when a parameter's name says it carries a secret: `token`, `code`,
+  `key`, …), state with the main document's HTTP status (`decidePolicyForNavigation
+  Response`, main frame), group and place, then what the page says of itself (lang,
+  content type, charset, canonical, description, og:*, viewport, scroll, selection), then
+  the `tap` commands that reach it. A sleeping tab isn't woken for it: the card says
+  asleep and carries the model's facts only.
+- [x] **Copy Element Details** (the page's menu: `PageView`, a `WKWebView` subclass
+  adding both items in `willOpenMenu:withEvent:`): the right-clicked element's unique
+  selector (test ids and ids first, `:nth-of-type` only where tag and classes don't
+  tell it apart), its shadow host, tag, role and name, text, link, box, computed style,
+  and its markup cut at 800 characters; a `tap eval` line that finds it, shell-quoted.
+  A recorder in Tap's world (`inspect::RECORDER`, main frame, document start) keeps
+  what the `contextmenu` event was on, so it sees into shadow roots; when it wasn't at
+  the menu's point (a click inside an iframe), `elementFromPoint` names what is there.
+  Passwords and hidden inputs give no value.
+- [x] **`tap info <id>`** (`bench.rs` `info`, `cli.rs`): the same card, waking a
+  sleeping tab first as the other page reads do; a blank tab answers without one. The
+  skill (`assets/agent/SKILL.md`) tells agents what a pasted card is and that its id
+  is the one to use.
+- Read only when asked (a menu item, `tap info`), never on a timer: every script the app
+  runs in a page ends its user activation (0.2.12).
+- Checked: `cargo test` (tap-core 129, tap-import 35, tap-shell 98, tap-app 7), clippy
+  `-D warnings`, nightly fmt. In a test world against a local page: `tap info` on a
+  loaded tab (HTTP 200, `access_token` warned, canonical, description, og:title,
+  scroll and selection), on a blank tab, and on a tab behind (viewport "not on screen");
+  quit and relaunched: the page's tab kept id 2 and the next tab got a fresh id; the
+  element script through the bench in Tap's world, after a `contextmenu` dispatched in
+  the page: the recorded button, a span inside an open shadow root (with `#host`), a
+  point with no right-click (`elementFromPoint`), a point off the page (missing); the
+  page world can't see the recorder's `__tapPointed`. **Not checked:** the two menus
+  opened by a real right-click and the pasteboard written from them (a synthetic click
+  landed on another app's window in front of the test world, so it was stopped).
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and

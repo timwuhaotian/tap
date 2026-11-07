@@ -27,6 +27,7 @@ tap — drive Tap, this Mac's browser, from a shell or an agent
   tap fill <id> <ref> <text>    types text into a field (or picks a list's option)
   tap press <id> <key> [<ref>]  a key (Enter, Tab, Escape, …) on a control, or the focus
   tap text <id>                 the page's text
+  tap info <id>                 the tab's details: state, place, the page's own facts
   tap eval <id> <js>            a JavaScript expression's value, as JSON
   tap wait <id> [<seconds>]     until the tab has loaded
   tap select <id>               brings the tab to the front, to show it to the person
@@ -52,6 +53,7 @@ enum Command {
         value: String,
     },
     Text(String),
+    Info(String),
     Eval(String, String),
     Wait(String, f64),
     Select(String),
@@ -128,6 +130,10 @@ fn parse(args: &[String]) -> Result<Command, String> {
             need(1, "text <id>")?;
             Command::Text(word(1))
         }
+        "info" => {
+            need(1, "info <id>")?;
+            Command::Info(word(1))
+        }
         "eval" => {
             need(2, "eval <id> <js>")?;
             Command::Eval(word(1), rest(2))
@@ -168,6 +174,7 @@ fn request(command: &Command) -> Value {
             json!({ "do": "act", "id": id, "action": action, "ref": target, "value": value })
         }
         Command::Text(id) => json!({ "do": "text", "id": id }),
+        Command::Info(id) => json!({ "do": "info", "id": id }),
         Command::Eval(id, js) => json!({ "do": "eval", "id": id, "js": js }),
         Command::Wait(id, seconds) => json!({ "do": "wait", "id": id, "seconds": seconds }),
         Command::Select(id) => json!({ "do": "select", "id": id }),
@@ -273,7 +280,7 @@ fn render(command: &Command, answer: &Value) -> String {
             }
             lines.join("\n")
         }
-        Command::Text(_) => answer
+        Command::Text(_) | Command::Info(_) => answer
             .get("value")
             .and_then(Value::as_str)
             .unwrap_or_default()

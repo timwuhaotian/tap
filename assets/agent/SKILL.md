@@ -17,6 +17,7 @@ tap press 7 Enter e2              # a key on a control (no ref: where the focus 
 tap text 7                        # the page's text, to read
 tap eval 7 'document.title'       # a JavaScript expression's value, as JSON
 tap tabs                          # every tab: [id] title — address; * is the user's
+tap info 7                        # the tab's state, place and the page's own facts
 tap close 7
 ```
 
@@ -35,6 +36,9 @@ tap close 7
 - Your tabs open behind theirs and never take over. Don't `go`, `click`, `fill` or
   `close` in a tab you didn't open unless they asked you to.
 - "The page I'm on" is the `*` tab in `tap tabs`: read it with `text` or `snapshot`.
+- A pasted block that starts `Tap tab 7 — …` (Copy Tab Details) or `Element in Tap tab
+  7 — …` (Copy Element Details) names the exact tab and element they mean: use that
+  id. Ids last across restarts; `tap info <id>` gives the same details fresh.
 - For a sign-in, a code, a CAPTCHA or a payment, stop: `tap select <id>` brings the tab
   to the front, ask them to finish there, then carry on in the same tab.
 - Ask before anything that can't be taken back: buying, sending, posting, deleting.

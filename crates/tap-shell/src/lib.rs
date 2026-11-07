@@ -17,6 +17,7 @@ mod findbar;
 mod float;
 mod forms;
 mod icons;
+mod inspect;
 mod keychain;
 mod links;
 mod menu;

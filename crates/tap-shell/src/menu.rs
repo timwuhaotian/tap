@@ -74,6 +74,8 @@ pub enum Command {
     TabCopySelected,
     /// Close N Tabs: the picked ones, together.
     TabCloseSelected,
+    /// Copy Tab Details: what lets an agent find the tab with `tap` (inspect).
+    TabCopyDetails,
     /// Move to Group › a group: 300 and its place among the groups.
     TabIntoGroup = 300,
     /// A heading's Color › a colour: 400 and its place in `groups::COLOURS`.

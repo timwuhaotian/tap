@@ -171,6 +171,7 @@ pub fn tab_entries(state: &TabState, can_copy: bool) -> Vec<Entry> {
             Command::TabCopyMarkdown,
             state.has_page,
         ),
+        entry("Copy Tab Details", Command::TabCopyDetails, state.has_page),
         entry("Put to Sleep", Command::TabSleep, state.can_sleep),
         separator(),
         close_entry(state),
@@ -429,14 +430,14 @@ pub fn run(tag: NSInteger) -> bool {
         }
         return true;
     }
+    if run_copy(tag, target) {
+        return true;
+    }
     match tag {
         t if t == Command::TabReopen as NSInteger => {
             rt::dispatch(Browser::reopen);
         }
-        t if t == Command::TabCopyAddress as NSInteger => copy(false),
-        t if t == Command::TabCopySelected as NSInteger => copy_selected(),
         t if t == Command::TabCloseSelected as NSInteger => rt::dispatch(Browser::close_selected),
-        t if t == Command::TabCopyMarkdown as NSInteger => copy(true),
         t if t == Command::TabNewGroup as NSInteger => {
             let Some(id) = target else { return true };
             let made = rt::update(|browser| {
@@ -504,6 +505,22 @@ pub fn run(tag: NSInteger) -> bool {
             rt::dispatch(move |browser| browser.close_right(id));
         }
         _ => return run_group(tag),
+    }
+    true
+}
+
+/// The Copy commands, on the tab the menu was opened for. Answers whether the tag was one.
+fn run_copy(tag: NSInteger, target: Option<TabId>) -> bool {
+    match tag {
+        t if t == Command::TabCopyAddress as NSInteger => copy(false),
+        t if t == Command::TabCopyMarkdown as NSInteger => copy(true),
+        t if t == Command::TabCopySelected as NSInteger => copy_selected(),
+        t if t == Command::TabCopyDetails as NSInteger => {
+            if let Some(id) = target {
+                crate::inspect::copy_tab(id);
+            }
+        }
+        _ => return false,
     }
     true
 }
@@ -633,6 +650,7 @@ mod tests {
                 "Duplicate Tab",
                 "Copy Address",
                 "Copy as Markdown Link",
+                "Copy Tab Details",
                 "Put to Sleep",
                 "",
                 "Close Tab",

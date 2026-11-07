@@ -36,7 +36,9 @@ use tap_core::{
     identity,
 };
 
-use crate::{dialogs, downloads, forms, icons, oslog, page_find, rt, signin, sleep, store, window};
+use crate::{
+    dialogs, downloads, forms, icons, inspect, oslog, page_find, rt, signin, sleep, store, window,
+};
 
 #[path = "shield.rs"]
 mod shield;
@@ -536,14 +538,7 @@ fn web_view(mtm: MainThreadMarker, tab: TabId) -> Retained<WKWebView> {
     }
     let web = shared(mtm, |shared| {
         make_with(&shared.configuration, PAGES.get());
-        // SAFETY: a fresh allocation, initialised once with a valid configuration.
-        unsafe {
-            WKWebView::initWithFrame_configuration(
-                WKWebView::alloc(mtm),
-                NSRect::ZERO,
-                &shared.configuration,
-            )
-        }
+        inspect::make(mtm, &shared.configuration)
     });
     register(mtm, tab, &web);
     web
@@ -621,6 +616,8 @@ fn sync_scripts(
         if autoscroll {
             controller.addUserScript(&user_script(mtm, AUTOSCROLL_SCRIPT, false, false));
         }
+        // What a right-click was on, for Copy Element Details: Tap's world, main frame.
+        controller.addUserScript(&user_script(mtm, inspect::RECORDER, false, true));
         // Sign-ins, always: Search's script at the document's end, in Tap's world, the
         // main frame only (Tab.swift).
         controller.addUserScript(
@@ -938,6 +935,7 @@ pub(crate) fn tab_of(web: &WKWebView) -> Option<TabId> {
 
 fn discard(mtm: MainThreadMarker, tab: TabId) {
     dialogs::drop_held(tab);
+    inspect::forget(tab);
     forms::forget_tab(tab);
     signin::lower_now(tab);
     let Some(web) = WEBS.with_borrow_mut(|webs| webs.remove(&tab)) else {
@@ -1153,10 +1151,11 @@ define_class!(
         #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
         fn decide_response(
             &self,
-            _web: &WKWebView,
+            web: &WKWebView,
             response: &WKNavigationResponse,
             handler: &DynBlock<dyn Fn(WKNavigationResponsePolicy)>,
         ) {
+            note_status(web, response);
             handler.call((decide_response(response),));
         }
 
@@ -1313,10 +1312,8 @@ fn create_tab(
     configuration: &WKWebViewConfiguration,
 ) -> Option<Retained<WKWebView>> {
     let opener = tab_of(web);
-    // SAFETY: WebKit's own configuration for this window, used once, as it asks.
-    let fresh = unsafe {
-        WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), NSRect::ZERO, configuration)
-    };
+    // WebKit's own configuration for this window, used once, as it asks.
+    let fresh = inspect::make(mtm, configuration);
     let id = rt::update(|browser| browser.adopt(opener, true))?;
     register(mtm, id, &fresh);
     rt::settle();
@@ -1547,6 +1544,16 @@ fn decide(web: &WKWebView, action: &WKNavigationAction) -> WKNavigationActionPol
         return WKNavigationActionPolicy::Cancel;
     }
     WKNavigationActionPolicy::Allow
+}
+
+/// The main document's HTTP status, for Copy Tab Details and `tap info`.
+fn note_status(web: &WKWebView, response: &WKNavigationResponse) {
+    // SAFETY: plain property reads on the response WebKit hands us.
+    let (main, answer) = unsafe { (response.isForMainFrame(), response.response()) };
+    if let (true, Some(tab), Ok(http)) = (main, tab_of(web), answer.downcast::<NSHTTPURLResponse>())
+    {
+        inspect::note_status(tab, http.statusCode() as i64);
+    }
 }
 
 /// What arrives is shown if WebKit can show it, and kept as a file if not, or if the

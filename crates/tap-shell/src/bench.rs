@@ -670,6 +670,31 @@ fn handle(request: &Value, reply: Reply) {
                 evaluate(id, "document.body ? document.body.innerText : ''", reply);
             });
         }
+        "info" => {
+            // Copy Tab Details' card, for an agent handed a tab or looking for itself.
+            let Some(id) = tab_id(request) else {
+                return reply.say(json!({ "error": "no such tab" }));
+            };
+            // A new tab or one of Tap's own pages has nothing to wake: the card as it is.
+            let pageless = rt::read(|b| b.tab(id).is_some_and(|t| t.is_blank() || t.is_internal()))
+                .unwrap_or(false);
+            let read = move |reply: Reply| {
+                let reply = std::cell::RefCell::new(Some(reply));
+                crate::inspect::tab_details(id, move |card| {
+                    if let Some(reply) = reply.borrow_mut().take() {
+                        reply.say(card.map_or_else(
+                            || json!({ "error": "no such tab" }),
+                            |card| json!({ "value": card }),
+                        ));
+                    }
+                });
+            };
+            if pageless {
+                read(reply);
+            } else {
+                with_page(id, reply, move |_, reply| read(reply));
+            }
+        }
         "snapshot" => {
             let Some(id) = tab_id(request) else {
                 return reply.say(json!({ "error": "no such tab" }));

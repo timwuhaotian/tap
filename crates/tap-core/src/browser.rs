@@ -365,6 +365,7 @@ impl Tab {
             url: self.url.clone(),
             title: self.title.clone(),
             touched: Some(self.touched),
+            tap_id: Some(self.id.0),
             ..self.entry.clone()
         }
     }
@@ -491,6 +492,7 @@ impl Browser {
         }
         browser.tabs.clear();
         browser.groups = unique(shape.groups.unwrap_or_default());
+        browser.next = browser.next.max(shape.next_id.unwrap_or(0));
         for entry in shape.tabs {
             let tab = browser.tab_from(entry);
             browser.tabs.push(tab);
@@ -511,10 +513,22 @@ impl Browser {
         browser
     }
 
-    /// A tab as a session keeps it, asleep until it is shown.
-    fn tab_from(&mut self, entry: session::Entry) -> Tab {
-        let id = TabId(self.next);
-        self.next += 1;
+    /// A tab as a session keeps it, asleep until it is shown, under the id it had
+    /// (`tapID`) when that is one no other tab has: the id `tap` and Copy Tab Details
+    /// gave out still finds it after a restart.
+    fn tab_from(&mut self, mut entry: session::Entry) -> Tab {
+        let kept = entry
+            .tap_id
+            .take()
+            .filter(|&n| n > 0 && !self.tabs.iter().any(|t| t.id.0 == n));
+        let id = if let Some(n) = kept {
+            self.next = self.next.max(n + 1);
+            TabId(n)
+        } else {
+            let id = TabId(self.next);
+            self.next += 1;
+            id
+        };
         let mut tab = Tab::new(id);
         tab.url.clone_from(&entry.url);
         tab.title.clone_from(&entry.title);
@@ -664,6 +678,7 @@ impl Browser {
             tabs: kept.iter().map(|t| t.entry()).collect(),
             active,
             groups: (!groups.is_empty()).then_some(groups),
+            next_id: Some(self.next),
             ..session::Shape::default()
         }
     }
@@ -2685,6 +2700,32 @@ mod tests {
             !effects.iter().any(|e| matches!(e, Effect::Save(_))),
             "restoring changes nothing to save"
         );
+    }
+
+    #[test]
+    fn a_tab_keeps_its_id_across_a_restart_and_a_closed_one_s_is_never_reused() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com", "https://c.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.close(ids[2]);
+        let again = Browser::restored(browser.shape());
+        assert_eq!(
+            again.tabs().iter().map(|t| t.id).collect::<Vec<_>>(),
+            ids[..2],
+            "the ids `tap` gave out still find their pages"
+        );
+        let mut again = again;
+        let fresh = again.open(Some(&url("https://d.com")), false, None);
+        assert!(
+            !ids.contains(&fresh),
+            "the closed tab's id isn't handed to another page"
+        );
+
+        // A session with the same id twice (hand-edited, merged): the second gets a new one.
+        let mut shape = again.shape();
+        shape.tabs[1].tap_id = shape.tabs[0].tap_id;
+        let twice = Browser::restored(shape);
+        assert_eq!(twice.tabs()[0].id, ids[0]);
+        assert_ne!(twice.tabs()[1].id, ids[0]);
     }
 
     #[test]

@@ -7,6 +7,24 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.13 — 2026-11-07
+
+### Added
+
+- **Copy Tab Details**: right-click a tab, or a page, to copy what lets a coding
+  agent find exactly that tab: its id for the `tap` command, its address, state and
+  HTTP status, its group and place, and what the page says of itself (language,
+  canonical address, description, viewport, scroll, the selected text). An address
+  that carries a token or a code is pointed out.
+- **Copy Element Details**: right-click anything on a page to copy its selector, box,
+  style, text and markup, with the `tap` command that finds it.
+- **`tap info <id>`** gives an agent the same details.
+
+### Changed
+
+- **A tab keeps its id across a restart**, so an id you gave an agent still finds
+  the same page tomorrow, and a closed tab's id is never given to another.
+
 ## 0.2.12 — 2026-11-07
 
 ### Fixed

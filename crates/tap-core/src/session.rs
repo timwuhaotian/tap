@@ -67,6 +67,16 @@ pub struct Entry {
     pub listed: Option<bool>,
     #[serde(default, deserialize_with = "lenient_bool")]
     pub muted: bool,
+    /// The tab's id as `tap` and Copy Tab Details give it, kept so it outlasts a
+    /// restart (Tap's own key: Search's reader passes over it). Written from the tab,
+    /// read once when the session comes back.
+    #[serde(
+        rename = "tapID",
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub tap_id: Option<u64>,
 }
 
 /// A named section of ordinary tabs (Search's `TabGroup.swift`). Its tabs stay ordinary
@@ -103,6 +113,16 @@ pub struct Shape {
     /// nothing when Tap writes it back before Split View lands.
     #[serde(default, deserialize_with = "lenient_splits")]
     pub splits: serde_json::Value,
+    /// The id the next tab gets (Tap's own key): an id a closed tab had is never
+    /// handed to another, across restarts too, so an agent holding it can't reach
+    /// the wrong page.
+    #[serde(
+        rename = "tapNextID",
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub next_id: Option<u64>,
 }
 
 impl Default for Shape {
@@ -112,6 +132,7 @@ impl Default for Shape {
             active: 0,
             groups: None,
             splits: serde_json::Value::Array(Vec::new()),
+            next_id: None,
         }
     }
 }
@@ -184,6 +205,7 @@ impl Shape {
             active: -1,
             groups: (!groups.is_empty()).then_some(groups),
             splits: serde_json::Value::Array(splits),
+            next_id: self.next_id,
         }
     }
 }
