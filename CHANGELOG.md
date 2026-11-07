@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+### Fixed
+
+- **Agents see into iframes**: `tap snapshot`, `tap click`/`fill`/`press` and
+  `tap text` now reach controls and words in cross-origin iframes the main frame
+  can't see into — an Apple sign-in, which lives entirely in one, lists its email,
+  password and continue controls and can be filled and clicked.
+
 ## 0.2.18 — 2026-11-07
 
 ### Added

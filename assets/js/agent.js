@@ -102,6 +102,9 @@ if (verb === "snapshot") {
         title: document.title,
         controls: refs.map(describe),
         more: Math.max(0, visible.length - LIMIT),
+        // The hello script's mark for this document (agent-hello.js): Tap drops
+        // a subframe's answer wearing another document's.
+        token: globalThis.__tapAgentToken ?? null,
     };
 }
 

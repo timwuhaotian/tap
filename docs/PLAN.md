@@ -1294,6 +1294,42 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### Unreleased — Agents see into iframes
+
+At the user's report (2026-11-07: Apple 登录时"卡住了", with an agent's inspection
+showing the sign-in form living entirely in `#aid-auth-widget-iFrame`). `snapshot`
+ran only in the main frame, which a cross-origin iframe's DOM is closed to, so an
+Apple sign-in — `secure7.store.apple.com` and `account.apple.com` both frame
+`idmsa.apple.com` — snapshotted with no form controls and no form text: nothing to
+fill, nothing to click. (The `SyntaxError` in the pasted console is Apple's own page
+noise on the checkout flow, not Tap's: every script Tap injects uses static
+selectors or guarded calls.)
+
+- [x] **Every frame says hello** (`assets/js/agent-hello.js`, `tap-shell/src/agent.rs`,
+  `web.rs`): at each document's start, in Tap's own content world, every frame posts
+  to a new `tapAgent` relay, which keeps its frame handle, address and document mark.
+  `snapshot`, `act` and `text` then run the agent script in the main frame and in
+  every frame that said hello, and merge the answers — one ref list (`e1` up, 400 at
+  most), routed back to the frame that holds each control. A `postMessage` relay was
+  rejected: it would carry another origin's controls through the page's own windows,
+  where page scripts could sniff them; WebKit's message pipes stay in Tap's world.
+  Stale frames (gone, or answering for another document after a re-hello) are dropped
+  by their mark; an `act` answer is renumbered to the joined ref the agent asked with.
+  `text` reads each frame's words below its address (`[frame <url>]`), so a sign-in's
+  "wrong password" is readable too. `agent.js` itself only echoes its document's mark.
+- [x] **Regression test** (`scripts/bench test-agent`): a two-port local probe
+  (different ports are different origins) checks the frame is really unreachable
+  from the main frame, then that its controls list, fill and click (proved by the
+  frame's own `fetch` back to the probe) and its words read below its address.
+- Checked: `cargo test` (tap-app 7, tap-core 130, tap-import 35, tap-shell 106),
+  workspace clippy `-D warnings`, nightly fmt, `test-agent` (18 checks, 6 new). In a
+  test world against `account.apple.com/sign-in`: the form lists (`电子邮件或电话号码`,
+  `密码`, `继续`, `通过通行密钥登录`) and fills. `test-forms` stays red, as it is on
+  `main` (0.2.18's console handler made `window.webkit` unconfigurable, which its
+  harness's fake can't replace) — pre-existing, unrelated, verified by stash.
+- Left as is: `press` with no ref stays in the main frame; `eval` stays main-frame;
+  a frame that loads after the snapshot needs another snapshot to appear.
+
 ### 0.2.17 — Agents see and fill more of the page
 
 At the user's request (2026-11-07: "检查tap浏览器对ai agent协作的友好度，找优化点和bug",

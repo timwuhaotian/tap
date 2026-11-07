@@ -37,8 +37,8 @@ use tap_core::{
 };
 
 use crate::{
-    console, dialogs, downloads, forms, icons, inspect, oslog, page_find, rt, signin, sleep, store,
-    window,
+    agent, console, dialogs, downloads, forms, icons, inspect, oslog, page_find, rt, signin, sleep,
+    store, window,
 };
 
 #[path = "shield.rs"]
@@ -512,6 +512,8 @@ fn configuration(mtm: MainThreadMarker) -> Retained<WKWebViewConfiguration> {
         forms::install(mtm, &configuration.userContentController());
         // The console's ear, in the page's world where its collector stands.
         console::install(mtm, &configuration.userContentController());
+        // The agent verbs' ear, in Tap's world where the hello script stands.
+        agent::install(mtm, &configuration.userContentController());
         configuration
     }
 }
@@ -624,6 +626,8 @@ fn sync_scripts(
         }
         // What a right-click was on, for Copy Element Details: Tap's world, main frame.
         controller.addUserScript(&user_script(mtm, inspect::RECORDER, false, true));
+        // What introduces every frame to the agent verbs: Tap's world, every frame.
+        controller.addUserScript(&user_script(mtm, agent::HELLO, true, true));
         // Sign-ins, always: Search's script at the document's end, in Tap's world, the
         // main frame only (Tab.swift).
         controller.addUserScript(
@@ -873,6 +877,18 @@ pub fn call_in_world(
     arguments: &[(&str, &str)],
     then: impl Fn(Option<Value>) + 'static,
 ) {
+    call_in_frame(web, None, body, arguments, then);
+}
+
+/// As [`call_in_world`], in one frame: the main frame when `frame` is none, or a
+/// subframe that said hello, whose handle only reaches its own frame.
+pub fn call_in_frame(
+    web: &WKWebView,
+    frame: Option<&WKFrameInfo>,
+    body: &str,
+    arguments: &[(&str, &str)],
+    then: impl Fn(Option<Value>) + 'static,
+) {
     let body = format!("return JSON.stringify(await (async () => ({body}))());");
     let keys: Vec<Retained<NSString>> = arguments.iter().map(|a| NSString::from_str(a.0)).collect();
     let values: Vec<Retained<NSString>> =
@@ -894,7 +910,7 @@ pub fn call_in_world(
         web.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
             &NSString::from_str(&body),
             Some(&arguments),
-            None,
+            frame,
             &world(MainThreadMarker::from(web)),
             Some(&block),
         );
@@ -941,6 +957,7 @@ pub(crate) fn tab_of(web: &WKWebView) -> Option<TabId> {
 
 fn discard(mtm: MainThreadMarker, tab: TabId) {
     dialogs::drop_held(tab);
+    agent::forget(tab);
     inspect::forget(tab);
     console::forget(tab);
     forms::forget_tab(tab);

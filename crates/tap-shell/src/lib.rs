@@ -6,6 +6,7 @@
 //! make incremental builds worth it (plan §4); the modules already follow those lines.
 
 mod address_bar;
+mod agent;
 mod agents;
 mod bench;
 mod blank;

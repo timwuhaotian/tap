@@ -48,7 +48,7 @@ use tap_core::{
 };
 
 use crate::{
-    address_bar, bring, dialogs, downloads, links,
+    address_bar, agent, bring, dialogs, downloads, links,
     menu::{self, Command},
     profile, rt, settings, sleep, store, update, web, window,
 };
@@ -285,10 +285,10 @@ fn ask_main(request: Value) -> Value {
 
 /// The one answer to a request. Dropped without one, it answers with an error, so a
 /// script never waits on a verb that forgot to reply.
-struct Reply(Option<mpsc::Sender<Value>>);
+pub(crate) struct Reply(Option<mpsc::Sender<Value>>);
 
 impl Reply {
-    fn say(mut self, answer: Value) {
+    pub(crate) fn say(mut self, answer: Value) {
         if let Some(send) = self.0.take() {
             let _ = send.send(answer);
         }
@@ -710,8 +710,8 @@ fn handle(request: &Value, reply: Reply) {
             let Some(id) = tab_id(request) else {
                 return reply.say(json!({ "error": "no such tab" }));
             };
-            with_page(id, reply, move |_, reply| {
-                evaluate(id, "document.body ? document.body.innerText : ''", reply);
+            with_page(id, reply, move |web, reply| {
+                agent::text(id, &web, reply);
             });
         }
         "console" => {
@@ -751,8 +751,8 @@ fn handle(request: &Value, reply: Reply) {
             let Some(id) = tab_id(request) else {
                 return reply.say(json!({ "error": "no such tab" }));
             };
-            with_page(id, reply, move |_, reply| {
-                agent(id, "snapshot", "", "", reply);
+            with_page(id, reply, move |web, reply| {
+                agent::snapshot(id, &web, reply);
             });
         }
         "act" => {
@@ -770,8 +770,8 @@ fn handle(request: &Value, reply: Reply) {
                     .say(json!({ "error": format!("{action} needs a ref from snapshot") }));
             }
             let value = text("value").unwrap_or_default();
-            with_page(id, reply, move |_, reply| {
-                agent(id, &action, &target, &value, reply);
+            with_page(id, reply, move |web, reply| {
+                agent::act(id, &web, &action, &target, &value, reply);
             });
         }
         "field" => field(request, reply),
@@ -1044,7 +1044,7 @@ fn wait(id: TabId, seconds: f64, reply: Reply) {
 }
 
 /// Runs `work` on the main thread after `seconds`.
-fn later(seconds: f64, work: impl FnOnce() + Send + 'static) {
+pub(crate) fn later(seconds: f64, work: impl FnOnce() + Send + 'static) {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // short delays
     let nanos = (seconds * 1e9) as u64;
     let when = dispatch2::DispatchTime::NOW.time(i64::try_from(nanos).unwrap_or(i64::MAX));
@@ -1080,32 +1080,6 @@ fn settle(
         None if seconds <= 0.0 => reply.say(json!({ "error": "the tab has no page" })),
         _ => later(0.1, move || settle(id, seconds - 0.1, reply, then)),
     }
-}
-
-/// The agents' page script (docs/PLAN.md §8 "Agents use Tap"), as one expression.
-const AGENT: &str = concat!(
-    "(async () => {\n",
-    include_str!("../../../assets/js/agent.js"),
-    "\n})()"
-);
-
-/// One of the agent script's verbs on the tab's page, in Tap's own world, answered with
-/// what the script says.
-fn agent(id: TabId, verb: &str, target: &str, value: &str, reply: Reply) {
-    let Some(web) = web::existing(id) else {
-        return reply.say(json!({ "error": "the tab has no page" }));
-    };
-    let reply = std::cell::RefCell::new(Some(reply));
-    web::call_in_world(
-        &web,
-        AGENT,
-        &[("verb", verb), ("ref", target), ("value", value)],
-        move |answer| {
-            if let Some(reply) = reply.borrow_mut().take() {
-                reply.say(answer.unwrap_or_else(|| json!({ "error": "the page gave no answer" })));
-            }
-        },
-    );
 }
 
 /// Evaluates an expression in the tab's page and answers with its value, as JSON.
