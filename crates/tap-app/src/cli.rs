@@ -29,6 +29,7 @@ tap — drive Tap, this Mac's browser, from a shell or an agent
   tap text <id>                 the page's text
   tap info <id>                 the tab's details: state, place, the page's own facts
   tap eval <id> <js>            a JavaScript expression's value, as JSON
+  tap console <id>              the tab's console: errors, warnings and logs
   tap wait <id> [<seconds>]     until the tab has loaded
   tap select <id>               brings the tab to the front, to show it to the person
   tap close <id>                closes the tab
@@ -55,6 +56,7 @@ enum Command {
     Text(String),
     Info(String),
     Eval(String, String),
+    Console(String),
     Wait(String, f64),
     Select(String),
     Close(String),
@@ -138,6 +140,10 @@ fn parse(args: &[String]) -> Result<Command, String> {
             need(2, "eval <id> <js>")?;
             Command::Eval(word(1), rest(2))
         }
+        "console" => {
+            need(1, "console <id>")?;
+            Command::Console(word(1))
+        }
         "wait" => {
             need(1, "wait <id> [<seconds>]")?;
             Command::Wait(
@@ -176,6 +182,7 @@ fn request(command: &Command) -> Value {
         Command::Text(id) => json!({ "do": "text", "id": id }),
         Command::Info(id) => json!({ "do": "info", "id": id }),
         Command::Eval(id, js) => json!({ "do": "eval", "id": id, "js": js }),
+        Command::Console(id) => json!({ "do": "console", "id": id }),
         Command::Wait(id, seconds) => json!({ "do": "wait", "id": id, "seconds": seconds }),
         Command::Select(id) => json!({ "do": "select", "id": id }),
         Command::Close(id) => json!({ "do": "close", "id": id }),
@@ -280,7 +287,7 @@ fn render(command: &Command, answer: &Value) -> String {
             }
             lines.join("\n")
         }
-        Command::Text(_) | Command::Info(_) => answer
+        Command::Text(_) | Command::Info(_) | Command::Console(_) => answer
             .get("value")
             .and_then(Value::as_str)
             .unwrap_or_default()
@@ -487,6 +494,10 @@ mod tests {
         assert_eq!(
             asked("eval 3 document.title"),
             Ok(json!({ "do": "eval", "id": "3", "js": "document.title" }))
+        );
+        assert_eq!(
+            asked("console 3"),
+            Ok(json!({ "do": "console", "id": "3" }))
         );
         assert_eq!(
             parse(&args("click 3")),

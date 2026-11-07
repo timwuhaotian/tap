@@ -254,7 +254,7 @@ pub fn tab_card(facts: &Facts, page: Option<&Value>) -> String {
     }
     let id = facts.id;
     lines.push(format!(
-        "Reach it with Tap: tap info {id} · tap text {id} · tap snapshot {id} · tap eval {id} '<js>'"
+        "Reach it with Tap: tap info {id} · tap text {id} · tap snapshot {id} · tap eval {id} '<js>' · tap console {id}"
     ));
     lines.join("\n")
 }
@@ -418,7 +418,7 @@ fn copy_element() {
 }
 
 define_class!(
-    /// Every tab's web view: WebKit's own, with the page menu's two items added.
+    /// Every tab's web view: WebKit's own, with the page menu's own items added.
     #[unsafe(super(WKWebView, NSView, objc2_app_kit::NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "TapPageView"]
@@ -456,6 +456,13 @@ define_class!(
         #[unsafe(method(copyElementDetails:))]
         fn copy_element_details(&self, _sender: Option<&AnyObject>) {
             copy_element();
+        }
+
+        #[unsafe(method(showConsole:))]
+        fn show_console(&self, _sender: Option<&AnyObject>) {
+            if let Some((id, ..)) = POINTED.with_borrow(Clone::clone) {
+                crate::console::show(id);
+            }
         }
     }
 );
@@ -508,6 +515,7 @@ fn add_items(view: &PageView, menu: &NSMenu, event: &NSEvent) {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
     }
     for (title, action) in [
+        ("Console", sel!(showConsole:)),
         ("Copy Element Details", sel!(copyElementDetails:)),
         ("Copy Tab Details", sel!(copyTabDetails:)),
     ] {
@@ -566,7 +574,7 @@ mod tests {
              URL: https://app.example.com/dash?range=7d\n\
              State: asleep · secure\n\
              Place: group \"Work\" (blue) · tab 3 of 12\n\
-             Reach it with Tap: tap info 7 · tap text 7 · tap snapshot 7 · tap eval 7 '<js>'"
+             Reach it with Tap: tap info 7 · tap text 7 · tap snapshot 7 · tap eval 7 '<js>' · tap console 7"
         );
     }
 

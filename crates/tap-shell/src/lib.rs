@@ -10,6 +10,7 @@ mod agents;
 mod bench;
 mod blank;
 mod bring;
+mod console;
 mod crash;
 mod dialogs;
 mod downloads;

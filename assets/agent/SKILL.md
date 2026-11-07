@@ -16,6 +16,7 @@ tap click 7 e5                    # clicks; waits for any page it loads
 tap press 7 Enter e2              # a key on a control (no ref: where the focus is)
 tap text 7                        # the page's text, to read
 tap eval 7 'document.title'       # a JavaScript expression's value, as JSON
+tap console 7                     # the tab's console: errors, warnings and logs
 tap tabs                          # every tab: [id] title — address; * is the user's
 tap info 7                        # the tab's state, place and the page's own facts
 tap close 7

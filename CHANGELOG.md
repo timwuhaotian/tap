@@ -7,6 +7,12 @@ Info.plist.
 
 ## Unreleased
 
+### Added
+
+- **A console for every tab**: right-click a page and open Console (or run
+  `tap console <id>`) to see what its scripts said and threw — `console` output,
+  uncaught errors with their stacks, and unhandled rejections, from every frame.
+
 ## 0.2.17 — 2026-11-07
 
 ### Fixed

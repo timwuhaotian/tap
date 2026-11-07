@@ -714,6 +714,14 @@ fn handle(request: &Value, reply: Reply) {
                 evaluate(id, "document.body ? document.body.innerText : ''", reply);
             });
         }
+        "console" => {
+            // The tab's console as text, from what its pages said; a sleeping
+            // tab kept none, so it isn't woken for it.
+            let Some(id) = tab_id(request) else {
+                return reply.say(json!({ "error": "no such tab" }));
+            };
+            reply.say(json!({ "value": crate::console::text(id) }));
+        }
         "info" => {
             // Copy Tab Details' card, for an agent handed a tab or looking for itself.
             let Some(id) = tab_id(request) else {

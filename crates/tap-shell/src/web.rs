@@ -37,7 +37,8 @@ use tap_core::{
 };
 
 use crate::{
-    dialogs, downloads, forms, icons, inspect, oslog, page_find, rt, signin, sleep, store, window,
+    console, dialogs, downloads, forms, icons, inspect, oslog, page_find, rt, signin, sleep, store,
+    window,
 };
 
 #[path = "shield.rs"]
@@ -509,6 +510,8 @@ fn configuration(mtm: MainThreadMarker) -> Retained<WKWebViewConfiguration> {
             .setElementFullscreenEnabled(true);
         // The sign-in script's ear, on the controller every page shares.
         forms::install(mtm, &configuration.userContentController());
+        // The console's ear, in the page's world where its collector stands.
+        console::install(mtm, &configuration.userContentController());
         configuration
     }
 }
@@ -601,6 +604,9 @@ fn sync_scripts(
     // SAFETY: plain calls on a live page's own controller.
     unsafe {
         controller.removeAllUserScripts();
+        // The console's collector, always: an error said before the menu opened
+        // is still worth having.
+        controller.addUserScript(&user_script(mtm, console::SCRIPT, true, false));
         if shield_on {
             controller.addUserScript(&user_script(
                 mtm,
@@ -936,6 +942,7 @@ pub(crate) fn tab_of(web: &WKWebView) -> Option<TabId> {
 fn discard(mtm: MainThreadMarker, tab: TabId) {
     dialogs::drop_held(tab);
     inspect::forget(tab);
+    console::forget(tab);
     forms::forget_tab(tab);
     signin::lower_now(tab);
     let Some(web) = WEBS.with_borrow_mut(|webs| webs.remove(&tab)) else {
@@ -1165,6 +1172,7 @@ define_class!(
             // requests gather: off for this site means off for the whole page.
             shield::tune(&controller_of(web), host_of(web).as_deref());
             if let Some(tab) = tab_of(web) {
+                console::clear(tab);
                 rt::dispatch(move |browser| browser.page_committed(tab));
             }
         }
