@@ -1294,6 +1294,30 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### Unreleased — Pages see Tap's window
+
+At the user's report (2026-11-08: Apple checkout sign-in stuck again on 0.2.22, tab
+79). Read from inside with 0.2.22's `tap eval --frame`: the `idmsa` widget had booted,
+the user had signed in (`signin/init`, `signin/complete`), and it handed the store page
+`isAuthSuccess: true`. The store page then POSTed `/sg/shop/signIn/idms/authx` and its
+server answered **541** (a "Page Not Found" page; the store's own code clears session
+storage on 541) — the same refusal as "Add to Bag" ending on Page Not Found. Why:
+the store's bot check (`/shop/shld/v3/verify.js`, decoded) sends the server a score and
+flags (`jsa: {s, f}`), and calls `window.outerHeight === 0` headless (`h`, severity 8).
+In Tap every page read `outerWidth`/`outerHeight` 0 and `screenY` 1080: WebKit asks the
+UI delegate's private `_webView:getWindowFrameWithCompletionHandler:` for them, which
+Safari answers and Tap didn't. Earlier repros never submitted a password, so never
+reached the refused POST.
+
+- [x] **Answer the window frame** (`web.rs`, `WebDelegate`): the web view's window's
+  frame, Tap's main window for a tab behind the user's (not in a window), the view's
+  own frame without either.
+- Checked: clippy `-D warnings`. In a test world: `outerWidth`/`outerHeight` 1920×1050
+  and `screenY` 30 in the tab in front and in one behind; with the store's `shld`
+  cookies cleared and minted again, Add to Bag reached the accessories step and the
+  bag held the AirTag (on 0.2.19 and 0.2.22 code it ended on Page Not Found). The
+  sign-in itself needs the user's account: their checkout is the final proof.
+
 ### Unreleased — eval reaches into an iframe
 
 At the user's report (2026-11-07: Apple checkout sign-in stuck again on 0.2.21, reached

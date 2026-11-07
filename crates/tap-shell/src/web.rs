@@ -1318,8 +1318,27 @@ define_class!(
         ) {
             notify_permission(web, origin, handler);
         }
+
+        /// The window a page is shown in, for its `outerWidth`, `outerHeight`,
+        /// `screenX` and `screenY`: not in the public delegate, so WebKit asks by this
+        /// name, and unanswered they read 0. Apple's store bot check calls a zero
+        /// `outerHeight` headless and its server then refuses the store's sign-in
+        /// (HTTP 541), so this answers as Safari does, with the window's frame.
+        #[unsafe(method(_webView:getWindowFrameWithCompletionHandler:))]
+        fn window_frame(&self, web: &WKWebView, handler: &DynBlock<dyn Fn(NSRect)>) {
+            handler.call((window_frame(web),));
+        }
     }
 );
+
+/// The frame of the window a page is in, in screen coordinates (WebKit flips it for
+/// the page). A tab behind the user's isn't in a window: it answers with Tap's, the
+/// window it shows in when it comes forward.
+fn window_frame(web: &WKWebView) -> NSRect {
+    web.window()
+        .or_else(window::main_window)
+        .map_or_else(|| web.frame(), |window| window.frame())
+}
 
 impl WebDelegate {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {

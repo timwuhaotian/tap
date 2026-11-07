@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+### Fixed
+
+- **Apple Store sign-in and Add to Bag go through**: pages read Tap's window as
+  0×0 (`window.outerWidth`/`outerHeight`), which the Apple Store's bot check takes
+  for a headless browser; its server then refused the sign-in after the password
+  was accepted (the widget sat at Loading) and Add to Bag ended on Page Not Found.
+  Pages now see the real window size and position, as in Safari.
+
 ## 0.2.22 — 2026-11-07
 
 ### Added
