@@ -129,8 +129,10 @@ struct Views {
     /// The search engine's rows, in their own card under the field's rows: the model
     /// owns the field's rows and has no room in them for words that arrive later.
     suggest: Retained<Suggest>,
-    /// The downloads door, at the strip's far end beside the helm.
+    /// The downloads door, at the strip's far end beside the helm, and the ring over
+    /// it while files come in.
     fetch_door: Retained<NSButton>,
+    fetch_ring: Retained<downloads::Ring>,
     ending: Retained<NSTextField>,
     trouble: Retained<NSView>,
     trouble_text: Retained<NSTextField>,
@@ -227,7 +229,8 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     for door in &helm {
         strip.addSubview(door);
     }
-    let fetch_door = fetch_door(mtm, width);
+    let (fetch_door, fetch_ring) = fetch_door(mtm, width);
+    fetch_door.addSubview(&fetch_ring);
     strip.addSubview(&fetch_door);
 
     let field_delegate = FieldDelegate::new(mtm);
@@ -279,6 +282,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             offers,
             suggest,
             fetch_door,
+            fetch_ring,
             ending,
             trouble,
             trouble_text,
@@ -374,9 +378,12 @@ fn helm_rect(width: f64, index: usize) -> NSRect {
     )
 }
 
-/// The downloads door, just before the helm at the strip's far end; the window
-/// shows it as `downloads::shows_button` says.
-fn fetch_door(mtm: MainThreadMarker, width: f64) -> Retained<NSButton> {
+/// The downloads door, just before the helm at the strip's far end, with the ring
+/// over it while files come in; the window shows it as `downloads::sync_door` says.
+fn fetch_door(
+    mtm: MainThreadMarker,
+    width: f64,
+) -> (Retained<NSButton>, Retained<downloads::Ring>) {
     let door = downloads::button(mtm);
     door.setFrame(NSRect::new(
         NSPoint::new(
@@ -387,7 +394,7 @@ fn fetch_door(mtm: MainThreadMarker, width: f64) -> Retained<NSButton> {
     ));
     door.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
     door.setHidden(true);
-    door
+    (door, downloads::ring(mtm))
 }
 
 /// Back, forward and reload, at the far end of the row.
@@ -865,25 +872,22 @@ fn queue_launch_conversion() {
     });
 }
 
-/// The downloads door, shown and named for what is coming in (Search's `FetchDoor.shows`:
-/// always with the setting on, otherwise only while a file comes in).
+/// The downloads door, shown and saying what is happening (Search's `FetchDoor`).
 fn refresh_fetch_door(views: &Views) {
-    let going = downloads::going();
-    let always = flag(&Kept::new(), "downloads.button");
-    views
-        .fetch_door
-        .setHidden(!downloads::shows_button(always, going));
-    let tip = if going > 0 {
-        format!("Downloading {going} \u{2014} open the folder downloads are saved in")
-    } else {
-        "Downloads \u{2014} open the folder downloads are saved in".to_owned()
-    };
-    views.fetch_door.setToolTip(Some(&NSString::from_str(&tip)));
+    downloads::sync_door(&views.fetch_door, &views.fetch_ring);
 }
 
-/// A download started or ended: the door follows, without waiting for the model.
+/// A download started, moved or ended: the door follows, without waiting for the
+/// model. The row lays out again only as the door comes or goes; a tick of the ring
+/// is no reason to redraw three hundred tabs.
 pub fn downloads_moved() {
-    with_views(refresh_fetch_door);
+    with_views(|views| {
+        let shown = views.fetch_door.isHidden();
+        refresh_fetch_door(views);
+        if views.fetch_door.isHidden() != shown {
+            views.strip.setNeedsDisplay(true);
+        }
+    });
 }
 
 // MARK: the engine's suggestions (`search.suggest`, Search's `EngineSuggest.swift`)

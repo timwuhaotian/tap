@@ -596,9 +596,15 @@ BookmarksFile, Registrable.
   run) under its own name, numbered when taken (`tap_core::fetching`); a tab opened
   for a download alone goes and its opener comes back (`drop_empty`); a finished file
   bounces the Dock's Downloads stack. WebKit marks each file with
-  `com.apple.quarantine`. Checked through the bench (`downloads`). Not yet: the list
-  (⇧⌘J) and `downloads.json`, progress in the strip, cancel and resume, asking where to
-  save, the PDF bar's save button, local text files shown as text.
+  `com.apple.quarantine`. Checked through the bench (`downloads`). The door says what
+  is happening (2026-11-07, Search's `FetchDoor` without the panel behind it): a ring
+  filling with every running file's bytes together, turning while none says its size;
+  the arrow down a moment once the last one is in, a warning with the reason a moment
+  when one failed, each for Search's 5-second linger; every file carries its own bar in
+  the Finder while it comes in. Saying a failure on the door is an interim deviation:
+  Search says it in its panel, and the door goes back to quiet once the list lands.
+  Not yet: the list (⇧⌘J) and `downloads.json`, pause, cancel and resume, asking where
+  to save, the PDF bar's save button, local text files shown as text.
 - [x] Find on page (2026-11-04): Search's page script, verbatim but for its names, in
   `assets/js/page-find.js` (copied from `PageFind.swift` at d1639aa by hand; the
   `extract-js` drift check comes with M1's tooling), run in Tap's own content world

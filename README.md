@@ -86,7 +86,9 @@ with its own name and icon, and with fixes of its own.
   wake on the same page, with Back and the scroll position. Never a tab playing sound,
   on a call, downloading or holding something you typed.
 - **Find on page** (⌘F) with a live "3 of 17", Match Case and Whole Words.
-- **Downloads** into Downloads, under their own names.
+- **Downloads** into Downloads, under their own names; the door in the tab row fills
+  a ring as they come in (turning while a file says no size), says when one failed
+  and why, and each file carries its own progress bar in the Finder.
 - **Pages can ask**: alerts, confirms, prompts, file uploads and site sign-ins, each
   titled with the site that asks.
 - **It can be your browser.** Choose Tap under System Settings › Desktop & Dock ›

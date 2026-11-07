@@ -857,7 +857,23 @@ fn handle(request: &Value, reply: Reply) {
             editor.unmarkText();
             reply.say(json!({ "field": window::field_text() }));
         }
-        "downloads" => reply.say(json!({ "done": downloads::done(), "going": downloads::going() })),
+        "downloads" => {
+            let (state, detail) = match downloads::door() {
+                downloads::Door::Idle => ("idle", None),
+                downloads::Door::Going { .. } => ("going", None),
+                downloads::Door::Done { name } => ("done", Some(name)),
+                downloads::Door::Failed { name, reason } => {
+                    ("failed", Some(format!("{name}: {reason}")))
+                }
+            };
+            reply.say(json!({
+                "done": downloads::done(),
+                "going": downloads::going(),
+                "fraction": downloads::fraction(),
+                "state": state,
+                "detail": detail,
+            }));
+        }
         "history" => reply.say(json!({ "visits": rt::read(|b| b.history().len()) })),
         "drag" => {
             // A press, a carry and (unless `release` is false) a let-go, through the

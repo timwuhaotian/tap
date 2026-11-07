@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+### Added
+
+- **Downloads say what they are doing**: the strip's downloads door fills a ring
+  with every running file's bytes together (turning while none says its size),
+  shows the arrow down a moment once the last one is in, and a warning with the
+  reason when one failed. Each file also carries its own progress bar in the
+  Finder while it comes in.
+
 ## 0.2.15 — 2026-11-07
 
 ### Fixed

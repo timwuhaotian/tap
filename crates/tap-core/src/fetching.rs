@@ -37,6 +37,24 @@ pub fn free(name: &str, folder: &Path) -> PathBuf {
         .unwrap_or(candidate)
 }
 
+/// How far the running downloads are, together, in whole percents (Search's
+/// `Fetches.measure`): each entry's completed and total bytes. `None` while any of
+/// them says no size, or while there is nothing to measure.
+#[must_use]
+pub fn aggregate(parts: &[(i64, i64)]) -> Option<f64> {
+    let mut total = 0i64;
+    let mut completed = 0i64;
+    for (done, size) in parts {
+        if *size <= 0 {
+            return None;
+        }
+        total += size;
+        completed += (*done).max(0);
+    }
+    #[allow(clippy::cast_precision_loss)] // downloads never reach 2^52 bytes
+    (total > 0).then(|| (completed as f64 / total as f64 * 100.0).round() / 100.0)
+}
+
 /// Whether a response's `Content-Disposition` asks for the file to be kept, even one
 /// WebKit could show: Gmail's download button loads the attachment into a hidden frame
 /// and counts on exactly that.
@@ -72,6 +90,16 @@ mod tests {
         std::fs::write(folder.join(".env"), "e").expect("file");
         assert_eq!(free(".env", &folder), folder.join(".env 2"));
         std::fs::remove_dir_all(&folder).expect("cleanup");
+    }
+
+    #[test]
+    fn running_downloads_measure_together_in_whole_percents() {
+        assert_eq!(aggregate(&[(50, 100), (25, 100)]), Some(0.38));
+        assert_eq!(aggregate(&[(1, 3)]), Some(0.33));
+        assert_eq!(aggregate(&[(100, 100)]), Some(1.0));
+        assert_eq!(aggregate(&[]), None);
+        assert_eq!(aggregate(&[(50, 100), (10, 0)]), None);
+        assert_eq!(aggregate(&[(50, 100), (10, -1)]), None);
     }
 
     #[test]

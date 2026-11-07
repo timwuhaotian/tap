@@ -262,10 +262,7 @@ struct Layout {
 /// either.
 fn trailing(bar: bool) -> f64 {
     let kept = prefs::Kept::new();
-    let fetch = downloads::shows_button(
-        settings_index::flag(&kept, "downloads.button"),
-        downloads::going(),
-    );
+    let fetch = downloads::shows_button(settings_index::flag(&kept, "downloads.button"));
     let door = if fetch { palette::DOOR + 4.0 } else { 0.0 };
     if bar {
         door + 8.0
