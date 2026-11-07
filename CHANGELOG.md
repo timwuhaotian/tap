@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+### Fixed
+
+- **Apple's sign-in boots again**: the console collector no longer wraps the page's
+  `console` methods — a wrapped native is visible in `Function.prototype.toString`,
+  and Apple's bot check refused the patched browser, leaving its sign-in widget
+  spinning at Loading. The console now only listens, so it reports what scripts
+  threw (uncaught errors with stacks, unhandled rejections), not what they logged.
+
 ## 0.2.19 — 2026-11-07
 
 ### Fixed

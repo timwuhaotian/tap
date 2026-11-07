@@ -1294,6 +1294,27 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### Unreleased — The console stops wrapping natives
+
+At the user's report (2026-11-07: Apple checkout sign-in still stuck after 0.2.19,
+its widget spinning at Loading). 0.2.19's fan-out worked — the frame answered — but
+Apple's bot check (`verify.js`, which tests natives' `toString` for `[native code]`
+and names webdriver/selenium/phantom) refused the patched browser: with 0.2.19 its
+`shld_bt_ck` cookie came back a stub (`gqoXA_`), with 0.2.17 (no console collector)
+a full attestation. A wrapped `console.*` is inherently detectable, so the
+collector only listens now.
+
+- [x] **Listen, never wrap** (`console.js`, `console.rs`, CLI help, skill, README):
+  the `console.*` wrappers are gone; `error` and `unhandledrejection` listeners stay,
+  and the re-run mark hides in a non-enumerable `__tapConsole`. `tap console` reports
+  what scripts threw, no longer what they logged.
+- Checked: `cargo test`, workspace clippy `-D warnings`, nightly fmt. In a test
+  world, the sorry page's `shld_bt_ck` is a full token again (692 chars), and a thrown
+  error still arrives with its message, stack and place. The user's checkout widget
+  itself is the final proof, on their restart into this release.
+- Left as is: YouTube-only `JSON.parse`/`Response.json` wrappers (that feature needs
+  them, nothing gates on them there).
+
 ### Unreleased — Agents see into iframes
 
 At the user's report (2026-11-07: Apple 登录时"卡住了", with an agent's inspection

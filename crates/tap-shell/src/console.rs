@@ -1,12 +1,14 @@
-//! The page's console: what its scripts said and what they threw, one right-click
-//! away (the page menu's Console) or one `tap console` away for an agent. No Search
-//! equivalent: Search leans on Safari's Web Inspector, which Tap keeps too
-//! (`inspectable`, so Safari's Develop menu attaches); this is the small one that is
-//! always there, errors included from frames the page's own snapshot can't see into.
+//! The page's console: what its scripts threw, one right-click away (the page menu's
+//! Console) or one `tap console` away for an agent. No Search equivalent: Search
+//! leans on Safari's Web Inspector, which Tap keeps too (`inspectable`, so Safari's
+//! Develop menu attaches); this is the small one that is always there, errors
+//! included from frames the page's own snapshot can't see into.
 //!
-//! A page-world script at each document's start wraps `console.*` and hears `error`
-//! and `unhandledrejection` in every frame, and posts to the relay below. Entries
-//! live per tab, oldest first, capped; a new document clears them.
+//! A page-world script at each document's start hears `error` and
+//! `unhandledrejection` in every frame, and posts to the relay below. It wraps
+//! nothing: a wrapped native shows up in `Function.prototype.toString`, and Apple's
+//! bot check refuses browsers that patch natives (its sign-in widget then never
+//! boots). Entries live per tab, oldest first, capped; a new document clears them.
 
 use std::{
     cell::RefCell,

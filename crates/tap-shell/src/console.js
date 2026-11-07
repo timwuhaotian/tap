@@ -1,6 +1,13 @@
 (function () {
+  // Marked where enumeration can't see it, and nothing native is wrapped: a
+  // wrapped native shows up in Function.prototype.toString, and Apple's bot
+  // check (verify.js) refuses browsers that patch natives — its sign-in widget
+  // then never boots. So this only listens, never wraps: errors and unhandled
+  // rejections, never anything said on purpose.
   if (window.__tapConsole) return;
-  window.__tapConsole = true;
+  Object.defineProperty(window, '__tapConsole', {
+    value: true, enumerable: false, writable: true, configurable: true,
+  });
   function post(level, text, where) {
     try {
       var handlers = window.webkit && window.webkit.messageHandlers;
@@ -27,28 +34,6 @@
       return String(value);
     }
   }
-  function format(args) {
-    var out = [];
-    for (var i = 0; i < args.length; i++) {
-      try {
-        out.push(one(args[i]));
-      } catch (e) {
-        out.push('[?]');
-      }
-    }
-    return out.join(' ');
-  }
-  ['log', 'info', 'warn', 'error', 'debug'].forEach(function (level) {
-    try {
-      var original = console[level];
-      if (typeof original !== 'function') return;
-      var bound = original.bind(console);
-      console[level] = function () {
-        post(level, format(arguments), '');
-        return bound.apply(null, arguments);
-      };
-    } catch (e) {}
-  });
   window.addEventListener('error', function (event) {
     var detail = event.message || 'Script error';
     if (event.error && event.error.stack) detail += '\n' + event.error.stack;

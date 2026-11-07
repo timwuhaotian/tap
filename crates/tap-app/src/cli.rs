@@ -29,7 +29,7 @@ tap — drive Tap, this Mac's browser, from a shell or an agent
   tap text <id>                 the page's text
   tap info <id>                 the tab's details: state, place, the page's own facts
   tap eval <id> <js>            a JavaScript expression's value, as JSON
-  tap console <id>              the tab's console: errors, warnings and logs
+  tap console <id>              the tab's console: what its scripts threw
   tap wait <id> [<seconds>]     until the tab has loaded
   tap select <id>               brings the tab to the front, to show it to the person
   tap close <id>                closes the tab
