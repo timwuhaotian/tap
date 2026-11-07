@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+### Added
+
+- **`tap eval --frame`**: `tap eval <id> --frame <part> '<js>'` runs inside the
+  iframe whose address holds `<part>` (`tap text` names a page's frames), in the
+  page's own world there, promises awaited. Copy Element Details on an iframe says
+  how. An Apple sign-in that sits at Loading can now be read from inside.
+
 ## 0.2.21 — 2026-11-07
 
 ### Fixed

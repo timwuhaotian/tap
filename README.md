@@ -102,7 +102,8 @@ with its own name and icon, and with fixes of its own.
   skill where Claude Code, Codex, Gemini and opencode look, so an agent on this Mac
   reaches for Tap when a task needs a browser: `tap open`, `tap snapshot` (the page's
   controls, each with a ref, shadow roots and iframes included), `tap click`, `tap fill`,
-  `tap press`, `tap text`, `tap eval` (promises awaited), `tap console`. Its tabs open
+  `tap press`, `tap text`, `tap eval` (promises awaited, inside an iframe with
+  `--frame`), `tap console`. Its tabs open
   behind yours,
   with your sign-ins. Settings › Let agents use Tap turns it off and takes the
   command and skill away.

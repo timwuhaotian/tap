@@ -1294,6 +1294,30 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### Unreleased — eval reaches into an iframe
+
+At the user's report (2026-11-07: Apple checkout sign-in stuck again on 0.2.21, reached
+from the home page's bag menu, Tap in front). The stuck tab showed `shld_bt_ck` full
+(681 chars), so 0.2.20's fix held; the `idmsa.apple.com` frame had loaded and read only
+"Loading...", with nothing thrown. Not reproduced: the same path in a test world (with
+the user's settings, five runs), an hour-old `ssi`, a first sign-in after launch, a
+background load (up to 60 s), a sleeping tab woken, the tab hidden 0.5/1.5/3 s into the
+load, and the user's own running Tap all showed the form; reloading the stuck tab did
+too. What the widget waits on was out of reach — `tap eval` ran in the main frame only
+— so the next occurrence gets read from inside instead of guessed at.
+
+- [x] **`tap eval <id> --frame <part> <js>`** (`cli.rs`, `bench.rs` `eval`'s `frame`,
+  `agent::frame_matching`): runs in the page's world of the latest frame to say hello
+  whose address holds `<part>`, awaited as main-frame eval is; no match lists the
+  frames that did say hello. Copy Element Details on an iframe adds an "Inside it with
+  Tap" line naming its host. Help, skill, README.
+- Checked: `cargo test`, workspace clippy `-D warnings`, nightly fmt. In a test world on
+  the store's sign-in: `--frame idmsa.apple.com` read `location.host` idmsa.apple.com,
+  the account field and `window.AppleID` (page world), a promise resolved in the frame,
+  a miss listed the frame's address, a page without iframes said so.
+- Seen on the way, left as is: in a tab behind the user's, the `idmsa` frame's first
+  load got no response until the tab came forward (it then recovered every time).
+
 ### Unreleased — The console stops wrapping natives
 
 At the user's report (2026-11-07: Apple checkout sign-in still stuck after 0.2.19,

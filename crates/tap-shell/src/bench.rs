@@ -704,7 +704,26 @@ fn handle(request: &Value, reply: Reply) {
                     });
                 });
             }
-            with_page(id, reply, move |_, reply| evaluate(id, &js, reply));
+            // "frame": in the page's world of the iframe whose address holds it.
+            let frame = text("frame").filter(|f| !f.is_empty());
+            with_page(id, reply, move |_, reply| {
+                let Some(part) = frame else {
+                    return evaluate(id, &js, None, reply);
+                };
+                match agent::frame_matching(id, &part) {
+                    Ok(frame) => evaluate(id, &js, Some(&frame), reply),
+                    Err(urls) if urls.is_empty() => reply.say(json!({
+                        "error": "no frame on this page has said hello: it has no iframes, \
+                                  or they haven't loaded"
+                    })),
+                    Err(urls) => reply.say(json!({
+                        "error": format!(
+                            "no frame's address holds \"{part}\"; the frames:\n{}",
+                            urls.join("\n")
+                        )
+                    })),
+                }
+            });
         }
         "text" => {
             let Some(id) = tab_id(request) else {
@@ -1082,8 +1101,9 @@ fn settle(
     }
 }
 
-/// Evaluates an expression in the tab's page and answers with its value, as JSON.
-fn evaluate(id: TabId, js: &str, reply: Reply) {
+/// Evaluates an expression in the tab's page, or in one of its frames, and answers
+/// with its value, as JSON.
+fn evaluate(id: TabId, js: &str, frame: Option<&objc2_web_kit::WKFrameInfo>, reply: Reply) {
     let Some(web) = web::existing(id) else {
         return reply.say(json!({ "error": "the tab has no page" }));
     };
@@ -1113,7 +1133,7 @@ fn evaluate(id: TabId, js: &str, reply: Reply) {
         web.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
             &NSString::from_str(&body),
             None,
-            None,
+            frame,
             &objc2_web_kit::WKContentWorld::pageWorld(MainThreadMarker::from(&*web)),
             Some(&block),
         );

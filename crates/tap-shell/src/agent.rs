@@ -159,6 +159,25 @@ fn received(message: &WKScriptMessage) {
     }
 }
 
+/// The frame `tap eval --frame` means: the latest to say hello whose address holds
+/// `part` (a frame that loads again says hello again, and its last document is the
+/// one there now). Without one, the addresses that did say hello, to choose from.
+pub fn frame_matching(tab: TabId, part: &str) -> Result<Retained<WKFrameInfo>, Vec<String>> {
+    FRAMES.with_borrow(|all| {
+        let frames = all.get(&tab).map(Vec::as_slice).unwrap_or_default();
+        if let Some(frame) = frames.iter().rev().find(|f| f.url.contains(part)) {
+            return Ok(frame.handle.clone());
+        }
+        let mut urls: Vec<String> = Vec::new();
+        for frame in frames {
+            if !urls.contains(&frame.url) {
+                urls.push(frame.url.clone());
+            }
+        }
+        Err(urls)
+    })
+}
+
 /// The tab's page went: its frames and routes go with it.
 pub fn forget(tab: TabId) {
     FRAMES.with_borrow_mut(|all| all.remove(&tab));

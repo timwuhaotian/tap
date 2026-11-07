@@ -334,6 +334,23 @@ pub fn element_card(facts: &Facts, element: &Value) -> String {
             facts.id
         ));
     }
+    // An iframe's own page is out of the page's reach, not Tap's.
+    let host = said(element, "src").and_then(|src| {
+        let rest = src
+            .strip_prefix("https://")
+            .or_else(|| src.strip_prefix("http://"))?;
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        (!host.is_empty()).then(|| host.to_owned())
+    });
+    if let (true, Some(host)) = (
+        element.get("frame").and_then(Value::as_bool) == Some(true),
+        host,
+    ) {
+        lines.push(format!(
+            "Inside it with Tap: tap eval {} --frame {host} 'document.body.innerText' · tap text {}",
+            facts.id, facts.id
+        ));
+    }
     lines.join("\n")
 }
 
@@ -686,5 +703,23 @@ mod tests {
             !shadowed.contains("tap eval"),
             "document can't reach into a shadow root"
         );
+    }
+
+    #[test]
+    fn an_iframe_s_card_says_how_to_reach_inside_it() {
+        let element = json!({
+            "selector": "#aid-auth-widget-iFrame",
+            "frame": true,
+            "src": "https://idmsa.apple.com/appleauth/auth/authorize/signin?frame_id=a",
+        });
+        let card = element_card(&facts(), &element);
+        assert_eq!(
+            card.lines().last(),
+            Some(
+                "Inside it with Tap: tap eval 7 --frame idmsa.apple.com 'document.body.innerText' · tap text 7"
+            )
+        );
+        let blank = element_card(&facts(), &json!({ "selector": "iframe", "frame": true }));
+        assert!(!blank.contains("Inside it"), "no address, no frame to name");
     }
 }

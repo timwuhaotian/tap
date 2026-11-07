@@ -29,6 +29,7 @@ tap — drive Tap, this Mac's browser, from a shell or an agent
   tap text <id>                 the page's text
   tap info <id>                 the tab's details: state, place, the page's own facts
   tap eval <id> <js>            a JavaScript expression's value, as JSON
+       [--frame <part>]         … run inside the iframe whose address holds <part>
   tap console <id>              the tab's console: what its scripts threw
   tap wait <id> [<seconds>]     until the tab has loaded
   tap select <id>               brings the tab to the front, to show it to the person
@@ -55,7 +56,11 @@ enum Command {
     },
     Text(String),
     Info(String),
-    Eval(String, String),
+    Eval {
+        id: String,
+        frame: Option<String>,
+        js: String,
+    },
     Console(String),
     Wait(String, f64),
     Select(String),
@@ -137,8 +142,13 @@ fn parse(args: &[String]) -> Result<Command, String> {
             Command::Info(word(1))
         }
         "eval" => {
-            need(2, "eval <id> <js>")?;
-            Command::Eval(word(1), rest(2))
+            let js = if word(2) == "--frame" { 4 } else { 2 };
+            need(js, "eval <id> [--frame <part>] <js>")?;
+            Command::Eval {
+                id: word(1),
+                frame: (js == 4).then(|| word(3)),
+                js: rest(js),
+            }
         }
         "console" => {
             need(1, "console <id>")?;
@@ -181,7 +191,10 @@ fn request(command: &Command) -> Value {
         }
         Command::Text(id) => json!({ "do": "text", "id": id }),
         Command::Info(id) => json!({ "do": "info", "id": id }),
-        Command::Eval(id, js) => json!({ "do": "eval", "id": id, "js": js }),
+        Command::Eval { id, frame, js } => match frame {
+            Some(frame) => json!({ "do": "eval", "id": id, "js": js, "frame": frame }),
+            None => json!({ "do": "eval", "id": id, "js": js }),
+        },
         Command::Console(id) => json!({ "do": "console", "id": id }),
         Command::Wait(id, seconds) => json!({ "do": "wait", "id": id, "seconds": seconds }),
         Command::Select(id) => json!({ "do": "select", "id": id }),
@@ -292,7 +305,7 @@ fn render(command: &Command, answer: &Value) -> String {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        Command::Eval(..) => answer
+        Command::Eval { .. } => answer
             .get("value")
             .map(ToString::to_string)
             .unwrap_or_default(),
@@ -494,6 +507,16 @@ mod tests {
         assert_eq!(
             asked("eval 3 document.title"),
             Ok(json!({ "do": "eval", "id": "3", "js": "document.title" }))
+        );
+        assert_eq!(
+            asked("eval 3 --frame idmsa.apple.com document.body.innerText"),
+            Ok(json!({
+                "do": "eval", "id": "3", "js": "document.body.innerText", "frame": "idmsa.apple.com"
+            }))
+        );
+        assert_eq!(
+            parse(&args("eval 3 --frame idmsa")),
+            Err("usage: tap eval <id> [--frame <part>] <js>".to_owned())
         );
         assert_eq!(
             asked("console 3"),
