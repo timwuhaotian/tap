@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.18 — 2026-11-07
+
 ### Added
 
 - **A console for every tab**: right-click a page and open Console (or run

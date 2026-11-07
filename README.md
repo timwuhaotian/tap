@@ -102,14 +102,15 @@ with its own name and icon, and with fixes of its own.
   skill where Claude Code, Codex, Gemini and opencode look, so an agent on this Mac
   reaches for Tap when a task needs a browser: `tap open`, `tap snapshot` (the page's
   controls, each with a ref, shadow roots included), `tap click`, `tap fill`,
-  `tap press`, `tap text`, `tap eval` (promises awaited). Its tabs open behind yours,
+  `tap press`, `tap text`, `tap eval` (promises awaited), `tap console`. Its tabs open
+  behind yours,
   with your sign-ins. Settings › Let agents use Tap turns it off and takes the
   command and skill away.
 - **Point an agent at a page.** Right-click a tab or a page for Copy Tab Details: the
   tab's id for `tap` (it lasts across restarts), its address, state and HTTP status,
   and what the page says of itself, to paste into an agent. Right-click anything on a
   page for Copy Element Details: its selector, box, style and markup. `tap info` gives
-  an agent the same.
+  an agent the same. Right-click a page for Console: what its scripts said and threw.
 - **A page that keeps crashing stops reloading itself** and says so
   ([#849](https://github.com/driceroland/Search/pull/849)).
 - **Nothing phones home.** No account, no sync, no telemetry. The only requests Tap
