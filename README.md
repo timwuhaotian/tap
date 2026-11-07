@@ -101,9 +101,10 @@ with its own name and icon, and with fixes of its own.
 - **Coding agents browse with it.** Tap puts a `tap` command in `~/.local/bin` and a
   skill where Claude Code, Codex, Gemini and opencode look, so an agent on this Mac
   reaches for Tap when a task needs a browser: `tap open`, `tap snapshot` (the page's
-  controls, each with a ref), `tap click`, `tap fill`, `tap press`, `tap text`. Its tabs
-  open behind yours, with your sign-ins. Settings › Let agents use Tap turns it off and
-  takes the command and skill away.
+  controls, each with a ref, shadow roots included), `tap click`, `tap fill`,
+  `tap press`, `tap text`, `tap eval` (promises awaited). Its tabs open behind yours,
+  with your sign-ins. Settings › Let agents use Tap turns it off and takes the
+  command and skill away.
 - **Point an agent at a page.** Right-click a tab or a page for Copy Tab Details: the
   tab's id for `tap` (it lasts across restarts), its address, state and HTTP status,
   and what the page says of itself, to paste into an agent. Right-click anything on a

@@ -21,8 +21,9 @@ const clip = (text, length = 80) => {
 };
 
 function shown(element) {
-    const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
+    // A tab behind the user's lays block elements out at zero width, so a size check
+    // would hide every contenteditable and div[role] control an agent needs. Trust the
+    // CSS visibility check, which answers without depending on laid-out size.
     if (element.checkVisibility) return element.checkVisibility({ checkVisibilityCSS: true });
     const style = getComputedStyle(element);
     return style.visibility !== "hidden" && style.display !== "none";
@@ -42,6 +43,7 @@ function role(element) {
         if (type === "checkbox" || type === "radio") return type;
         if (type === "search") return "searchbox";
         if (type === "range") return "slider";
+        if (type === "file") return "file";
         return "textbox";
     }
     if (element.isContentEditable) return "textbox";
@@ -80,15 +82,26 @@ function describe(element, index) {
     return item;
 }
 
+// Controls in document order, reaching into open shadow roots as well: a web component
+// keeps its buttons and fields in a shadow tree the page's querySelectorAll can't see.
+function collect(root, out) {
+    for (const element of root.querySelectorAll("*")) {
+        if (element.matches(CONTROLS)) out.push(element);
+        if (element.shadowRoot) collect(element.shadowRoot, out);
+    }
+}
+
 if (verb === "snapshot") {
-    const found = [...document.querySelectorAll(CONTROLS)].filter(shown);
+    const found = [];
+    collect(document, found);
+    const visible = found.filter(shown);
     refs.length = 0;
-    refs.push(...found.slice(0, LIMIT));
+    refs.push(...visible.slice(0, LIMIT));
     return {
         url: location.href,
         title: document.title,
         controls: refs.map(describe),
-        more: Math.max(0, found.length - LIMIT),
+        more: Math.max(0, visible.length - LIMIT),
     };
 }
 
@@ -126,6 +139,9 @@ if (verb === "fill") {
     const text = String(value ?? "");
     element.focus?.();
     const tag = element.tagName.toLowerCase();
+    if (tag === "input" && element.type === "file") {
+        return { error: `${ref} is a file input, not something to fill` };
+    }
     if (tag === "select") {
         const option = [...element.options].find(o => o.value === text || o.text.trim() === text);
         if (!option) return { error: `no option "${text}"` };

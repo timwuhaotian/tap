@@ -8,6 +8,7 @@
     scripts/bench keyeq key=tab modifiers='["control"]'
     scripts/bench eval id=3 js='document.title'
     scripts/bench test-forms                         # WebKit form regression tests
+    scripts/bench test-agent                         # WebKit agent snapshot/eval regression tests
 
 Values are read as JSON when they parse (true, 3, ["a"]) and as text otherwise. The
 world is TAP_PROBE's, as for the app: `TAP_PROBE=dev scripts/bench probe` talks to the
@@ -192,6 +193,80 @@ def test_forms():
         request({"do": "close", "id": tab})
 
 
+def test_agent():
+    if world() is None:
+        raise RuntimeError("test-agent requires TAP_PROBE and an isolated test world")
+    a = request({"do": "open", "url": "about:blank"})["id"]
+    b = request({"do": "open", "url": "about:blank"})["id"]
+    try:
+        # Bring B to the front so A is a tab behind: WebKit lays a hidden tab's block
+        # elements out at zero width, the condition the snapshot fixes have to survive.
+        request({"do": "select", "id": b})
+        request({"do": "wait", "id": a})
+        setup = '''(() => {
+            document.title = "agent test";
+            document.body.innerHTML = '<input id="normal"><button id="normalbtn">Normal</button>'
+                + '<div id="rich" contenteditable="true">rich text</div>'
+                + '<div id="blockbtn" role="button">Block button</div>'
+                + '<div id="blocktext" role="textbox">Block text</div>'
+                + '<input id="file" type="file"><div id="host"></div>';
+            document.getElementById('host').attachShadow({mode:'open'}).innerHTML =
+                '<button id="shadowbtn">Shadow button</button><input id="shadowfield" placeholder="shadow field">';
+            return document.visibilityState;
+        })()'''
+        vis = request({"do": "eval", "id": a, "js": setup})["value"]
+        snap = request({"do": "snapshot", "id": a})
+        controls = snap["controls"]
+
+        checks = 0
+
+        def check(ok, message):
+            nonlocal checks
+            checks += 1
+            if not ok:
+                raise RuntimeError(message)
+
+        def find(name):
+            return next((c for c in controls if c["name"] == name), None)
+
+        check(vis == "hidden", "test tab must be hidden to reproduce the layout collapse")
+        check(find("rich text") and find("rich text")["role"] == "textbox",
+              "a contenteditable is listed in a background tab")
+        check(find("Block button") and find("Block button")["role"] == "button",
+              "a div[role=button] is listed in a background tab")
+        check(find("Block text") and find("Block text")["role"] == "textbox",
+              "a div[role=textbox] is listed in a background tab")
+        check(find("Shadow button"), "an open shadow root's button is listed")
+        check(find("shadow field"), "an open shadow root's field is listed")
+        check(any(c["role"] == "file" for c in controls), "a file input is labelled file")
+
+        rich = find("rich text")["ref"]
+        request({"do": "act", "id": a, "action": "fill", "ref": rich, "value": "你好 world"})
+        check(request({"do": "eval", "id": a, "js": 'document.getElementById("rich").innerText'})["value"]
+              == "你好 world", "a contenteditable can be filled")
+        shadow = find("shadow field")["ref"]
+        request({"do": "act", "id": a, "action": "fill", "ref": shadow, "value": "shadowval"})
+        check(request({"do": "eval", "id": a,
+                       "js": 'document.getElementById("host").shadowRoot.getElementById("shadowfield").value'})["value"]
+              == "shadowval", "a shadow root's field can be filled")
+        file_ref = next(c["ref"] for c in controls if c["role"] == "file")
+        try:
+            request({"do": "act", "id": a, "action": "fill", "ref": file_ref, "value": "x"})
+            refused = False
+        except RuntimeError as error:
+            refused = "file input" in str(error)
+        check(refused, "filling a file input is refused clearly")
+
+        check(request({"do": "eval", "id": a, "js": "Promise.resolve(42)"})["value"] == 42,
+              "eval awaits a promise")
+        check(request({"do": "eval", "id": a, "js": "document.title"})["value"] == "agent test",
+              "eval still reads a sync expression")
+        print(f"agent: {checks} checks passed in WebKit")
+    finally:
+        request({"do": "close", "id": a})
+        request({"do": "close", "id": b})
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
@@ -201,6 +276,13 @@ def main(argv):
             test_forms()
         except (OSError, RuntimeError, KeyError, ValueError) as error:
             print(f"forms: {error}", file=sys.stderr)
+            return 1
+        return 0
+    if argv[0] == "test-agent":
+        try:
+            test_agent()
+        except (OSError, RuntimeError, KeyError, ValueError) as error:
+            print(f"agent: {error}", file=sys.stderr)
             return 1
         return 0
     request = {"do": argv[0]}

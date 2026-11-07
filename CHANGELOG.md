@@ -7,6 +7,15 @@ Info.plist.
 
 ## Unreleased
 
+### Fixed
+
+- **Agents see and fill more of the page**: a background tab's snapshot (and every
+  agent tab is background) no longer loses its contenteditable and div[role]
+  controls to WebKit's zero-width layout, and it reaches into open shadow roots,
+  so a web component's buttons and fields can be clicked and filled. A file input
+  is labelled `file` and filling it is refused clearly; `tap eval` awaits
+  promises in the page's own world, so `fetch` returns its value instead of `{}`.
+
 ## 0.2.16 — 2026-11-07
 
 ### Added

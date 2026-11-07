@@ -1105,7 +1105,9 @@ fn evaluate(id: TabId, js: &str, reply: Reply) {
     let Some(web) = web::existing(id) else {
         return reply.say(json!({ "error": "the tab has no page" }));
     };
-    let script = format!("JSON.stringify((() => ({js}))())");
+    // Awaited in the page's own world: a promise (fetch, …) resolves to its value rather
+    // than serializing to {}, and the page's own variables stay reachable.
+    let body = format!("return JSON.stringify(await (async () => ({js}))());");
     let reply = std::cell::RefCell::new(Some(reply));
     let block = RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
         let Some(reply) = reply.borrow_mut().take() else {
@@ -1124,8 +1126,16 @@ fn evaluate(id: TabId, js: &str, reply: Reply) {
             .unwrap_or(Value::Null);
         reply.say(json!({ "value": value }));
     });
-    // SAFETY: a live web view, a valid script, and a block that outlives the call.
-    unsafe { web.evaluateJavaScript_completionHandler(&NSString::from_str(&script), Some(&block)) };
+    // SAFETY: a live web view, a valid script body, and a block that outlives the call.
+    unsafe {
+        web.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+            &NSString::from_str(&body),
+            None,
+            None,
+            &objc2_web_kit::WKContentWorld::pageWorld(MainThreadMarker::from(&*web)),
+            Some(&block),
+        );
+    }
 }
 
 /// Puts text into the address field through its own editor, as a paste or typing does,

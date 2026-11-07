@@ -1294,6 +1294,37 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### Unreleased — Agents see and fill more of the page
+
+At the user's request (2026-11-07: "检查tap浏览器对ai agent协作的友好度，找优化点和bug",
+then "根据你的建议来优化"), an audit of the agent channel, fixed in the page script and
+the bench, verified in a `TAP_PROBE` world against a local probe.
+
+- [x] **A background tab's block controls stay visible** (`assets/js/agent.js` `shown`):
+  a tab behind the user's lays block elements out at zero width, so the old size check
+  hid every `contenteditable` and `div[role]` control an agent needs. `shown` now trusts
+  `checkVisibility({checkVisibilityCSS:true})`, which answers without laid-out size and
+  catches an ancestor's `display:none` the old fallback missed.
+- [x] **Open shadow roots are listed** (`agent.js` `collect`): snapshot walks every
+  element and recurses into open shadow roots, so a web component's buttons and fields
+  get refs and can be clicked and filled; closed roots stay encapsulated.
+- [x] **A file input is labelled `file`** (`agent.js` `role`, `fill`): no longer a
+  nameless textbox; filling it is refused clearly instead of throwing.
+- [x] **`eval` awaits** (`bench.rs` `evaluate`): runs in the page's own world through
+  `callAsyncJavaScript` (`pageWorld`), so a promise (`fetch`, …) resolves to its value
+  instead of `{}`; the page's variables stay reachable and errors still report.
+- [x] **Regression test** (`scripts/bench test-agent`): forces a hidden tab (the
+  zero-width condition), checks the block/shadow/file controls are listed and fillable
+  and that `eval` awaits; seen failing without the `shown` fix.
+- Checked: `cargo test` (tap-app 7, tap-core 130, tap-import 35, tap-shell 101);
+  `test-agent` (12 checks) and `test-forms` (36) in WebKit; clippy clean on the changed
+  crates. The workspace `clippy -D warnings` gate hits a pre-existing unknown lint
+  (`icons.rs` allows `clippy::duration_suboptimal_units`, unknown to the installed clippy
+  0.1.94), unrelated to this change.
+- Left as is (found, not fixed here): refs are positional, so a re-render can point one
+  at a different control; iframe controls are still out; `press` has no native key
+  defaults beyond Enter; a request that times out may still act.
+
 ### 0.2.15 — A second Tap no longer kills the agent channel
 
 From an agent's test report (2026-11-07): starting a second Tap permanently wedged
