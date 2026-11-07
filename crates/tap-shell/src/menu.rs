@@ -16,7 +16,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSInteger, NSNotification, NSString, NSURL};
 use tap_core::{browser::Browser, identity, internal::Page, settings_index};
 
-use crate::{findbar, links, prefs, profile, rt, store, update, update_window};
+use crate::{bench, findbar, links, prefs, profile, rt, store, update, update_window};
 
 /// What a menu item or a door asks for, carried as its tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +192,8 @@ define_class!(
             if let Some(shape) = rt::read(Browser::shape) {
                 store::save_session_now(&shape);
             }
+            // Only its own socket file goes: never another run's.
+            bench::stop();
             // A staged update replaces the app now, and Restart to Update opens it.
             update::install_on_quit();
         }

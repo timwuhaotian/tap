@@ -47,8 +47,9 @@ tap close 7
 
 - A public page you only need the text of: a web fetch tool is cheaper.
 - Screenshots, network traces, device emulation: Tap's command can't do these yet.
-- `tap` not found: Tap isn't installed, or Settings › Let agents use Tap is off. Say so,
-  and use another browser tool.
+- `tap` not found, or it says Tap isn't listening: Tap isn't installed, Settings ›
+  Let agents use Tap is off, or Tap's agent channel is wedged — restarting Tap (or
+  flipping that switch off and on) brings it back. Say so, and use another browser tool.
 
 <!-- Installed by Tap.app, which rewrites this file when it changes and removes it
      when Settings › Let agents use Tap is switched off. -->

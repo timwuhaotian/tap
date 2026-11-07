@@ -357,7 +357,7 @@ fn reach() -> Result<(), String> {
         }
     }
     Err(format!(
-        "Tap isn't listening at {}. Is Tap installed, and Settings › Let agents use Tap on?",
+        "Tap isn't listening at {}. Is Tap installed, and Settings › Let agents use Tap on? If both are true, restart Tap (or switch that setting off and on) and try again.",
         socket().display()
     ))
 }

@@ -1288,6 +1288,35 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### 0.2.15 — A second Tap no longer kills the agent channel
+
+From an agent's test report (2026-11-07): starting a second Tap permanently wedged
+the first run's bench socket — `listen()` removed and rebound `bench.sock`
+unconditionally, so the first run was left answering on an unlinked inode and every
+`tap` command failed with Connection refused until Tap restarted. The updater's
+restart and running a build from the tree are the same scene.
+
+- [x] **A live socket is left alone** (`bench.rs` `take_socket`): before binding, a
+  connect probe — someone answering there means another run holds it, and this one
+  stays quiet; only a stale file (there but nobody answers) is removed and bound.
+  Test: `a_second_run_leaves_a_live_socket_and_takes_a_stale_one`.
+- [x] **`stop` only takes away its own file** (`OWNED`, by device and inode): quitting
+  or switching the bench off never unlinks another run's socket.
+- [x] **Quit takes the socket with it** (`menu.rs` `will_terminate` → `bench::stop`),
+  so no stale file is left for the next launch to clear.
+- [x] **The copy says what to do** (`cli.rs`, `SKILL.md`): Tap-isn't-listening now
+  ends with restarting Tap (or flipping the switch off and on), and the skill's
+  `tap`-not-found row carries the same third cause.
+- The report's P1 (eval of `querySelector("h1")` throwing on example.com) is not a
+  bug: example.com's page holds no `h1` anymore (a redesigned multilingual page, an
+  SVG and paragraphs), so the throw is correct. Verified against the live page, with
+  `querySelector("p")` answering as the control.
+- Checked: `cargo test` (tap-core 129, tap-import 35, tap-shell 100, tap-app 7), clippy
+  `-D warnings`, nightly fmt. In a scratch `TAP_PROBE` world through the built `tap`:
+  a second instance logged "stays quiet" while the first answered throughout, before
+  and after the second was killed; a graceful quit removed the socket file; after a
+  kill, the relaunch took the stale socket over and answered.
+
 ### 0.2.14 — Login pages fill themselves in
 
 At the user's request (2026-11-07: "访问某网站/登陆表单应该帮我先自动填入，而不是一定要等我

@@ -93,17 +93,39 @@ pub fn start() {
     refresh();
 }
 
-/// Closes the socket and takes its file away, so a script can see the bench is off
-/// rather than knock on a door nobody answers.
+/// The socket file this run bound, by device and inode, so `stop` only takes away
+/// its own: a second run must never unlink the socket another answers on.
+static OWNED: Mutex<Option<(u64, u64)>> = Mutex::new(None);
+
+/// Closes the socket and takes its own file away, so a script can see the bench is off
+/// rather than knock on a door nobody answers. A file this run didn't bind (another
+/// run's, or a stale one left behind) is left alone.
 pub fn stop() {
     let flag = CONTROL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take();
+    let owned = OWNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
     if let Some(flag) = flag {
         flag.store(true, Ordering::Relaxed);
-        let _ = std::fs::remove_file(store::file("bench.sock"));
     }
+    if owned.is_some() {
+        let path = store::file("bench.sock");
+        if file_identity(&path) == owned {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// A file by device and inode, for telling this run's socket from another's.
+fn file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path)
+        .ok()
+        .map(|meta| (meta.dev(), meta.ino()))
 }
 
 /// Whether something is listening now, for the bench's own `settings` answer.
@@ -115,10 +137,21 @@ pub fn running() -> bool {
         .is_some_and(|flag| !flag.load(Ordering::Relaxed))
 }
 
+/// Takes the bench socket at `path`: one someone answers on is left alone (another
+/// run holds it — binding there would steal its file and orphan its answers when
+/// this run quits), a stale one is removed and bound. `None` either way it can't
+/// be had.
+fn take_socket(path: &std::path::Path) -> Option<UnixListener> {
+    if UnixStream::connect(path).is_ok() {
+        return None;
+    }
+    let _ = std::fs::remove_file(path);
+    UnixListener::bind(path).ok()
+}
+
 fn listen() {
-    let stop = Arc::new(AtomicBool::new(false));
     {
-        let mut control = CONTROL
+        let control = CONTROL
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if control
@@ -127,22 +160,33 @@ fn listen() {
         {
             return;
         }
-        *control = Some(stop.clone());
     }
     let path = store::file("bench.sock");
-    let _ = std::fs::remove_file(&path);
-    let Ok(listener) = UnixListener::bind(&path) else {
-        eprintln!("bench: can't listen at {}", path.display());
-        stop.store(true, Ordering::Relaxed);
+    let Some(listener) = take_socket(&path) else {
+        if UnixStream::connect(&path).is_ok() {
+            eprintln!(
+                "bench: another Tap answers at {}; this one stays quiet",
+                path.display()
+            );
+        } else {
+            eprintln!("bench: can't listen at {}", path.display());
+        }
         return;
     };
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     if listener.set_nonblocking(true).is_err() {
-        stop.store(true, Ordering::Relaxed);
+        let _ = std::fs::remove_file(&path);
         return;
     }
-    let mine = stop.clone();
-    let thread_stop = stop.clone();
+    let flag = Arc::new(AtomicBool::new(false));
+    *OWNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = file_identity(&path);
+    *CONTROL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(flag.clone());
+    let mine = flag.clone();
+    let thread_stop = flag;
     let spawned = thread::Builder::new()
         .name("tap.bench".into())
         .spawn(move || {
@@ -168,7 +212,7 @@ fn listen() {
             }
         });
     if spawned.is_err() {
-        stop.store(true, Ordering::Relaxed);
+        stop();
     }
 }
 
@@ -1209,6 +1253,25 @@ fn key_equivalent(mtm: MainThreadMarker, key: &str, modifiers: &[String]) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_run_leaves_a_live_socket_and_takes_a_stale_one() {
+        let dir = std::env::temp_dir().join(format!("tap-bench-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_default();
+        let path = dir.join("bench.sock");
+        let first = take_socket(&path).expect("the first run binds");
+        assert!(
+            take_socket(&path).is_none(),
+            "a socket someone answers on is left alone"
+        );
+        drop(first);
+        assert!(
+            take_socket(&path).is_some(),
+            "a stale socket left behind is taken over"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_test_world_always_listens_and_a_real_one_only_when_switched_on() {

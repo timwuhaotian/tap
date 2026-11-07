@@ -7,6 +7,16 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.15 — 2026-11-07
+
+### Fixed
+
+- **A second Tap no longer kills the agent channel**: starting another copy (or
+  running a build from the tree) used to steal the bench socket and leave every
+  `tap` command failing until Tap restarted. A socket someone answers on is now
+  left alone, quitting takes only its own socket file away, and Tap-isn't-listening
+  says to restart Tap.
+
 ## 0.2.14 — 2026-11-07
 
 ### Changed
