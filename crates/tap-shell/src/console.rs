@@ -1,8 +1,8 @@
 //! The page's console: what its scripts threw, one right-click away (the page menu's
 //! Console) or one `tap console` away for an agent. No Search equivalent: Search
-//! leans on Safari's Web Inspector, which Tap keeps too (`inspectable`, so Safari's
-//! Develop menu attaches); this is the small one that is always there, errors
-//! included from frames the page's own snapshot can't see into.
+//! leans on the Web Inspector, which Tap has too (View menu, `inspector.rs`); this
+//! is the small one that is always there, errors included from frames the page's
+//! own snapshot can't see into.
 //!
 //! A page-world script at each document's start hears `error` and
 //! `unhandledrejection` in every frame, and posts to the relay below. It wraps

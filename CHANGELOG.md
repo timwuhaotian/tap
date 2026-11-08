@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.2.24 — 2026-11-08
+
+### Added
+
+- **Web Inspector**: WebKit's developer tools on the page in front, from the View
+  menu — ⌥⌘I for the inspector, ⌥⌘J for its console, ⌥⌘C to pick an element —
+  and Inspect Element in a page's right-click menu.
+
 ## 0.2.23 — 2026-11-08
 
 ### Fixed

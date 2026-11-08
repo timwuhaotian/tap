@@ -20,6 +20,7 @@ mod float;
 mod forms;
 mod icons;
 mod inspect;
+mod inspector;
 mod keychain;
 mod links;
 mod menu;

@@ -112,6 +112,10 @@ with its own name and icon, and with fixes of its own.
   and what the page says of itself, to paste into an agent. Right-click anything on a
   page for Copy Element Details: its selector, box, style and markup. `tap info` gives
   an agent the same. Right-click a page for Console: what its scripts threw.
+- **Web Inspector** (View menu, ⌥⌘I): WebKit's own developer tools on the page in
+  front — elements, sources, network and timelines — with its console on ⌥⌘J,
+  element picking on ⌥⌘C, and Inspect Element in a page's right-click menu.
+  Safari's Develop menu attaches to a Tap page too.
 - **A page that keeps crashing stops reloading itself** and says so
   ([#849](https://github.com/driceroland/Search/pull/849)).
 - **Nothing phones home.** No account, no sync, no telemetry. The only requests Tap

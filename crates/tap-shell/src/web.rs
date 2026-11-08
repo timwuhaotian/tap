@@ -37,8 +37,8 @@ use tap_core::{
 };
 
 use crate::{
-    agent, console, dialogs, downloads, forms, icons, inspect, oslog, page_find, rt, signin, sleep,
-    store, window,
+    agent, console, dialogs, downloads, forms, icons, inspect, inspector, oslog, page_find, rt,
+    signin, sleep, store, window,
 };
 
 #[path = "shield.rs"]
@@ -508,6 +508,9 @@ fn configuration(mtm: MainThreadMarker) -> Retained<WKWebViewConfiguration> {
         configuration
             .preferences()
             .setElementFullscreenEnabled(true);
+        // Inspect Element in a page's right-click menu, and the Web Inspector
+        // the View menu opens (inspector).
+        inspector::developer_extras(&configuration.preferences());
         // The sign-in script's ear, on the controller every page shares.
         forms::install(mtm, &configuration.userContentController());
         // The console's ear, in the page's world where its collector stands.
@@ -559,7 +562,7 @@ fn register(mtm: MainThreadMarker, tab: TabId, web: &Retained<WKWebView>) {
             web.setUIDelegate(Some(ProtocolObject::from_ref(&*shared.delegate)));
             web.setAllowsBackForwardNavigationGestures(true);
             web.setAllowsMagnification(true);
-            web.setInspectable(true);
+            inspector::inspectable(web);
             for key in OBSERVED {
                 web.addObserver_forKeyPath_options_context(
                     &shared.observer,
@@ -1391,7 +1394,7 @@ fn create_popup(
             fresh.setNavigationDelegate(Some(ProtocolObject::from_ref(&*shared.delegate)));
             fresh.setUIDelegate(Some(ProtocolObject::from_ref(&*shared.delegate)));
             fresh.setAllowsBackForwardNavigationGestures(true);
-            fresh.setInspectable(true);
+            inspector::inspectable(&fresh);
         }
     });
     take_prefs(&fresh, PAGES.get());
@@ -1427,6 +1430,18 @@ fn create_popup(
     window.makeKeyAndOrderFront(None);
     POPUPS.with_borrow_mut(|popups| popups.push((fresh.clone(), window)));
     fresh
+}
+
+/// A pop-up's page while its window is the key one, for the Web Inspector's
+/// keys (inspector): a pop-up is no tab, so the tab in front behind it is
+/// not the page being looked at.
+pub fn key_popup() -> Option<Retained<WKWebView>> {
+    POPUPS.with_borrow(|popups| {
+        popups
+            .iter()
+            .find(|(_, window)| window.isKeyWindow())
+            .map(|(page, _)| page.clone())
+    })
 }
 
 /// A pop-up's page closed itself: its window goes with it.

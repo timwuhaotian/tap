@@ -1294,6 +1294,42 @@ At the user's request (2026-11-05: "right arrow key 应该也可以实现自动�
   `-D warnings`, nightly fmt; in a running app through the bench, "exa" + → became
   example.com, and ← then → moved the caret without taking it.
 
+### Unreleased — The Web Inspector
+
+At the user's request (2026-11-08: Chrome's DevTools in Tap?). Decided against
+porting Chrome's: its frontend speaks CDP to a Blink/V8 backend Tap hasn't got
+(WebKit's inspector protocol forked from it in 2013 and the two no longer
+interoperate), so a whole Chrome DevTools means shipping a Chromium engine
+(CEF's smallest macOS arm64 build is 135 MB packed, ~250 MB unpacked, against
+Tap's 2.8 MB) or a lossy CDP↔WebKit protocol bridge. WebKit's own inspector is
+the same panels, already on the Mac, and Search's answer too (`Inspector.swift`,
+M2's last piece): Tap had only `setInspectable` (Safari's Develop menu), not the
+in-app inspector.
+
+- [x] **Developer extras** (`inspector.rs` `developer_extras`/`inspectable`,
+  `web.rs`): `_setDeveloperExtrasEnabled:` on the shared configuration's
+  preferences and on every web view as it's taken in, each asked first, so a
+  page's right-click menu gains WebKit's Inspect Element and the in-app
+  inspector answers.
+- [x] **View menu and keys** (`menu.rs`, `inspector.rs`): Web Inspector ⌥⌘I
+  (again puts it away), JavaScript Console ⌥⌘J, Inspect Element ⌥⌘C, on the tab
+  in front, through `_inspector`'s `show`/`close`/`showConsole`/
+  `toggleElementSelection`, each asked first. A blank tab or one of Tap's own
+  pages has no page to look at and does nothing.
+- [x] **Bench**: `inspector` answers a tab's `visible`/`picking`, with the same
+  no-page refusal (and wording) as the other verbs.
+- Reviewed before the release, and two misses fixed: the bench's state now
+  takes the menu's no-page guard (a tab gone internal could keep a stale web
+  view and answer for it), and while a sized pop-up's window is key the keys
+  open its page's inspector, not the tab behind it's (`web::key_popup`).
+- Checked: `cargo test` (workspace), clippy `-D warnings`, nightly fmt. Through
+  the bench in a test world on example.com: ⌥⌘I showed it (`visible: true`),
+  ⌥⌘C started picking (`picking: true`), ⌥⌘J left it up, ⌥⌘I again closed it,
+  and on a blank tab the key was handled with no inspector anywhere. With
+  `tabs.popupWindows` on and the test app active, a sized `window.open` got
+  its small window and ⌥⌘I opened the inspector on that page (example.org,
+  seen in a screenshot) while the tab behind stayed uninspected.
+
 ### Unreleased — Pages see Tap's window
 
 At the user's report (2026-11-08: Apple checkout sign-in stuck again on 0.2.22, tab
@@ -2122,7 +2158,7 @@ added below this one as M1 starts.
 | ImportPanel.swift | 572 | s/bring, s/settings (Bring Over) | M6 | partial (0.1.5: the sheet, profile picker, choices, said lines, File…; no records, Arc, extensions or folder chooser) |
 | ImportRecord.swift | 60 | i/records | M6 | todo |
 | ImportSession.swift | 367 | i/snss (#841) | M1/M6 | tested (0.1.4, with `SessionImportTests`) |
-| Inspector.swift | 59 | w/inspector | M2 | todo |
+| Inspector.swift | 59 | s/inspector | M2 | ported (developer extras in w/web `register`/`configuration`) |
 | InternalPages.swift | 168 | c/internal, s/window (stage) | M3 | partial |
 | KeptScroll.swift | 36 | a/kept-scroll, w/kept_scroll | M5 | todo |
 | KeyLayout.swift | 65 | sys/key_layout | M1 | todo |

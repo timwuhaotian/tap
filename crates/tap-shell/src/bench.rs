@@ -741,6 +741,19 @@ fn handle(request: &Value, reply: Reply) {
             };
             reply.say(json!({ "value": crate::console::text(id) }));
         }
+        "inspector" => {
+            // How the tab's Web Inspector stands; a sleeping tab has none, so
+            // it isn't woken for it.
+            let Some(id) = tab_id(request) else {
+                return reply.say(json!({ "error": "no such tab" }));
+            };
+            match crate::inspector::state(id) {
+                Some((visible, picking)) => {
+                    reply.say(json!({ "visible": visible, "picking": picking }));
+                }
+                None => reply.say(json!({ "error": "the tab has no page" })),
+            }
+        }
         "info" => {
             // Copy Tab Details' card, for an agent handed a tab or looking for itself.
             let Some(id) = tab_id(request) else {

@@ -16,7 +16,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSInteger, NSNotification, NSString, NSURL};
 use tap_core::{browser::Browser, identity, internal::Page, settings_index};
 
-use crate::{bench, findbar, links, prefs, profile, rt, store, update, update_window};
+use crate::{bench, findbar, inspector, links, prefs, profile, rt, store, update, update_window};
 
 /// What a menu item or a door asks for, carried as its tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +49,10 @@ pub enum Command {
     /// The update window's buttons.
     RestartToUpdate,
     CloseUpdate,
+    /// The Web Inspector on the tab in front (inspector): ⌥⌘I, ⌥⌘J, ⌥⌘C.
+    Inspector,
+    InspectorConsole,
+    InspectElement,
     /// ⌘1 to ⌘9 are 101 to 109.
     Tab = 100,
     /// The tab menu's (tabmenu): they act on the tab under the pointer, whose
@@ -112,6 +116,20 @@ pub fn run(tag: NSInteger) {
     }
     if tag == Command::CloseUpdate as NSInteger {
         update_window::close();
+        return;
+    }
+    // The Web Inspector is the shell's business too: it acts on the front
+    // tab's web view, and the model doesn't change.
+    if tag == Command::Inspector as NSInteger {
+        inspector::toggle();
+        return;
+    }
+    if tag == Command::InspectorConsole as NSInteger {
+        inspector::show_console();
+        return;
+    }
+    if tag == Command::InspectElement as NSInteger {
+        inspector::inspect_element();
         return;
     }
     rt::dispatch(move |browser: &mut Browser| match tag {
@@ -451,6 +469,17 @@ pub fn main_menu(
                 with(
                     system("Enter Full Screen", "f", sel!(toggleFullScreen:)),
                     NSEventModifierFlags::Command | NSEventModifierFlags::Control,
+                ),
+                separator(),
+                // The Web Inspector, on the keys Chrome and Arc use (inspector).
+                with(item("Web Inspector", "i", Command::Inspector), option),
+                with(
+                    item("JavaScript Console", "j", Command::InspectorConsole),
+                    option,
+                ),
+                with(
+                    item("Inspect Element", "c", Command::InspectElement),
+                    option,
                 ),
             ],
             commands,
