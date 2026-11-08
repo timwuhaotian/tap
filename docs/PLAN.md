@@ -2130,14 +2130,21 @@ download again.
      against `anchor apple generic and certificate leaf[subject.OU] = "<team of the
      running app>"`; and `spctl`, which confirms notarization.
   3. Stage it, and install it **when Tap quits**. Nothing restarts on its own.
+  4. Once staged, the update window opens on its own — even for a check nobody
+     asked for — asking "Update to Tap x.y.z?" and showing the changelog entries
+     for every version between the running one and the staged one (fetched
+     best-effort from `CHANGELOG.md` on `main`; a fetch failure never blocks the
+     update). Later closes it and it does not ask again for that version in this
+     run (the staged copy still installs on quit); Check for Updates… shows it again.
 - Ad-hoc builds (no team) never update.
 - Search's **Check for Updates…** menu item and the `update.install` setting (on by
   default) stay, for parity. Off, Tap checks only when asked (Kil's meaning, not
   Search's "tells you and waits").
-- **Restart Now** (the update window) and **Restart to Update to x.y.z** (the Tap menu,
+- **Update & Restart** (the update window) and **Restart to Update to x.y.z** (the Tap menu,
   once staged) quit at once, install, and open the new Tap (`open` after this process
   is gone; a test run's `TAP_PROBE` and `TAP_UPDATE_BASE` go with it).
-- `TAP_UPDATE_BASE` overrides both URLs, and is honoured in test runs only.
+- `TAP_UPDATE_BASE` overrides the manifest, DMG and changelog URLs, and is honoured
+  in test runs only.
 - Not carried over from Search: the signed appcast, the same-host rule, the Homebrew
   cask, the Intel build and the DMG background art.
 

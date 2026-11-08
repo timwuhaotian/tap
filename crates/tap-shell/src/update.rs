@@ -7,7 +7,12 @@
 //!
 //! On its own five seconds after launch and every six hours after, while Settings ›
 //! About › "Install updates on its own" (`update.install`) is on; Check for Updates…
-//! any time. A copy that isn't signed with a Developer ID (a local build) never updates.
+//! any time. Once a newer Tap is staged, the update window opens on its own — asked
+//! for or not — naming the version, showing that version's changelog entries (fetched
+//! best-effort from `CHANGELOG.md` on `main`; a failure never blocks the update), and
+//! offering Update & Restart or Later. Later does not ask again for that version in this
+//! run: the staged copy still installs when Tap quits. A copy that isn't signed with
+//! a Developer ID (a local build) never updates.
 //! A test run may point it at another place with `TAP_UPDATE_BASE`.
 
 use std::{
@@ -33,6 +38,7 @@ use crate::{prefs, store, update_window};
 const MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/timwuhaotian/tap/main/releases/latest.toml";
 const DMG_URL: &str = "https://github.com/timwuhaotian/tap/raw/main/releases/Tap-arm64.dmg";
+const CHANGELOG_URL: &str = "https://raw.githubusercontent.com/timwuhaotian/tap/main/CHANGELOG.md";
 /// After launch, so the check never competes with reopening the session.
 const FIRST_CHECK: f64 = 5.0;
 /// One wakeup in hours keeps idle CPU at zero.
@@ -307,18 +313,117 @@ fn verify(app: &Path, version: &str, team: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads the manifest at `url`.
-fn fetch_manifest(url: &str) -> Result<Manifest, String> {
-    let text = run(
+fn fetch_text(url: &str, max_time: &str) -> Result<String, String> {
+    run(
         "/usr/bin/curl",
         &[
             "-fsSL".as_ref(),
             "--max-time".as_ref(),
-            "30".as_ref(),
+            max_time.as_ref(),
             url.as_ref(),
         ],
-    )?;
-    Manifest::parse(&text)
+    )
+}
+
+/// Reads the manifest at `url`.
+fn fetch_manifest(url: &str) -> Result<Manifest, String> {
+    Manifest::parse(&fetch_text(url, "30")?)
+}
+
+/// The changelog's words for the versions between `current` and `latest`, newest
+/// first, as plain text for the update window: Markdown's marks off, hard-wrapped
+/// bullets joined back into one line. `Unreleased` and versions at or below
+/// `current` are left out; an unreadable `current` falls back to `latest`'s own
+/// section, so the window still says what is new.
+pub fn notes_between(changelog: &str, current: &str, latest: &str) -> String {
+    fn version_of(heading: &str) -> &str {
+        heading.split_whitespace().next().unwrap_or_default()
+    }
+    let mut sections: Vec<(&str, Vec<&str>)> = Vec::new();
+    for line in changelog.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            sections.push((heading.trim(), Vec::new()));
+        } else if let Some((_, body)) = sections.last_mut() {
+            body.push(line);
+        }
+    }
+    let mut picked: Vec<(&str, &Vec<&str>)> = sections
+        .iter()
+        .filter(|(heading, _)| {
+            let version = version_of(heading);
+            is_newer(version, current) && !is_newer(version, latest)
+        })
+        .map(|(heading, body)| (*heading, body))
+        .collect();
+    if picked.is_empty() {
+        picked = sections
+            .iter()
+            .filter(|(heading, _)| version_of(heading) == latest)
+            .map(|(heading, body)| (*heading, body))
+            .collect();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (heading, body) in picked {
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push(format!("Tap {heading}"));
+        let mut para: Option<String> = None;
+        for raw in body {
+            let line = raw.trim();
+            if line.is_empty() {
+                out.extend(para.take());
+            } else if let Some(sub) = line.strip_prefix("### ") {
+                out.extend(para.take());
+                out.push(plain(sub.trim()));
+            } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+                out.extend(para.take());
+                para = Some(format!("\u{2022} {}", plain(item.trim())));
+            } else {
+                match &mut para {
+                    Some(para) => {
+                        para.push(' ');
+                        para.push_str(&plain(line));
+                    }
+                    None => para = Some(plain(line)),
+                }
+            }
+        }
+        out.extend(para);
+    }
+    out.join("\n")
+}
+
+/// Markdown as the words alone: links keep their text, bold and code marks go.
+fn plain(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    loop {
+        let Some(open) = rest.find('[') else {
+            out.push_str(rest);
+            break;
+        };
+        let linked = rest[open + 1..]
+            .split_once("](")
+            .and_then(|(words, after)| after.find(')').map(|close| (words, close)));
+        if let Some((words, close)) = linked {
+            out.push_str(&rest[..open]);
+            out.push_str(words);
+            rest = &rest[open + 1 + words.len() + 2 + close + 1..];
+        } else {
+            out.push_str(&rest[..=open]);
+            rest = &rest[open + 1..];
+        }
+    }
+    out.replace("**", "").replace('`', "")
+}
+
+/// The notes for a staged update: fetched best-effort, empty when unreachable, so
+/// showing them never stands in the update's way.
+fn fetch_notes(url: &str, current: &str, latest: &str) -> String {
+    fetch_text(url, "10")
+        .map(|text| notes_between(&text, current, latest))
+        .unwrap_or_default()
 }
 
 /// Downloads the DMG at `dmg_url` into `dir`, checks it against `manifest` and `team`,
@@ -435,18 +540,24 @@ fn testing() -> bool {
     std::env::var_os(identity::PROBE_ENV).is_some()
 }
 
-/// Where the manifest and the DMG are: `main` on GitHub, or, on a test run only,
-/// `TAP_UPDATE_BASE` (a folder holding `latest.toml` and `Tap-arm64.dmg`).
-fn urls() -> (String, String) {
+/// Where the manifest, the DMG and the changelog are: `main` on GitHub, or, on a
+/// test run only, `TAP_UPDATE_BASE` (a folder holding `latest.toml` and
+/// `Tap-arm64.dmg`, and `CHANGELOG.md` if its notes are wanted).
+fn urls() -> (String, String, String) {
     match std::env::var("TAP_UPDATE_BASE").ok().filter(|_| testing()) {
         Some(base) => {
             let base = base.trim_end_matches('/');
             (
                 format!("{base}/latest.toml"),
                 format!("{base}/Tap-arm64.dmg"),
+                format!("{base}/CHANGELOG.md"),
             )
         }
-        None => (MANIFEST_URL.to_owned(), DMG_URL.to_owned()),
+        None => (
+            MANIFEST_URL.to_owned(),
+            DMG_URL.to_owned(),
+            CHANGELOG_URL.to_owned(),
+        ),
     }
 }
 
@@ -469,6 +580,8 @@ fn cache_dir() -> Result<PathBuf, String> {
 #[derive(Clone, Debug)]
 struct Ready {
     version: String,
+    /// The changelog's words for the versions this update crosses, possibly empty.
+    notes: String,
     app: PathBuf,
     bundle: PathBuf,
 }
@@ -484,15 +597,17 @@ fn find(current: &str, progress: &Progress) -> Result<Found, String> {
     let bundle = replaceable_bundle(&exe)?;
     let team = team_of(&bundle)
         .ok_or("this copy of Tap isn't signed with a Developer ID, so it doesn't update itself")?;
-    let (manifest_url, dmg_url) = urls();
+    let (manifest_url, dmg_url, changelog_url) = urls();
     let manifest = fetch_manifest(&manifest_url)?;
     if !is_newer(&manifest.version, current) {
         return Ok(Found::UpToDate);
     }
     writable(bundle.parent().unwrap_or(&bundle))?;
     let app = stage(&manifest, &dmg_url, &cache_dir()?, &team, progress)?;
+    let notes = fetch_notes(&changelog_url, current, &manifest.version);
     Ok(Found::Ready(Ready {
         version: manifest.version,
+        notes,
         app,
         bundle,
     }))
@@ -502,7 +617,7 @@ fn find(current: &str, progress: &Progress) -> Result<Found, String> {
 #[derive(Clone, Debug)]
 pub enum Shown {
     Working(Arc<Progress>),
-    Ready(String),
+    Ready { version: String, notes: String },
     UpToDate,
     Failed(String),
 }
@@ -584,6 +699,7 @@ pub fn status() -> serde_json::Value {
         serde_json::json!({
             "current": current(),
             "ready": updater.ready.as_ref().map(|r| r.version.clone()),
+            "notes": updater.ready.as_ref().map(|r| r.notes.clone()),
             "checking": step.map(|s| format!("{s:?}")),
             "said": updater.said,
             "menu": updater.item.as_ref().map(|item| item.title().to_string()),
@@ -603,10 +719,17 @@ pub fn restart() {
 }
 
 fn check(asked: bool) {
-    let ready = UPDATER.with_borrow(|updater| updater.ready.as_ref().map(|r| r.version.clone()));
-    if let Some(version) = ready {
+    // Already staged: this run has asked once (when it landed), and further silent
+    // checks never ask again for the same version. An explicit check shows it.
+    let ready = UPDATER.with_borrow(|updater| {
+        updater
+            .ready
+            .as_ref()
+            .map(|r| (r.version.clone(), r.notes.clone()))
+    });
+    if let Some((version, notes)) = ready {
         if asked {
-            update_window::show(Shown::Ready(version));
+            update_window::show(Shown::Ready { version, notes });
         }
         return;
     }
@@ -642,10 +765,10 @@ fn checked(found: Result<Found, String>) {
         let asked = std::mem::take(&mut updater.asked);
         let shown = match found {
             Ok(Found::Ready(ready)) => {
-                let version = ready.version.clone();
+                let (version, notes) = (ready.version.clone(), ready.notes.clone());
                 updater.said = Some(format!("Tap {version} is ready"));
                 updater.ready = Some(ready);
-                Shown::Ready(version)
+                Shown::Ready { version, notes }
             }
             Ok(Found::UpToDate) => {
                 updater.said = Some("up to date".to_owned());
@@ -661,8 +784,16 @@ fn checked(found: Result<Found, String>) {
     if let Some(item) = item {
         item.setTitle(&NSString::from_str(&menu_title()));
     }
-    crate::oslog::note(&format!("update check: {shown:?}"));
-    if asked || matches!(shown, Shown::Ready(_)) && update_window::is_open() {
+    let summary = match &shown {
+        Shown::Ready { version, .. } => format!("Tap {version} is ready"),
+        Shown::UpToDate => "up to date".to_owned(),
+        Shown::Failed(why) => why.clone(),
+        Shown::Working(_) => "working".to_owned(),
+    };
+    crate::oslog::note(&format!("update check: {summary}"));
+    // A staged update asks on its own, whether or not anyone chose Check for
+    // Updates…: that is the one outcome a silent check speaks up about.
+    if asked || matches!(shown, Shown::Ready { .. }) {
         update_window::show(shown);
     } else {
         update_window::refresh(shown);
@@ -752,6 +883,26 @@ mod tests {
         assert!(Manifest::parse("version = \"0.1.1\"\nurl = \"x\"\nsha256 = \"ab\"").is_err());
         assert!(Manifest::parse("version = \"0.1.1\"").is_err());
         assert!(Manifest::parse("version = 0.1.1\nsha256 = \"ab\"").is_err());
+    }
+
+    #[test]
+    fn notes_cover_every_version_in_between_and_no_others() {
+        let log = "# Changelog\n\n## Unreleased\n\n- **Secret**\n\n## 0.3.0 \u{2014} 2026-11-08\n\n### Added\n\n- **New thing**: does [stuff](https://example.com)\n  over two lines.\n\n## 0.2.0 \u{2014} 2026-11-07\n\n- Middle `bit`\n\n## 0.1.0 \u{2014} 2026-11-06\n\n- Old\n";
+        let notes = notes_between(log, "0.1.0", "0.3.0");
+        assert!(notes.contains("Tap 0.3.0"), "{notes}");
+        assert!(notes.contains("Added"), "{notes}");
+        assert!(
+            notes.contains("\u{2022} New thing: does stuff over two lines."),
+            "{notes}"
+        );
+        assert!(notes.contains("Middle bit"), "{notes}");
+        assert!(!notes.contains("Old"), "{notes}");
+        assert!(!notes.contains("Secret"), "{notes}");
+        // An unreadable current version still gets the latest version's own notes.
+        let fallback = notes_between(log, "weird", "0.3.0");
+        assert!(fallback.contains("New thing"), "{fallback}");
+        assert!(!fallback.contains("Middle"), "{fallback}");
+        assert_eq!(notes_between(log, "0.3.0", "0.4.0"), "");
     }
 
     #[test]

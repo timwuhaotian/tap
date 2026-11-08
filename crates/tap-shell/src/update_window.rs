@@ -1,14 +1,17 @@
 //! Tap › Check for Updates…: a small window that follows the check from start to end
 //! (Kil's `update_window.rs`): checking, the download with its bar, verifying, then
-//! ready (Later or Restart Now), up to date, or why it can't update.
+//! ready (Later or Update & Restart, with the new version's changelog entries to
+//! read first), up to date, or why it can't update. A staged update opens it on its
+//! own, so a silent check still asks before Tap restarts into the new version.
 
 use std::{cell::RefCell, sync::Arc};
 
 use block2::RcBlock;
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained, sel};
+use objc2::{MainThreadMarker, MainThreadOnly, msg_send, rc::Retained, runtime::AnyObject, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSFont, NSFontWeightSemibold, NSProgressIndicator,
-    NSProgressIndicatorStyle, NSTextField, NSWindow, NSWindowStyleMask,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSButton, NSFont, NSFontWeightSemibold,
+    NSProgressIndicator, NSProgressIndicatorStyle, NSScrollView, NSTextField, NSTextView, NSWindow,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 
@@ -23,6 +26,8 @@ struct Views {
     headline: Retained<NSTextField>,
     detail: Retained<NSTextField>,
     bar: Retained<NSProgressIndicator>,
+    notes_scroll: Retained<NSScrollView>,
+    notes: Retained<NSTextView>,
     left: Retained<NSButton>,
     right: Retained<NSButton>,
     shown: Shown,
@@ -39,8 +44,10 @@ pub fn install(commands: Retained<Commands>) {
     COMMANDS.with_borrow_mut(|slot| *slot = Some(commands));
 }
 
-const WIDTH: f64 = 420.0;
+const WIDTH: f64 = 460.0;
 const HEIGHT: f64 = 150.0;
+/// With changelog entries to read, the window grows and the notes take the middle.
+const HEIGHT_WITH_NOTES: f64 = 390.0;
 
 fn make(mtm: MainThreadMarker) -> Option<Views> {
     let commands = COMMANDS.with_borrow(Clone::clone)?;
@@ -80,6 +87,25 @@ fn make(mtm: MainThreadMarker) -> Option<Views> {
         NSPoint::new(20.0, 56.0),
         NSSize::new(WIDTH - 40.0, 12.0),
     ));
+    let notes_frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH - 40.0, 248.0));
+    let notes_scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), notes_frame);
+    notes_scroll.setHasVerticalScroller(true);
+    notes_scroll.setAutohidesScrollers(true);
+    // SAFETY: NSTextView's designated initialiser, once, on a fresh allocation.
+    let notes: Retained<NSTextView> =
+        unsafe { msg_send![NSTextView::alloc(mtm), initWithFrame: notes_frame] };
+    notes.setEditable(false);
+    notes.setSelectable(true);
+    notes.setVerticallyResizable(true);
+    notes.setHorizontallyResizable(false);
+    notes.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    notes.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+    // SAFETY: a plain getter on a live text view; the container outlives the call.
+    if let Some(container) = unsafe { notes.textContainer() } {
+        container.setWidthTracksTextView(true);
+        container.setContainerSize(NSSize::new(notes_frame.size.width, f64::MAX));
+    }
+    notes_scroll.setDocumentView(Some(&notes));
     let button = |title: &str, command: Command| {
         // SAFETY: the target outlives the button (both live for the app's life), and
         // `run:` takes the sender, as an action must.
@@ -96,17 +122,18 @@ fn make(mtm: MainThreadMarker) -> Option<Views> {
     };
     let left = button("Later", Command::CloseUpdate);
     left.setFrame(NSRect::new(
-        NSPoint::new(WIDTH - 236.0, 14.0),
+        NSPoint::new(WIDTH - 272.0, 14.0),
         NSSize::new(104.0, 32.0),
     ));
-    let right = button("Restart Now", Command::RestartToUpdate);
+    let right = button("Update & Restart", Command::RestartToUpdate);
     right.setFrame(NSRect::new(
-        NSPoint::new(WIDTH - 124.0, 14.0),
-        NSSize::new(104.0, 32.0),
+        NSPoint::new(WIDTH - 160.0, 14.0),
+        NSSize::new(140.0, 32.0),
     ));
     content.addSubview(&headline);
     content.addSubview(&detail);
     content.addSubview(&bar);
+    content.addSubview(&notes_scroll);
     content.addSubview(&left);
     content.addSubview(&right);
     window.center();
@@ -115,6 +142,8 @@ fn make(mtm: MainThreadMarker) -> Option<Views> {
         headline,
         detail,
         bar,
+        notes_scroll,
+        notes,
         left,
         right,
         shown: Shown::UpToDate,
@@ -208,6 +237,53 @@ fn megabytes(bytes: u64) -> String {
     format!("{mb:.1} MB")
 }
 
+/// Sizes the window and puts every view: with changelog entries the window grows
+/// and the notes fill the middle, while the rest hang from its top or bottom.
+fn place(views: &Views) {
+    let notes = match &views.shown {
+        Shown::Ready { notes, .. } if !notes.trim().is_empty() => Some(notes.as_str()),
+        _ => None,
+    };
+    let height = if notes.is_some() {
+        HEIGHT_WITH_NOTES
+    } else {
+        HEIGHT
+    };
+    if let Some(content) = views.window.contentView() {
+        let bounds = content.bounds().size;
+        if (bounds.height - height).abs() > 0.5 || (bounds.width - WIDTH).abs() > 0.5 {
+            views.window.setContentSize(NSSize::new(WIDTH, height));
+        }
+    }
+    views.headline.setFrame(NSRect::new(
+        NSPoint::new(20.0, height - 42.0),
+        NSSize::new(WIDTH - 40.0, 20.0),
+    ));
+    views.detail.setFrame(NSRect::new(
+        NSPoint::new(20.0, height - 78.0),
+        NSSize::new(WIDTH - 40.0, 32.0),
+    ));
+    views.bar.setFrame(NSRect::new(
+        NSPoint::new(20.0, 56.0),
+        NSSize::new(WIDTH - 40.0, 12.0),
+    ));
+    views.notes_scroll.setFrame(NSRect::new(
+        NSPoint::new(20.0, 56.0),
+        NSSize::new(WIDTH - 40.0, (height - 142.0).max(0.0)),
+    ));
+    views.notes_scroll.setHidden(notes.is_none());
+    if let Some(notes) = notes
+        && views.notes.string().to_string() != notes
+    {
+        views.notes.setString(&NSString::from_str(notes));
+        // SAFETY: NSResponder's own scroller, with no sender; the newest notes lead.
+        unsafe {
+            let _: () =
+                msg_send![&views.notes, scrollToBeginningOfDocument: Option::<&AnyObject>::None];
+        }
+    }
+}
+
 fn draw(views: &Views) {
     let current = update::current();
     let step = match &views.shown {
@@ -237,9 +313,10 @@ fn draw(views: &Views) {
             format!("Verifying Tap {version}…"),
             "Checking its signature and Apple's notarization.".to_owned(),
         ),
-        (Shown::Ready(version), _) => (
-            format!("Tap {version} is ready"),
-            "Restart now, or it installs when Tap quits. Your tabs come back as they are."
+        (Shown::Ready { version, .. }, _) => (
+            format!("Update to Tap {version}?"),
+            "Downloaded and verified. Update & Restart now, or Later and it installs \
+             when Tap quits. Your tabs come back as they are."
                 .to_owned(),
         ),
         (Shown::UpToDate, _) => (
@@ -248,6 +325,7 @@ fn draw(views: &Views) {
         ),
         (Shown::Failed(why), _) => ("Tap can't update right now".to_owned(), why.clone()),
     };
+    place(views);
     views
         .headline
         .setStringValue(&NSString::from_str(&headline));
@@ -281,7 +359,7 @@ fn draw(views: &Views) {
             views.bar.setHidden(true);
         }
     }
-    let ready = matches!(views.shown, Shown::Ready(_));
+    let ready = matches!(views.shown, Shown::Ready { .. });
     let working = matches!(views.shown, Shown::Working(_));
     views.right.setHidden(!ready);
     views.left.setTitle(&NSString::from_str(if ready {
@@ -291,8 +369,8 @@ fn draw(views: &Views) {
     } else {
         "OK"
     }));
-    // The one button there is sits at the right; Restart Now takes Return when it shows.
-    let x = if ready { WIDTH - 236.0 } else { WIDTH - 124.0 };
+    // The one button there is sits at the right; Update & Restart takes Return when it shows.
+    let x = if ready { WIDTH - 272.0 } else { WIDTH - 124.0 };
     views.left.setFrameOrigin(NSPoint::new(x, 14.0));
     views
         .right

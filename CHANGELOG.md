@@ -7,6 +7,16 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.2 — 2026-11-08
+
+### Changed
+
+- **An update asks out loud, and says what is in it**: when the six-hourly check
+  stages a new Tap, the update window now opens on its own asking "Update to
+  Tap x.y.z?", with the changelog entries for every version it crosses to read
+  first. Update & Restart does it at once; Later puts it away (it won't ask
+  again for that version, and still installs when Tap quits, as before).
+
 ## 0.3.1 — 2026-11-08
 
 ### Added

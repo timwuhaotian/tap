@@ -80,7 +80,8 @@ with its own name and icon, and with fixes of its own.
   AirDrop; open it on the other Mac and it all comes in, groups folded or open as they
   were. Sign-ins, passwords and cookies never go in the file.
 - **It updates itself**: checked against Apple's notarization and the developer's
-  signature, installed when Tap quits, or at once with Restart Now.
+  signature, then it asks — with the new version's changelog to read — and updates
+  at once, or when Tap quits if you say Later.
 - **Tabs come back** where you left them, and cost nothing until you look at them.
 - **Tabs you aren't using sleep** after half an hour and give their memory back; they
   wake on the same page, with Back and the scroll position. Never a tab playing sound,
