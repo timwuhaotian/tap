@@ -37,12 +37,8 @@ thread_local! {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent menu facts, read together
 pub struct TabState {
-    /// A page you can reload, copy or duplicate: not a new tab, not Tap's own.
+    /// A page you can copy or duplicate: not a new tab, not Tap's own.
     pub has_page: bool,
-    /// Another unpinned tab exists, for Close Other Tabs.
-    pub others: bool,
-    /// An unpinned tab stands to its right, for Close Tabs to the Right.
-    pub right: bool,
     /// ⇧⌘T has something to bring back.
     pub can_reopen: bool,
     /// A pin stays out of groups.
@@ -142,45 +138,20 @@ fn move_to_group(state: &TabState) -> Entry {
     }
 }
 
-/// Close Tab, or Close N Tabs when it is one of several picked (Search's).
-fn close_entry(state: &TabState) -> Entry {
-    if state.picked > 1 {
-        let mut close = entry("", Command::TabCloseSelected, true);
-        close.title = format!("Close {} Tabs", state.picked);
-        close
-    } else {
-        entry("Close Tab", Command::TabClose, true)
-    }
-}
-
-/// The tab's menu, top to bottom, in Search's order where Tap has the operation at
-/// all (Reload Tab is Tap's addition, first as in other browsers).
+/// The tab's menu, top to bottom: a new tab to the right of this one, then what
+/// Tap can do with the tab itself.
 #[must_use]
 pub fn tab_entries(state: &TabState, can_copy: bool) -> Vec<Entry> {
-    let mut entries = Vec::new();
+    let mut entries = vec![entry("New Tab", Command::TabNew, true)];
     if !state.pinned {
         entries.push(move_to_group(state));
     }
     entries.extend([
-        entry("Reload Tab", Command::TabReload, state.has_page),
         entry("Rename…", Command::TabRename, true),
         entry("Duplicate Tab", Command::TabDuplicate, state.has_page),
-        entry("Copy Address", Command::TabCopyAddress, state.has_page),
-        entry(
-            "Copy as Markdown Link",
-            Command::TabCopyMarkdown,
-            state.has_page,
-        ),
         entry("Copy Tab Details", Command::TabCopyDetails, state.has_page),
         entry("Put to Sleep", Command::TabSleep, state.can_sleep),
         separator(),
-        close_entry(state),
-        entry("Close Other Tabs", Command::TabCloseOthers, state.others),
-        entry(
-            "Close Tabs to the Right",
-            Command::TabCloseRight,
-            state.right,
-        ),
         entry("Reopen Closed Tab", Command::TabReopen, state.can_reopen),
     ]);
     // Right-clicked among picked tabs: all their addresses (Search's Copy Addresses).
@@ -244,17 +215,6 @@ pub fn group_entries(collapsed: bool, colour: Option<&str>) -> Vec<Entry> {
         entry("Ungroup Tabs", Command::GroupUngroup, true),
         entry("Close Group", Command::GroupClose, true),
     ]
-}
-
-/// A page as a Markdown link, its title the text (Search's `markdownLink`): a
-/// backslash first, so the ones added next aren't doubled.
-#[must_use]
-pub fn markdown_link(title: &str, url: &str) -> String {
-    let text = title
-        .replace('\\', "\\\\")
-        .replace('[', "\\[")
-        .replace(']', "\\]");
-    format!("[{text}]({url})")
 }
 
 /// The tab's menu, up under the pointer.
@@ -434,10 +394,13 @@ pub fn run(tag: NSInteger) -> bool {
         return true;
     }
     match tag {
+        t if t == Command::TabNew as NSInteger => {
+            let Some(id) = target else { return true };
+            rt::dispatch(move |browser| new_tab(browser, id));
+        }
         t if t == Command::TabReopen as NSInteger => {
             rt::dispatch(Browser::reopen);
         }
-        t if t == Command::TabCloseSelected as NSInteger => rt::dispatch(Browser::close_selected),
         t if t == Command::TabNewGroup as NSInteger => {
             let Some(id) = target else { return true };
             let made = rt::update(|browser| {
@@ -482,38 +445,28 @@ pub fn run(tag: NSInteger) -> bool {
             let Some(id) = target else { return true };
             rt::dispatch(move |browser| browser.put_to_sleep(id));
         }
-        t if t == Command::TabReload as NSInteger => {
-            let Some(id) = target else { return true };
-            rt::dispatch(move |browser| browser.reload_tab(id));
-        }
         t if t == Command::TabDuplicate as NSInteger => {
             let Some(id) = target else { return true };
             rt::dispatch(move |browser| {
                 browser.duplicate(id);
             });
         }
-        t if t == Command::TabClose as NSInteger => {
-            let Some(id) = target else { return true };
-            rt::dispatch(move |browser| browser.close(id));
-        }
-        t if t == Command::TabCloseOthers as NSInteger => {
-            let Some(id) = target else { return true };
-            rt::dispatch(move |browser| browser.close_others(id));
-        }
-        t if t == Command::TabCloseRight as NSInteger => {
-            let Some(id) = target else { return true };
-            rt::dispatch(move |browser| browser.close_right(id));
-        }
         _ => return run_group(tag),
     }
     true
 }
 
+/// New Tab: a tab to the right of the one the menu was opened for, with the
+/// field on it, ready for an address.
+fn new_tab(browser: &mut Browser, id: TabId) {
+    if browser.new_tab_beside(id).is_some() {
+        browser.begin_editing(false);
+    }
+}
+
 /// The Copy commands, on the tab the menu was opened for. Answers whether the tag was one.
 fn run_copy(tag: NSInteger, target: Option<TabId>) -> bool {
     match tag {
-        t if t == Command::TabCopyAddress as NSInteger => copy(false),
-        t if t == Command::TabCopyMarkdown as NSInteger => copy(true),
         t if t == Command::TabCopySelected as NSInteger => copy_selected(),
         t if t == Command::TabCopyDetails as NSInteger => {
             if let Some(id) = target {
@@ -592,29 +545,6 @@ pub fn copy_selected() {
     board.setString_forType(&NSString::from_str(&links.join("\n")), kind);
 }
 
-fn copy(markdown: bool) {
-    let Some(id) = TARGET.get() else { return };
-    let Some(text) = rt::read(|browser| {
-        let tab = browser.tab(id)?;
-        if tab.is_blank() || tab.is_internal() {
-            return None;
-        }
-        Some(if markdown {
-            markdown_link(&tab.label(), tab.url())
-        } else {
-            tab.url().to_owned()
-        })
-    })
-    .flatten() else {
-        return;
-    };
-    let board = NSPasteboard::generalPasteboard();
-    board.clearContents();
-    // SAFETY: the system's own pasteboard type constant, valid for the app's life.
-    let kind = unsafe { NSPasteboardTypeString };
-    board.setString_forType(&NSString::from_str(&text), kind);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,8 +552,6 @@ mod tests {
     fn state() -> TabState {
         TabState {
             has_page: true,
-            others: true,
-            right: true,
             can_reopen: true,
             pinned: false,
             group: Some(1),
@@ -639,26 +567,45 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_menu_is_in_search_order_with_its_separators() {
+    fn the_tab_menu_opens_a_new_tab_and_keeps_what_the_tab_can_do() {
         let entries = tab_entries(&state(), true);
         assert_eq!(
             titles(&entries),
             [
+                "New Tab",
                 "Move to Group",
-                "Reload Tab",
                 "Rename…",
                 "Duplicate Tab",
-                "Copy Address",
-                "Copy as Markdown Link",
                 "Copy Tab Details",
                 "Put to Sleep",
                 "",
-                "Close Tab",
-                "Close Other Tabs",
-                "Close Tabs to the Right",
                 "Reopen Closed Tab",
             ]
         );
+        assert_eq!(entries[0].tag, Some(Command::TabNew as NSInteger));
+    }
+
+    #[test]
+    fn new_tab_makes_a_tab_to_the_right_of_the_menu_s_tab_with_the_field_on_it() {
+        let mut browser = Browser::new();
+        let first = browser.active().expect("a tab");
+        browser.open(None, true, None);
+        let second = browser.tabs()[1].id;
+
+        new_tab(&mut browser, first);
+
+        assert_eq!(browser.tabs().len(), 3);
+        let fresh = browser.tabs()[1].id;
+        assert_ne!(fresh, first, "a tab of its own");
+        assert_eq!(
+            browser.tabs()[2].id,
+            second,
+            "the other tab stays where it was"
+        );
+        assert_eq!(browser.active(), Some(fresh), "it comes to the front");
+        let editing = browser.editing().expect("the field is open");
+        assert!(editing.typed.is_empty(), "nothing in it yet");
+        assert!(!editing.launching, "the field is on the tab, not floating");
     }
 
     #[test]
@@ -682,8 +629,6 @@ mod tests {
             entries.last().map(|e| e.title.as_str()),
             Some("Copy 3 Addresses")
         );
-        assert!(titles(&entries).contains(&"Close 3 Tabs"));
-        assert!(!titles(&entries).contains(&"Close Tab"));
         assert!(!titles(&tab_entries(&state(), true)).contains(&"Copy 3 Addresses"));
         let off = tab_entries(&picked, false);
         let copy = off.last().expect("copy");
@@ -694,7 +639,7 @@ mod tests {
     #[test]
     fn move_to_group_offers_a_new_one_the_others_and_a_way_out() {
         let entries = tab_entries(&state(), true);
-        let sub = &entries[0].sub;
+        let sub = &entries[1].sub;
         assert_eq!(
             titles(sub),
             ["New Group", "", "Work", "Reading", "", "Remove from Group"]
@@ -706,14 +651,14 @@ mod tests {
             groups: Vec::new(),
             ..state()
         };
-        assert_eq!(titles(&tab_entries(&loose, true)[0].sub), ["New Group"]);
+        assert_eq!(titles(&tab_entries(&loose, true)[1].sub), ["New Group"]);
         let pin = TabState {
             pinned: true,
             ..state()
         };
         assert_eq!(
             tab_entries(&pin, true)[0].title,
-            "Reload Tab",
+            "New Tab",
             "a pin has no groups"
         );
     }
@@ -728,7 +673,7 @@ mod tests {
                 ..state()
             }
         }
-        let sub = &tab_entries(&multi(Some(1), vec![Some(1), Some(0), None]), true)[0].sub;
+        let sub = &tab_entries(&multi(Some(1), vec![Some(1), Some(0), None]), true)[1].sub;
         assert_eq!(
             titles(sub),
             ["New Group", "", "Work", "Reading", "", "Remove from Group"],
@@ -738,11 +683,11 @@ mod tests {
             sub[2].enabled && sub[3].enabled,
             "only all of them in one turns it off"
         );
-        let sub = &tab_entries(&multi(Some(1), vec![Some(1), Some(1)]), true)[0].sub;
+        let sub = &tab_entries(&multi(Some(1), vec![Some(1), Some(1)]), true)[1].sub;
         assert!(!sub[3].enabled, "every picked tab in Reading: off");
         assert!(sub[2].enabled);
         assert_eq!(
-            titles(&tab_entries(&multi(None, vec![None, None]), true)[0].sub),
+            titles(&tab_entries(&multi(None, vec![None, None]), true)[1].sub),
             ["New Group", "", "Work", "Reading"],
             "none picked in a group: no way out"
         );
@@ -753,8 +698,6 @@ mod tests {
         let entries = tab_entries(
             &TabState {
                 has_page: false,
-                others: false,
-                right: false,
                 can_reopen: false,
                 pinned: true,
                 group: None,
@@ -770,7 +713,7 @@ mod tests {
             .filter(|e| e.enabled && e.tag.is_some())
             .map(|e| e.title.as_str())
             .collect();
-        assert_eq!(on, ["Rename…", "Close Tab"]);
+        assert_eq!(on, ["New Tab", "Rename…"]);
     }
 
     #[test]
@@ -805,13 +748,5 @@ mod tests {
         assert_eq!(ticked, ["Red"]);
         assert_eq!(colours[1].tag, Some(Command::GroupColour as NSInteger + 1));
         assert!(colours.iter().all(|e| e.swatch.is_some()));
-    }
-
-    #[test]
-    fn a_markdown_link_escapes_its_title() {
-        assert_eq!(
-            markdown_link("a [b] \\ c", "https://a.com"),
-            "[a \\[b\\] \\\\ c](https://a.com)"
-        );
     }
 }

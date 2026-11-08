@@ -1435,6 +1435,37 @@ selectors or guarded calls.)
 - Left as is: `press` with no ref stays in the main frame; `eval` stays main-frame;
   a frame that loads after the snapshot needs another snapshot to appear.
 
+### Unreleased — The tab's menu: a new tab, and less of it
+
+At the user's request (2026-11-08: "tab的右键菜单能否加入一个new tab（默认在右侧打开）",
+and a marked screenshot: "红框里的功能全部帮我删掉"). The menu had grown into a
+duplicate of the keyboard's: Reload Tab, Copy Address, Copy as Markdown Link and the
+three closing items all have a key or a button elsewhere (⌘R, ⌘C, ⌘W), and they made
+the tab's own operations hard to find. The user keeps Move to Group, Rename, Duplicate
+Tab, Copy Tab Details, Put to Sleep and Reopen Closed Tab.
+
+- [x] **New Tab** (`browser.rs` `new_tab_beside`, `tabmenu.rs` `new_tab`): a tab to the
+  right of the one the menu was opened for, in front of it, in its group (a page opened
+  from a tab stays in its group), with the field on it, ready for an address — the
+  ordinary field, not ⌘T's floating one, which would open its tab at the end of the row
+  instead. The row's own order (pins, groups, the rest) has the last word: a tab opened
+  beside a pin stands with the tabs in no group. Tests:
+  `a_new_tab_beside_lands_to_the_right_of_its_tab`,
+  `a_new_tab_beside_joins_its_tab_s_group`,
+  `a_new_tab_beside_a_pin_stands_with_the_tabs_in_no_group`,
+  `new_tab_makes_a_tab_to_the_right_of_the_menu_s_tab_with_the_field_on_it`.
+- [x] **The menu is shorter** (`tabmenu.rs`): Reload Tab, Copy Address, Copy as
+  Markdown Link, Close Tab, Close Other Tabs and Close Tabs to the Right are gone, and
+  so is Close N Tabs, which was the same item with a count. What is left: New Tab,
+  Move to Group, Rename…, Duplicate Tab, Copy Tab Details, Put to Sleep, Reopen Closed
+  Tab, and Copy N Addresses for picked tabs. The model's own `reload_tab`, `close`,
+  `close_others`, `close_right` and `close_selected` stay: they are the model's, and
+  ⌘R and ⌘W use them.
+- Checked: `cargo test` (tap-app 7, tap-core 133, tap-import 35, tap-shell 108),
+  workspace clippy `-D warnings`, nightly fmt. In a test world (`TAP_PROBE`): the menu
+  reads as above; New Tab on the second tab made the new tab third (to its right), in
+  front, with the field on it, and an address typed into it loaded in that tab.
+
 ### 0.2.17 — Agents see and fill more of the page
 
 At the user's request (2026-11-07: "检查tap浏览器对ai agent协作的友好度，找优化点和bug",
@@ -1592,11 +1623,13 @@ can do honestly today:
   yet, so leaving them is the analogue), `can_reopen()`, `Tab::is_pinned()`.
   Each with a test that fails without it.
 - [x] `tap-shell`: `rightMouseDown:` on the strip builds an `NSMenu` for the tab
-  under the pointer (Reload Tab, Duplicate Tab · Copy Address, Copy as Markdown
-  Link · Close Tabs to the Right, Close Other Tabs · Close Tab, Reopen Closed
-  Tab), items enabled from the tab's state, dispatched by tag against a pending
-  target tab; a group heading gets Collapse/Expand Group. No `NSMenuDelegate`:
-  the menu is built fresh per click, as the find bar's is.
+  under the pointer (New Tab, Move to Group, Rename…, Duplicate Tab, Copy Tab
+  Details, Put to Sleep, Reopen Closed Tab), items enabled from the tab's state,
+  dispatched by tag against a pending target tab; a group heading gets
+  Collapse/Expand Group. No `NSMenuDelegate`: the menu is built fresh per click, as
+  the find bar's is. (The menu was shorter still to begin with — Reload Tab, Copy
+  Address, Copy as Markdown Link and the closing items came out in 2026-11-08; see
+  "Unreleased — The tab's menu".)
 - [ ] Left for later, when their subsystems land: Pin/Unpin (no pin drawing
   yet), Mute (`muted` is only carried in the session, never applied), Rename,
   Move to/New Group, Spaces, Split, windows, multi-select, Site Information.

@@ -57,13 +57,8 @@ pub enum Command {
     Tab = 100,
     /// The tab menu's (tabmenu): they act on the tab under the pointer, whose
     /// identity tabmenu keeps, not on the one in front.
-    TabReload = 200,
+    TabNew = 200,
     TabDuplicate,
-    TabCopyAddress,
-    TabCopyMarkdown,
-    TabCloseOthers,
-    TabCloseRight,
-    TabClose,
     TabReopen,
     TabGroupToggle,
     TabRename,
@@ -76,8 +71,6 @@ pub enum Command {
     GroupClose,
     /// Copy N Addresses: the picked tabs', one to a line.
     TabCopySelected,
-    /// Close N Tabs: the picked ones, together.
-    TabCloseSelected,
     /// Copy Tab Details: what lets an agent find the tab with `tap` (inspect).
     TabCopyDetails,
     /// Move to Group › a group: 300 and its place among the groups.

@@ -48,10 +48,10 @@ with its own name and icon, and with fixes of its own.
   it to the screen and back. Tabs and address suggestions
   move on gentle springs, hover highlights fade in and out, and a pressed tab sinks
   and springs back, with less motion when your Mac asks for it.
-- **Right-click a tab** to move it into a group (or a new one), rename it, reload,
-  duplicate, copy its address (or a Markdown link), put it to sleep, close it, the ones
-  to its right or all the others, or reopen a closed one; right-click a group's name to
-  rename, fold, ungroup or close it. Right-click the empty tab row to reopen a closed tab.
+- **Right-click a tab** for a new tab to its right, to move it into a group (or a new
+  one), rename it, duplicate, copy its details, put it to sleep, or reopen a closed
+  one; right-click a group's name to rename, fold, ungroup or close it. Right-click the
+  empty tab row to reopen a closed tab.
 - **Videos go full screen** from their player's own button, with Tap's window in
   full screen or not, and Esc twice brings them back when Settings asks for it.
 - **Settings** (⌘,), laid out as Search's, with only the settings that work — 56

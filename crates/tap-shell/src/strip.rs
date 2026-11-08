@@ -805,12 +805,9 @@ impl Strip {
                 let Some(id) = tab_at(index) else { return };
                 let Some(state) = rt::read(|browser| {
                     let tab = browser.tab(id)?;
-                    let tabs = browser.tabs();
                     let among = browser.is_selected(id);
                     Some(TabState {
                         has_page: !tab.is_blank() && !tab.is_internal(),
-                        others: tabs.iter().any(|t| t.id != id && !t.is_pinned()),
-                        right: tabs[index + 1..].iter().any(|t| !t.is_pinned()),
                         can_reopen: browser.can_reopen(),
                         pinned: tab.is_pinned(),
                         group: tab

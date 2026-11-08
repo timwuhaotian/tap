@@ -7,6 +7,21 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.1 — 2026-11-08
+
+### Added
+
+- **New Tab in a tab's right-click menu**: it opens to the right of the tab you
+  right-clicked, in front of it, in the same group, with the address field open and
+  ready for an address.
+
+### Changed
+
+- **The tab's right-click menu is shorter**: Reload Tab, Copy Address, Copy as
+  Markdown Link, Close Tab, Close Other Tabs and Close Tabs to the Right are gone
+  (⌘R, ⌘C and ⌘W still do all of it). What is left: New Tab, Move to Group,
+  Rename…, Duplicate Tab, Copy Tab Details, Put to Sleep and Reopen Closed Tab.
+
 ## 0.3.0 — 2026-11-08
 
 ### Changed

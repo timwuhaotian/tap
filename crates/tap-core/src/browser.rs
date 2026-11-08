@@ -1397,6 +1397,14 @@ impl Browser {
         Some(self.open(Some(&url), true, Some(id)))
     }
 
+    /// A new tab to the right of this one, in front of it: the tab menu's New Tab.
+    /// It joins the tab's group, as a page opened from it does, and the row's own
+    /// order (pins, groups, the rest) has the last word on where it stands.
+    pub fn new_tab_beside(&mut self, id: TabId) -> Option<TabId> {
+        let index = self.index(id)?;
+        Some(self.open_at(None, true, Some(id), Some(index + 1)))
+    }
+
     /// Everything but this one goes, as ⌘W would close it. Pinned tabs stay:
     /// Search puts a pin down rather than removing it, and Tap has no put-down
     /// yet, so leaving it standing is the same promise.
@@ -2056,7 +2064,8 @@ impl Browser {
         }
     }
 
-    /// Reloads one tab, whichever is in front: the tab menu's Reload Tab.
+    /// Reloads one tab, whichever is in front: ⌘R, or Try again over a page that said
+    /// why it isn't there.
     pub fn reload_tab(&mut self, id: TabId) {
         let Some(tab) = self.tab_mut(id) else { return };
         if tab.url.is_empty() || tab.is_internal() {
@@ -2507,6 +2516,52 @@ mod tests {
         assert_eq!(browser.tabs()[1].id, copy, "beside the tab it copies");
         assert_eq!(browser.tabs()[1].url(), "https://a.com");
         assert_eq!(browser.active(), Some(copy), "the copy comes to the front");
+    }
+
+    #[test]
+    fn a_new_tab_beside_lands_to_the_right_of_its_tab() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com", "https://c.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        let fresh = browser.new_tab_beside(ids[1]).expect("a new tab");
+        let order: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        assert_eq!(order, vec![ids[0], ids[1], fresh, ids[2]], "to its right");
+        assert_eq!(browser.active(), Some(fresh), "it comes to the front");
+        assert!(
+            browser.tab(fresh).expect("a tab").is_blank(),
+            "nothing in it yet"
+        );
+    }
+
+    #[test]
+    fn a_new_tab_beside_joins_its_tab_s_group() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.add_group(ids[0]).expect("a group");
+        let fresh = browser.new_tab_beside(ids[0]).expect("a new tab");
+        assert_eq!(
+            browser.tab(fresh).and_then(Tab::group),
+            browser.tab(ids[0]).and_then(Tab::group)
+        );
+        let order: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        assert_eq!(
+            order,
+            vec![ids[0], fresh, ids[1]],
+            "right of the tab, in its group"
+        );
+    }
+
+    #[test]
+    fn a_new_tab_beside_a_pin_stands_with_the_tabs_in_no_group() {
+        let mut browser = with_pages(&["https://a.com", "https://b.com"]);
+        let ids: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        browser.tab_mut(ids[0]).expect("a tab").entry.pin = Some("A".to_owned());
+        let fresh = browser.new_tab_beside(ids[0]).expect("a new tab");
+        let order: Vec<TabId> = browser.tabs().iter().map(|t| t.id).collect();
+        assert_eq!(order, vec![ids[0], fresh, ids[1]], "the pin stays first");
+        assert!(
+            browser.tab(fresh).and_then(Tab::group).is_none(),
+            "a pin's group is none"
+        );
     }
 
     #[test]
