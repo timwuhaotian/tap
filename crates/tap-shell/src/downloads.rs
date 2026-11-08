@@ -43,7 +43,7 @@ use objc2_foundation::{
 use objc2_web_kit::{WKDownload, WKDownloadDelegate};
 use tap_core::{browser::TabId, fetching, identity, settings_index};
 
-use crate::{palette, store};
+use crate::{motion, palette, store};
 
 /// What the door says now.
 #[derive(Clone, Debug, PartialEq)]
@@ -283,13 +283,15 @@ pub fn sync_door(button: &NSButton, ring: &Ring) {
 }
 
 /// The ring turns only while some download says no size; otherwise it fills, or rests.
+/// Under Reduce Motion it never turns: a fixed arc still says a file is coming.
 fn sync_spin(ring: &Ring) {
     let turning = matches!(door(), Door::Going { fraction: None });
     SPIN.with_borrow_mut(|slot| {
-        if !turning {
+        if !turning || motion::reduced() {
             if let Some(timer) = slot.take() {
                 timer.invalidate();
             }
+            ring.rest();
             return;
         }
         if slot.is_some() {
@@ -629,6 +631,12 @@ impl Ring {
     /// One step of the turn, about once round a second.
     fn turn(&self) {
         self.ivars().angle.set(self.ivars().angle.get() - 12.0);
+        self.setNeedsDisplay(true);
+    }
+
+    /// The ring at rest: a fixed arc, for Reduce Motion.
+    fn rest(&self) {
+        self.ivars().angle.set(90.0);
         self.setNeedsDisplay(true);
     }
 

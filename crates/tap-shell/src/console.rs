@@ -213,12 +213,27 @@ pub fn show(tab: TabId) {
 
 fn render(shown: Option<&Shown>) {
     let Some(shown) = shown else { return };
+    // A reader already at the tail follows the newest line; one scrolling back
+    // through earlier lines keeps their place instead of being yanked down.
+    let was_at_end = at_end(&shown.view);
     shown.view.setString(&NSString::from_str(&text(shown.tab)));
-    // The tail is what matters: the newest line stays in sight.
-    // SAFETY: NSResponder's own scroller, with no sender.
-    unsafe {
-        let _: () = msg_send![&shown.view, scrollToEndOfDocument: Option::<&AnyObject>::None];
+    if was_at_end {
+        // SAFETY: NSResponder's own scroller, with no sender.
+        unsafe {
+            let _: () = msg_send![&shown.view, scrollToEndOfDocument: Option::<&AnyObject>::None];
+        }
     }
+}
+
+/// Whether the console shows its newest line: the visible bottom sits at the
+/// document's bottom. A freshly opened window has nothing shown yet and counts
+/// as at the end, so the first lines land in sight.
+fn at_end(view: &NSTextView) -> bool {
+    let Some(scroll) = view.enclosingScrollView() else {
+        return true;
+    };
+    let visible = scroll.documentVisibleRect();
+    visible.origin.y + visible.size.height >= view.bounds().size.height - 4.0
 }
 
 fn make(mtm: MainThreadMarker) -> (Retained<NSWindow>, Retained<NSTextView>) {

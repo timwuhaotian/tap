@@ -24,6 +24,17 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-08 UI/UX audit fixes (0.3.3):** a UI/UX audit pass (impeccable `audit`,
+11 dimensions across the shell) found no P0s; this patch ships its P1/P2 bug fixes:
+full-screen Escape now spares a field editor, Settings fits its narrowest window and
+names its controls for VoiceOver, the find bar's count no longer clips, the downloads
+ring rests under Reduce Motion, the floating video's buttons are white on black with
+labels and tooltips, the address field tracks window resizes, menu items validate,
+and console autoscroll, the Safari import note, the Settings › About update status and
+column layout are corrected. Deferred (need design or milestone work): the shared
+`MUTED` light contrast token, custom AX for the security badge and the sign-in card,
+and the Settings find-field debounce.
+
 **2026-11-05 import decision:** Browser imports offer only Chrome and Safari. Safari
 uses an export ZIP chosen by the user; Tap profile backups and password CSV imports
 remain. Search discovery, profile-file registration, and lazy Search password access

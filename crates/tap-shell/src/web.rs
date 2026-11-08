@@ -1710,7 +1710,7 @@ mod escape {
     use block2::RcBlock;
     use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained, runtime::AnyObject};
     use objc2_app_kit::{
-        NSEvent, NSEventMask, NSPanel, NSTextField, NSWindow, NSWindowOrderingMode,
+        NSEvent, NSEventMask, NSPanel, NSTextField, NSTextView, NSWindow, NSWindowOrderingMode,
         NSWindowStyleMask,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -1795,11 +1795,17 @@ mod escape {
             return true;
         };
         // A text field's Escape is its own (a find field closing, a form giving
-        // up): only a page holding the keys is guarded.
-        if let Some(held) = window.firstResponder()
-            && held.downcast_ref::<NSTextField>().is_some()
-        {
-            return true;
+        // up): only a page holding the keys is guarded. While a field edits, the
+        // window's first responder is the field editor (an NSTextView), not the
+        // field itself, so a field editor is let through too.
+        if let Some(held) = window.firstResponder() {
+            let field = held.downcast_ref::<NSTextField>().is_some()
+                || held
+                    .downcast_ref::<NSTextView>()
+                    .is_some_and(NSTextView::isFieldEditor);
+            if field {
+                return true;
+            }
         }
         let at = Retained::as_ptr(&window) as usize;
         // Which full screen, if any: a page WebKit has in its own window, or

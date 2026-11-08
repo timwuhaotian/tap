@@ -222,7 +222,7 @@ pub fn update(state: &State, focus: bool) {
         // The count hugs the nav: sized to its words and pinned by its right edge, so a
         // long count grows left over open space, never under the arrows.
         let edge = bar.previous.frame().origin.x - 6.0;
-        let min = SHADOW + 12.0 + FIELD + 6.0;
+        let min = SHADOW + 12.0;
         let mut frame = bar.status.frame();
         frame.size.width = frame.size.width.min(edge - min).max(0.0);
         frame.origin.x = edge - frame.size.width;

@@ -37,7 +37,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationDidBecomeActiveNotification,
+    NSAccessibility, NSApplication, NSApplicationDidBecomeActiveNotification,
     NSApplicationDidResignActiveNotification, NSAutoresizingMaskOptions, NSBackingStoreType,
     NSButton, NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFloatingWindowLevel, NSPanel,
     NSResponder, NSScreen, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
@@ -405,10 +405,10 @@ fn move_page(tab: TabId, why: Why) {
 /// window whose only job is the picture does not need the fade to be usable.
 fn add_controls(mtm: MainThreadMarker, ground: &NSView, size: NSSize) {
     let target = target(mtm);
-    for (title, action, x) in [
-        ("✕", sel!(dismiss:), size.width - 112.0),
-        ("❚❚", sel!(play_pause:), size.width - 76.0),
-        ("↗", sel!(go_back:), size.width - 40.0),
+    for (title, name, action, x) in [
+        ("✕", "Close", sel!(dismiss:), size.width - 112.0),
+        ("❚❚", "Pause", sel!(play_pause:), size.width - 76.0),
+        ("↗", "Back to tab", sel!(go_back:), size.width - 40.0),
     ] {
         // SAFETY: the target lives in TARGET for the app's life, and each action
         // takes the sender, as an action must.
@@ -421,6 +421,11 @@ fn add_controls(mtm: MainThreadMarker, ground: &NSView, size: NSSize) {
             )
         };
         button.setBordered(false);
+        // The panel is always black, so the glyphs are always white; in a light
+        // appearance the default controlTextColor would be black on black.
+        button.setContentTintColor(Some(&NSColor::whiteColor()));
+        button.setAccessibilityLabel(Some(&NSString::from_str(name)));
+        button.setToolTip(Some(&NSString::from_str(name)));
         button.setFrame(NSRect::new(
             NSPoint::new(x, size.height - 34.0),
             NSSize::new(30.0, 26.0),

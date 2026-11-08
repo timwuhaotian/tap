@@ -721,6 +721,12 @@ fn place_field(views: &Views, view: &View, opened: bool) {
                     views.bar.addSubview(field);
                 }
                 field.setFrame(views.bar.field_rect());
+                // The capsule stays centred as the window widens or narrows; the
+                // field rides with it instead of drifting off the drawn line.
+                field.setAutoresizingMask(
+                    NSAutoresizingMaskOptions::ViewMinXMargin
+                        | NSAutoresizingMaskOptions::ViewMaxXMargin,
+                );
             } else {
                 views.plate.setHidden(true);
                 let Some(rect) = views.strip.field_rect() else {
@@ -732,6 +738,9 @@ fn place_field(views: &Views, view: &View, opened: bool) {
                     views.strip.addSubview(field);
                 }
                 field.setFrame(rect);
+                // The live tab stays where it is as the window widens; only the
+                // air to its right grows.
+                field.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMaxXMargin);
             }
             if opened {
                 field.setStringValue(&NSString::from_str(&editing.typed));

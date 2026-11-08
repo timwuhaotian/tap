@@ -7,6 +7,38 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.3 — 2026-11-08
+
+### Fixed
+
+- **Esc in a field stays Esc in full screen**: the first Escape while the address or
+  find field is editing is its own again — it closes the edit, instead of raising the
+  "Press Esc again to leave full screen" reminder (a field edits through its field
+  editor, which the full-screen monitor now recognises).
+- **Settings fits its smallest window**: the column no longer clamps to 360 points
+  when the window can't hold it, so nothing is clipped at the minimum width.
+- **Settings names itself for VoiceOver**: every switch, menu and segment control
+  carries its row's title; the find field has a label; the little "more" mark is no
+  longer a dead button; the "already default browser" checkmark says what it is.
+- **The find bar's count is never cut off**: "No matches", "1 000 of 1 000+" and the
+  rest grow left over the field's empty space instead of being clipped at 48 points.
+- **The downloads ring rests under Reduce Motion**: with Reduce Motion on, a file
+  that hasn't said its size shows a still arc instead of a spinning one.
+- **The floating video's controls read on a light Mac**: the panel is always black,
+  so its buttons are now always white, and each carries a label and tooltip (Close,
+  Pause, Back to tab) for VoiceOver and the pointer.
+- **The address field stays on the address**: resizing the window while editing no
+  longer leaves the field drifting off the capsule or the tab's pill.
+- **Menu items say what they can do**: Back, Forward, Stop and Reload are disabled
+  when there is no history or nothing loading, as macOS menus should be.
+- **The console follows a reader, not the other way**: new console lines only pull
+  the view down when it was already at the bottom, so scrolling back through older
+  lines keeps your place.
+- **Settings › About wakes up after an update check**: the Updates row shows "Tap
+  x.y.z is ready" without needing the page to rebuild for another reason.
+- **The Safari import note is a note, not a failure**: the plaintext-passwords
+  warning appears only when passwords were in the file, and no longer as a red "!".
+
 ## 0.3.2 — 2026-11-08
 
 ### Changed

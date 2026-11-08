@@ -14,7 +14,12 @@ use objc2_app_kit::{
     NSApplicationTerminateReply, NSEventModifierFlags, NSMenu, NSMenuItem,
 };
 use objc2_foundation::{NSArray, NSInteger, NSNotification, NSString, NSURL};
-use tap_core::{browser::Browser, identity, internal::Page, settings_index};
+use tap_core::{
+    browser::{Browser, Tab},
+    identity,
+    internal::Page,
+    settings_index,
+};
 
 use crate::{bench, findbar, inspector, links, prefs, profile, rt, store, update, update_window};
 
@@ -77,6 +82,27 @@ pub enum Command {
     TabIntoGroup = 300,
     /// A heading's Color › a colour: 400 and its place in `groups::COLOURS`.
     GroupColour = 400,
+}
+
+/// Whether a command can act right now: AppKit asks through `validateMenuItem:`.
+/// Back and Forward need history in the front tab, Stop and Reload need a page
+/// loading; everything else can always run.
+fn can_run(tag: NSInteger) -> bool {
+    match tag {
+        t if t == Command::Reload as NSInteger
+            || t == Command::Stop as NSInteger
+            || t == Command::ReloadOrStop as NSInteger =>
+        {
+            rt::read(|browser| browser.active_tab().is_some_and(Tab::loading)).unwrap_or(false)
+        }
+        t if t == Command::Back as NSInteger => {
+            rt::read(|browser| browser.active_tab().is_some_and(Tab::can_back)).unwrap_or(false)
+        }
+        t if t == Command::Forward as NSInteger => {
+            rt::read(|browser| browser.active_tab().is_some_and(Tab::can_forward)).unwrap_or(false)
+        }
+        _ => true,
+    }
 }
 
 /// Runs a command as its menu item or button would.
@@ -229,6 +255,14 @@ define_class!(
             // answer `tag` with an NSInteger.
             let tag: NSInteger = unsafe { msg_send![sender, tag] };
             run(tag);
+        }
+
+        // AppKit asks each menu item whether it can act (Search's
+        // `validateMenuItem:`): Back and Forward need history, Stop and Reload need
+        // a page loading. The rest stay enabled.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            can_run(item.tag())
         }
     }
 );

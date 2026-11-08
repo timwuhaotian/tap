@@ -21,10 +21,10 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
-    NSControl, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSFontAttributeName,
-    NSFontWeightMedium, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage,
-    NSImageAlignment, NSImageView, NSKernAttributeName, NSModalResponseOK, NSOpenPanel,
+    NSAccessibility, NSAlert, NSAlertFirstButtonReturn, NSAutoresizingMaskOptions, NSBezierPath,
+    NSButton, NSColor, NSControl, NSControlStateValueOff, NSControlStateValueOn, NSFont,
+    NSFontAttributeName, NSFontWeightMedium, NSFontWeightSemibold, NSForegroundColorAttributeName,
+    NSImage, NSImageAlignment, NSImageView, NSKernAttributeName, NSModalResponseOK, NSOpenPanel,
     NSPopUpButton, NSResponder, NSScrollView, NSSearchField, NSSegmentSwitchTracking,
     NSSegmentedControl, NSSwitch, NSTextField, NSView, NSWorkspace,
 };
@@ -226,6 +226,7 @@ pub fn view(mtm: MainThreadMarker, frame: NSRect) -> Retained<NSView> {
     rail.setAutoresizingMask(NSAutoresizingMaskOptions::ViewHeightSizable);
     let find = NSSearchField::new(mtm);
     find.setPlaceholderString(Some(&NSString::from_str("Find a setting")));
+    find.setAccessibilityLabel(Some(&NSString::from_str("Find a setting")));
     find.setSendsSearchStringImmediately(true);
     // SAFETY: the target lives as long as the page, and `changed:` takes the sender.
     unsafe {
@@ -606,7 +607,7 @@ fn build_column(mtm: MainThreadMarker, state: &State) {
     let visible = state.scroll.contentView().bounds();
     let keep = visible.origin;
     let area = state.scroll.contentSize().width;
-    let width = COLUMN.min(area - 48.0).max(360.0);
+    let width = (area - 48.0).clamp(280.0, COLUMN);
     let left = ((area - width) / 2.0).max(16.0);
     let column: Retained<Column> = {
         let this = Column::alloc(mtm).set_ivars(());
@@ -827,13 +828,11 @@ fn row(
             &NSString::from_str("info.circle"),
             None,
         );
-        // SAFETY: no target or action, so nothing is ever sent anywhere.
-        let info = unsafe {
-            NSButton::buttonWithImage_target_action(&image.unwrap_or_default(), None, None, mtm)
-        };
-        info.setBordered(false);
+        // Decorative: the words already carry the story, so VoiceOver skips it.
+        let info = NSImageView::imageViewWithImage(&image.unwrap_or_default(), mtm);
         info.setContentTintColor(Some(if counts { &muted } else { &faded }));
         info.setToolTip(Some(&NSString::from_str(more)));
+        info.setAccessibilityElement(false);
         let info_x = (TEXT_INSET + title_width + 5.0).min(TEXT_INSET + words - 15.0);
         info.setFrame(NSRect::new(
             NSPoint::new(info_x, text_top + 2.0),
@@ -857,6 +856,11 @@ fn row(
             ));
         }
         set_enabled(&control, counts);
+        // VoiceOver reads which setting a switch, menu or segment changes: the
+        // row's title, not a bare "switch, on".
+        if let Some(control) = control.downcast_ref::<NSControl>() {
+            control.setAccessibilityLabel(Some(&NSString::from_str(&title_of(item))));
+        }
         card.addSubview(&control);
     }
     // What goes under a row's words: the custom engine's address, the site shortcuts.
@@ -1135,6 +1139,9 @@ fn make_control(
             if item.id == "general.default" && is_default_browser() {
                 let mark = symbol(mtm, "checkmark", 16.0);
                 mark.setContentTintColor(Some(&palette::INK.dynamic()));
+                mark.setAccessibilityLabel(Some(&NSString::from_str(
+                    "Already the default browser",
+                )));
                 return Some(Retained::into_super(Retained::into_super(mark)));
             }
             let holder = NSView::new(mtm);

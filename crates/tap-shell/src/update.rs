@@ -32,7 +32,7 @@ use objc2_app_kit::NSMenuItem;
 use objc2_foundation::{NSBundle, NSString, NSTimer};
 use tap_core::{identity, settings_index};
 
-use crate::{prefs, store, update_window};
+use crate::{prefs, settings, store, update_window};
 
 /// Raw from `main`, where the release commit puts the DMG and this file together.
 const MANIFEST_URL: &str =
@@ -791,6 +791,9 @@ fn checked(found: Result<Found, String>) {
         Shown::Working(_) => "working".to_owned(),
     };
     crate::oslog::note(&format!("update check: {summary}"));
+    // An open Settings › About page shows the same status as the menu item: it
+    // is built lazily, so tell it the check landed.
+    settings::changed();
     // A staged update asks on its own, whether or not anyone chose Check for
     // Updates…: that is the one outcome a silent check speaks up about.
     if asked || matches!(shown, Shown::Ready { .. }) {

@@ -675,25 +675,31 @@ fn choose_safari() {
             safari::read(&bytes)
         })();
         dispatch2::DispatchQueue::main().exec_async(move || {
-            let mut said = match result {
+            let said = match result {
                 Ok(mut export) => {
                     export.incoming.leave_out(&open);
-                    let found = (wants.passwords
-                        && (!export.passwords.is_empty() || export.password_skipped > 0))
+                    let had_passwords = wants.passwords
+                        && (!export.passwords.is_empty() || export.password_skipped > 0);
+                    let found = had_passwords
                         .then_some(Passwords::Export(export.passwords, export.password_skipped));
                     let mut said = land(Source::Safari, Ok(export.incoming), found, wants);
                     if said.is_empty() {
                         said.push((false, "That file has nothing Tap can bring in".to_owned()));
                     }
+                    // The file itself may still hold plaintext passwords; a note,
+                    // not a failure, and only when passwords were in it.
+                    if had_passwords {
+                        said.push((
+                            true,
+                            "The export may hold passwords in the clear: delete it when no \
+                             longer needed"
+                                .to_owned(),
+                        ));
+                    }
                     said
                 }
                 Err(why) => vec![(false, why)],
             };
-            said.push((
-                false,
-                "The export may hold passwords in the clear: delete it when no longer needed"
-                    .to_owned(),
-            ));
             SHEET.with_borrow_mut(|slot| {
                 if let Some(sheet) = slot.as_mut() {
                     sheet.bringing = false;
