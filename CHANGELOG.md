@@ -7,6 +7,21 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.0 — 2026-11-08
+
+### Changed
+
+- **The page-load path is audited and tightened.** The load's own path was already
+  thin; the waste had moved to work repeated per animation frame, big-structure
+  clones on every finished page, and shared objects rebuilt as if they were
+  per-tab. The load line no longer redraws the whole tab row (each frame of a
+  load drew every tab again for pixels AppKit clipped away), History is copied by
+  a refcount instead of by three maps of strings, suggestions are ranked as
+  borrowed keys and only the winners are built, the one content controller every
+  page shares is rebuilt only when something actually moved, Settings waits to be
+  shown, a favicon this run kept is reused for another page of the same site, and
+  the reading and download relays speak only when what they say has changed.
+
 ## 0.2.24 — 2026-11-08
 
 ### Added
