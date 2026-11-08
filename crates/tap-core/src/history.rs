@@ -7,6 +7,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -172,7 +173,7 @@ fn score(visit: &Visit, now: f64) -> f64 {
 
 /// Where the match falls decides most of the ordering: the start of the host is what
 /// people mean, the middle of a path almost never is.
-fn rank(key: &str, needle: &str) -> Option<f64> {
+fn rank(key: &str, needle: &str, needle_chars: usize) -> Option<f64> {
     if key.starts_with(needle) {
         return Some(6.0);
     }
@@ -185,11 +186,11 @@ fn rank(key: &str, needle: &str) -> Option<f64> {
     }
     // Only from two letters up: one letter matching anywhere inside a name turns "x"
     // into example.com and netflix.com, which is not what anybody meant by it.
-    if needle.chars().count() >= 2 && host.contains(needle) {
+    if needle_chars >= 2 && host.contains(needle) {
         return Some(2.0);
     }
     // Path and query matches are useful, but less specific than a host match.
-    (needle.chars().count() >= 2 && key.contains(needle)).then_some(1.0)
+    (needle_chars >= 2 && key.contains(needle)).then_some(1.0)
 }
 
 /// Somewhere to start on the first day. Ranked below anything visited, and dropped the
@@ -244,12 +245,36 @@ const KNOWN: [(&str, &str); 47] = [
     ("lemonde.fr", "Le Monde"),
 ];
 
-/// The places you have been.
+/// The places you have been. Behind an `Arc` so the copy handed to the writer thread
+/// on every finished page is a refcount, not a few thousand string clones; mutating
+/// goes through `Arc::make_mut`, which copies only while a snapshot is still held.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct History {
+    inner: Arc<Inner>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Inner {
     visits: HashMap<String, Visit>,
     page_text: HashMap<String, PageText>,
     visited_hosts: HashSet<String>,
+}
+
+impl Inner {
+    fn remember(&mut self, key: &str) {
+        let Some(visit) = self.visits.get(key) else {
+            return;
+        };
+        let text = page_text(&visit.url);
+        self.keep_text(key, text);
+    }
+
+    fn keep_text(&mut self, key: &str, text: PageText) {
+        if !text.host.is_empty() {
+            self.visited_hosts.insert(text.host.clone());
+        }
+        self.page_text.insert(key.to_owned(), text);
+    }
 }
 
 impl History {
@@ -260,7 +285,7 @@ impl History {
     #[must_use]
     pub fn load(data: &[u8]) -> Option<(History, bool)> {
         let list: Vec<Visit> = serde_json::from_slice(data).ok()?;
-        let mut history = History::default();
+        let mut inner = Inner::default();
         let mut cleaned = false;
         for mut visit in list {
             visit.count = visit.count.clamp(0, MOST_VISITS);
@@ -271,51 +296,48 @@ impl History {
                 }
                 visit.key = identity(&visit.url);
             }
-            let merged = match history.visits.remove(&visit.key) {
+            let merged = match inner.visits.remove(&visit.key) {
                 Some(other) => merged(other, visit),
                 None => visit,
             };
-            history.visits.insert(merged.key.clone(), merged);
+            inner.visits.insert(merged.key.clone(), merged);
         }
-        let keys: Vec<String> = history.visits.keys().cloned().collect();
+        let keys: Vec<String> = inner.visits.keys().cloned().collect();
         for key in keys {
-            history.remember(&key);
+            inner.remember(&key);
         }
-        Some((history, cleaned))
+        Some((
+            History {
+                inner: Arc::new(inner),
+            },
+            cleaned,
+        ))
     }
 
     /// The file as Search writes it: the most-visited-lately first, capped.
     #[must_use]
     pub fn encode(&self, now: f64) -> Vec<u8> {
-        let mut list: Vec<&Visit> = self.visits.values().collect();
-        list.sort_by(|a, b| {
-            score(b, now)
-                .total_cmp(&score(a, now))
-                .then_with(|| a.key.cmp(&b.key))
-        });
+        // Scores worked out once each, not inside the comparator (`score` is an `exp`).
+        let mut list: Vec<(f64, &Visit)> = self
+            .inner
+            .visits
+            .values()
+            .map(|visit| (score(visit, now), visit))
+            .collect();
+        list.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.key.cmp(&b.1.key)));
         list.truncate(KEPT);
+        let list: Vec<&Visit> = list.into_iter().map(|(_, visit)| visit).collect();
         serde_json::to_vec(&list).unwrap_or_default()
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.visits.len()
+        self.inner.visits.len()
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.visits.is_empty()
-    }
-
-    fn remember(&mut self, key: &str) {
-        let Some(visit) = self.visits.get(key) else {
-            return;
-        };
-        let text = page_text(&visit.url);
-        if !text.host.is_empty() {
-            self.visited_hosts.insert(text.host.clone());
-        }
-        self.page_text.insert(key.to_owned(), text);
+        self.inner.visits.is_empty()
     }
 
     /// A page you looked at. A deep page is also, in the way that matters here, a visit
@@ -330,35 +352,54 @@ impl History {
         if key.is_empty() {
             return false;
         }
-        if !page_text(&url).homepage
+        let text = page_text(&url);
+        let inner = Arc::make_mut(&mut self.inner);
+        if !text.homepage
             && let Some(home) = homepage(&url)
         {
             let root = identity(&home);
-            let door = self.visits.entry(root.clone()).or_insert_with(|| Visit {
-                url: home,
-                key: root.clone(),
-                title: String::new(),
-                count: 0,
-                last: now,
+            let mut fresh = false;
+            let door = inner.visits.entry(root.clone()).or_insert_with(|| {
+                fresh = true;
+                Visit {
+                    url: home,
+                    key: root.clone(),
+                    title: String::new(),
+                    count: 0,
+                    last: now,
+                }
             });
             door.count = (door.count + 1).min(MOST_VISITS);
             door.last = now;
-            self.remember(&root);
+            // A front door already standing has its text worked out; only a new one
+            // needs it (every visit's text is noted as the visit lands).
+            if fresh {
+                inner.remember(&root);
+            }
         }
-        let visit = self.visits.entry(key.clone()).or_insert_with(|| Visit {
-            url: url.clone(),
-            key: key.clone(),
-            title: String::new(),
-            count: 0,
-            last: now,
+        let mut fresh = false;
+        let visit = inner.visits.entry(key.clone()).or_insert_with(|| {
+            fresh = true;
+            Visit {
+                url: url.clone(),
+                key: key.clone(),
+                title: String::new(),
+                count: 0,
+                last: now,
+            }
         });
         visit.count = (visit.count + 1).min(MOST_VISITS);
         visit.last = now;
-        visit.url = url;
+        if visit.url != url {
+            visit.url = url;
+            fresh = true;
+        }
         if !title.is_empty() {
             title.clone_into(&mut visit.title);
         }
-        self.remember(&key);
+        if fresh {
+            inner.keep_text(&key, text);
+        }
         true
     }
 
@@ -375,7 +416,8 @@ impl History {
         if key.is_empty() {
             return false;
         }
-        if let Some(seen) = self.visits.get_mut(&key) {
+        let inner = Arc::make_mut(&mut self.inner);
+        if let Some(seen) = inner.visits.get_mut(&key) {
             seen.count = seen.count.max(count).min(MOST_VISITS);
             if last > seen.last {
                 seen.last = last;
@@ -385,7 +427,7 @@ impl History {
             }
             return true;
         }
-        self.visits.insert(
+        inner.visits.insert(
             key.clone(),
             Visit {
                 url,
@@ -395,7 +437,7 @@ impl History {
                 last,
             },
         );
-        self.remember(&key);
+        inner.remember(&key);
         true
     }
 
@@ -428,13 +470,18 @@ impl History {
     /// The page's title arrived, or changed. Answers whether anything changed.
     pub fn retitle(&mut self, url: &str, title: &str) -> bool {
         let key = identity(url);
-        match self.visits.get_mut(&key) {
-            Some(visit) if !title.is_empty() && visit.title != title => {
-                title.clone_into(&mut visit.title);
-                true
-            }
-            _ => false,
+        let changes = self
+            .inner
+            .visits
+            .get(&key)
+            .is_some_and(|visit| !title.is_empty() && visit.title != title);
+        if !changes {
+            return false;
         }
+        if let Some(visit) = Arc::make_mut(&mut self.inner).visits.get_mut(&key) {
+            title.clone_into(&mut visit.title);
+        }
+        true
     }
 
     /// The best few places for what was typed: a place you have been always beats one
@@ -442,54 +489,68 @@ impl History {
     /// lately beats one you saw once in March. An empty field offers nothing.
     #[must_use]
     pub fn suggestions(&self, typed: &str, limit: usize, now: f64) -> Vec<Suggestion> {
+        // A candidate before it is built: matches are borrowed and ranked first, and
+        // only the few that survive pay for their strings. A short needle can match
+        // nearly everything kept, and this runs on every key.
+        enum Source<'a> {
+            Visited(&'a Visit, &'a PageText),
+            Known(&'a str, &'a str),
+        }
         let needle = stripped(typed);
         if needle.is_empty() {
             return Vec::new();
         }
-        let mut found: Vec<(f64, Suggestion)> = Vec::new();
-        for visit in self.visits.values() {
-            let Some(text) = self.page_text.get(&visit.key) else {
+        let needle_chars = needle.chars().count();
+        let mut found: Vec<(f64, usize, &str, Source<'_>)> = Vec::new();
+        for visit in self.inner.visits.values() {
+            let Some(text) = self.inner.page_text.get(&visit.key) else {
                 continue;
             };
-            let Some(rank) = rank(&text.searchable, &needle) else {
+            let Some(rank) = rank(&text.searchable, &needle, needle_chars) else {
                 continue;
             };
             // The front door before the room inside it.
             let score = rank + 4.0 + score(visit, now) + if text.homepage { 1.5 } else { 0.0 };
             found.push((
                 score,
-                Suggestion {
-                    key: text.address.clone(),
-                    title: visit.title.clone(),
-                    url: visit.url.clone(),
-                    kind: Kind::Visited,
-                },
+                text.address.chars().count(),
+                &text.address,
+                Source::Visited(visit, text),
             ));
         }
         for (host, title) in KNOWN {
-            if self.visited_hosts.contains(host) {
+            if self.inner.visited_hosts.contains(host) {
                 continue;
             }
-            if let Some(rank) = rank(host, &needle) {
-                found.push((
-                    rank,
-                    Suggestion {
-                        key: host.to_owned(),
-                        title: title.to_owned(),
-                        url: format!("https://{host}"),
-                        kind: Kind::Known,
-                    },
-                ));
+            if let Some(rank) = rank(host, &needle, needle_chars) {
+                found.push((rank, host.chars().count(), host, Source::Known(host, title)));
             }
         }
         // Higher first, then the shorter key, then the key itself, so the order is the
         // same every time.
         found.sort_by(|a, b| {
             b.0.total_cmp(&a.0)
-                .then_with(|| a.1.key.chars().count().cmp(&b.1.key.chars().count()))
-                .then_with(|| a.1.key.cmp(&b.1.key))
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(b.2))
         });
-        found.into_iter().take(limit).map(|(_, s)| s).collect()
+        found
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, _, source)| match source {
+                Source::Visited(visit, text) => Suggestion {
+                    key: text.address.clone(),
+                    title: visit.title.clone(),
+                    url: visit.url.clone(),
+                    kind: Kind::Visited,
+                },
+                Source::Known(host, title) => Suggestion {
+                    key: host.to_owned(),
+                    title: title.to_owned(),
+                    url: format!("https://{host}"),
+                    kind: Kind::Known,
+                },
+            })
+            .collect()
     }
 
     /// What the field draws greyed out after the caret: the rest of the best match, or
@@ -515,6 +576,7 @@ impl History {
         } else {
             among
         };
+        let typed_lower = typed.to_lowercase();
         for option in options {
             for (key, target) in endings(option) {
                 if key.chars().count() < typed_len {
@@ -528,7 +590,7 @@ impl History {
                     .nth(typed_len)
                     .map_or(key.len(), |(i, _)| i);
                 let (prefix, rest) = key.split_at(split);
-                if prefix.to_lowercase() != typed.to_lowercase() {
+                if prefix.to_lowercase() != typed_lower {
                     continue;
                 }
                 let Some(completed) = address::url(&format!("{typed}{rest}")) else {
@@ -583,6 +645,7 @@ mod tests {
 
     fn pages(history: &History, host: &str) -> Vec<Visit> {
         let mut list: Vec<Visit> = history
+            .inner
             .visits
             .values()
             .filter(|v| {

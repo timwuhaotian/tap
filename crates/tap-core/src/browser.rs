@@ -360,14 +360,24 @@ impl Tab {
         false
     }
 
-    fn entry(&self) -> session::Entry {
-        session::Entry {
-            url: self.url.clone(),
-            title: self.title.clone(),
-            touched: Some(self.touched),
-            tap_id: Some(self.id.0),
-            ..self.entry.clone()
+    /// [`Tab::set`] for text the page reports: compared before anything is copied, so a
+    /// report that repeats what stands (progress ticks do) allocates nothing.
+    fn set_text(field: &mut String, value: &str, dirty: &mut TabFields, flag: TabFields) -> bool {
+        if field == value {
+            return false;
         }
+        value.clone_into(field);
+        dirty.insert(flag);
+        true
+    }
+
+    fn entry(&self) -> session::Entry {
+        let mut entry = self.entry.clone();
+        self.url.clone_into(&mut entry.url);
+        self.title.clone_into(&mut entry.title);
+        entry.touched = Some(self.touched);
+        entry.tap_id = Some(self.id.0);
+        entry
     }
 }
 
@@ -2016,7 +2026,9 @@ impl Browser {
     /// (Search's `selectedTabLinkCount != 0` disables the menu item).
     #[must_use]
     pub fn can_copy_selected(&self) -> bool {
-        !self.selected_links().is_empty()
+        self.tabs
+            .iter()
+            .any(|t| self.selected.contains(&t.id) && !t.is_blank() && !t.is_internal())
     }
 
     pub fn focus_page(&mut self) {
@@ -2078,7 +2090,7 @@ impl Browser {
         if url.is_empty() || url == "about:blank" && tab.url.is_empty() {
             return;
         }
-        if !Tab::set(&mut tab.url, url.to_owned(), &mut tab.dirty, TabFields::URL) {
+        if !Tab::set_text(&mut tab.url, url, &mut tab.dirty, TabFields::URL) {
             return;
         }
         self.session_changed = true;
@@ -2086,12 +2098,7 @@ impl Browser {
 
     pub fn page_title(&mut self, id: TabId, title: &str) {
         let Some(tab) = self.tab_mut(id) else { return };
-        if !Tab::set(
-            &mut tab.title,
-            title.to_owned(),
-            &mut tab.dirty,
-            TabFields::TITLE,
-        ) {
+        if !Tab::set_text(&mut tab.title, title, &mut tab.dirty, TabFields::TITLE) {
             return;
         }
         let url = tab.url.clone();

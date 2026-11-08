@@ -61,6 +61,16 @@ pub fn card_path(rect: NSRect) -> Retained<NSBezierPath> {
     NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, CARD_RADIUS, CARD_RADIUS)
 }
 
+/// Whether two rects share any ground: what a draw can skip when AppKit has only
+/// dirtied part of a view (the load line's frames dirty a sliver, once a frame).
+#[must_use]
+pub fn overlaps(a: NSRect, b: NSRect) -> bool {
+    a.origin.x < b.origin.x + b.size.width
+        && b.origin.x < a.origin.x + a.size.width
+        && a.origin.y < b.origin.y + b.size.height
+        && b.origin.y < a.origin.y + a.size.height
+}
+
 /// A pill's outline at the chrome radius: tabs, picked rows, the address capsule.
 #[must_use]
 pub fn pill_path(rect: NSRect) -> Retained<NSBezierPath> {

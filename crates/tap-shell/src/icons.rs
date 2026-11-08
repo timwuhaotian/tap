@@ -8,7 +8,13 @@
 //! a second icon for the dark look; the letter shown before an icon arrives; icons in
 //! the field's rows.
 
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, ptr, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    ptr,
+    time::Duration,
+};
 
 use block2::RcBlock;
 use objc2::{AllocAnyThread, rc::Retained};
@@ -55,6 +61,14 @@ const PROBE: &str = r"(() => {
 thread_local! {
     static INDEX: RefCell<Option<Index>> = const { RefCell::new(None) };
     static IMAGES: RefCell<HashMap<String, Retained<NSImage>>> = RefCell::new(HashMap::new());
+    /// What `image_for` last found per address, misses included: the strip asks for
+    /// every tab it draws, and each answer otherwise re-parsed the address as a
+    /// URL and walked the index again. Emptied whenever an icon is recorded.
+    static BY_ADDRESS: RefCell<HashMap<String, Option<Retained<NSImage>>>> =
+        RefCell::new(HashMap::new());
+    /// The icons this run has fetched and kept: the same icon address another
+    /// page of the same site already brought in, so it is not fetched again.
+    static KEPT: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 fn folder() -> PathBuf {
@@ -77,9 +91,14 @@ fn with_index<R>(f: impl FnOnce(&mut Index) -> R) -> R {
 
 /// The icon a page wears, if one is kept: the tab strip draws it.
 pub fn image_for(address: &str) -> Option<Retained<NSImage>> {
-    let url = Url::parse(address)?;
-    let name = with_index(|index| index.lookup(&url, false))?;
-    image_named(&name)
+    if let Some(found) = BY_ADDRESS.with_borrow(|cache| cache.get(address).cloned()) {
+        return found;
+    }
+    let found = Url::parse(address)
+        .and_then(|url| with_index(|index| index.lookup(&url, false)))
+        .and_then(|name| image_named(&name));
+    BY_ADDRESS.with_borrow_mut(|cache| cache.insert(address.to_owned(), found.clone()));
+    found
 }
 
 fn image_named(name: &str) -> Option<Retained<NSImage>> {
@@ -89,9 +108,18 @@ fn image_named(name: &str) -> Option<Retained<NSImage>> {
             NSImage::alloc(),
             &NSString::from_str(&path.display().to_string()),
         )?;
-        square_png(&image)?;
+        // Drawn into the square to prove it is an icon (not, say, wholly
+        // transparent); the PNG encode that used to follow was thrown away.
+        square_rep(&image)?;
         Some(image)
     })
+}
+
+/// A kept icon still inside its week, by the time its PNG was written.
+fn fresh(name: &str) -> bool {
+    std::fs::metadata(folder().join(format!("{name}.png")))
+        .and_then(|kept| kept.modified())
+        .is_ok_and(|kept| kept.elapsed().is_ok_and(|age| age < FRESH))
 }
 
 fn cached_image(
@@ -123,9 +151,7 @@ pub fn fetch(tab: TabId, web: &WKWebView) {
     // rewrote the PNG and the whole index JSON on the main thread. Only the page's
     // own record counts: a neighbour's fresh icon is no proof this page was probed.
     if let Some(name) = with_index(|index| index.exact(&page, false))
-        && std::fs::metadata(folder().join(format!("{name}.png")))
-            .and_then(|kept| kept.modified())
-            .is_ok_and(|kept| kept.elapsed().is_ok_and(|age| age < FRESH))
+        && fresh(&name)
         && image_named(&name).is_some()
     {
         return;
@@ -144,6 +170,17 @@ fn try_next(tab: TabId, page: Url, candidates: Vec<String>, at: usize) {
     let Some(address) = candidates.get(at).cloned() else {
         return;
     };
+    // The same icon address another page of this run already brought in and
+    // verified: kept as this page's too, without fetching, decoding and
+    // redrawing it again. Most of a site's pages declare the one favicon. Only
+    // what this run kept is used: a file kept another day may be the site's
+    // old icon, and the page would wear that.
+    let name = icons::ident(&address);
+    if KEPT.with_borrow(|kept| kept.contains(&name)) {
+        record(&page, &name);
+        rt::dispatch(move |browser| browser.icon_arrived(tab));
+        return;
+    }
     let Some(url) = NSURL::URLWithString(&NSString::from_str(&address)) else {
         return try_next(tab, page, candidates, at + 1);
     };
@@ -218,19 +255,38 @@ fn keep(page: &Url, address: &str, bytes: &[u8]) -> bool {
     let name = icons::ident(address);
     // The strip can draw immediately, without racing the asynchronous disk write.
     IMAGES.with_borrow_mut(|images| images.insert(name.clone(), kept));
+    KEPT.with_borrow_mut(|kept| kept.insert(name.clone()));
     store::save(folder().join(format!("{name}.png")), png);
+    record(page, &name);
+    true
+}
+
+/// The page wears this icon from now on: into the index (and the file behind it),
+/// and the strip's per-address answers are stale.
+fn record(page: &Url, name: &str) {
     let data = with_index(|index| {
-        index.record(page, &name, false, history::now());
+        index.record(page, name, false, history::now());
         index.encode()
     });
     store::save(folder().join("pages.json"), data);
-    true
+    BY_ADDRESS.with_borrow_mut(HashMap::clear);
 }
 
 /// The image drawn into a 32-pixel square, kept to its proportions, as PNG.
 fn square_png(image: &NSImage) -> Option<Vec<u8>> {
+    let rep = square_rep(image)?;
+    // SAFETY: a bitmap of our own making, encoded with no properties.
+    let png = unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }?;
+    Some(png.to_vec())
+}
+
+/// The image drawn into a 32-pixel square, kept to its proportions; `None` when
+/// nothing opaque landed in it, which is no icon at all.
+fn square_rep(image: &NSImage) -> Option<Retained<NSBitmapImageRep>> {
     // SAFETY: a fresh bitmap of the stated geometry, with no planes of its own (AppKit
-    // allocates them); drawn into through its own graphics context, then encoded.
+    // allocates them); drawn into through its own graphics context, then read back.
     unsafe {
         let rep = NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
             NSBitmapImageRep::alloc(),
@@ -272,9 +328,7 @@ fn square_png(image: &NSImage) -> Option<Vec<u8>> {
         {
             return None;
         }
-        let png = rep
-            .representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())?;
-        Some(png.to_vec())
+        Some(rep)
     }
 }
 

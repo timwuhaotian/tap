@@ -194,6 +194,13 @@ impl Target {
     }
 }
 
+/// The Settings page if it has been made, without making it: hiding a page that was
+/// never shown must not build the whole page first (that ran on every launch, ahead
+/// of the first frame, for a page most launches never open).
+pub fn existing() -> Option<Retained<NSView>> {
+    STATE.with_borrow(|s| s.as_ref().map(|s| Retained::into_super(s.root.clone())))
+}
+
 /// The Settings page, made the first time it is shown.
 pub fn view(mtm: MainThreadMarker, frame: NSRect) -> Retained<NSView> {
     if let Some(root) = STATE.with_borrow(|s| s.as_ref().map(|s| s.root.clone())) {
@@ -312,8 +319,17 @@ pub fn describe() -> Value {
             })
         })
         .collect();
-    let page = STATE.with_borrow(|s| s.as_ref().map(|s| s.page.get().raw()));
-    serde_json::json!({ "page": page, "rows": rows })
+    // Unbuilt, the page that would open is the one kept from last time, as `view`
+    // picks it: the bench reads the same answer either way.
+    let page = STATE
+        .with_borrow(|s| s.as_ref().map(|s| s.page.get()))
+        .unwrap_or_else(|| {
+            prefs::defaults()
+                .stringForKey(&NSString::from_str("settings.page"))
+                .and_then(|p| Page::named(&p.to_string()))
+                .unwrap_or(Page::General)
+        });
+    serde_json::json!({ "page": page.raw(), "rows": rows })
 }
 
 /// Whether the page shows a row: Tap acts on it, and this Mac's WebKit can do what it

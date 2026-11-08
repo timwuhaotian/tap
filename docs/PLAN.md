@@ -1875,6 +1875,114 @@ per view), WebContent prewarming (a first-navigation win to measure first), the
 keyword and suggest keystroke paths, Shield's per-settings script rebuild, and
 `tab_of`'s pointer scan — all smaller, for a later round.
 
+### The second audit (2026-11-08)
+
+Eight passes over everything between a keypress, a navigation and the pixels:
+WebKit configuration and delegates, injected scripts, the flush and draw path,
+core hot loops, the load's side-effect chain, launch/new-tab/switch, codegen, and
+the WebKit knobs against Apple's docs. Measured first where numbers were cheap
+(a timing test over 2,000 visits, since removed; timings are release). The load's
+own path stayed thin; the waste had moved to work repeated per animation frame,
+big-structure clones on the `didFinish` path, and shared objects rebuilt as if
+they were per-tab. Eight changes, each behaviour-preserving (the dev build's
+panic strategy excepted):
+
+1. **The load line no longer redraws the row** (`strip.rs`, `address_bar.rs`).
+   The 2026-11-06 `Loading` animation dirties only the line's rect per frame, but
+   `drawRect` discarded it: every frame of every load re-ran each slot's
+   `label()` (a clone or a URL parse) and its draw, and the bar re-measured its
+   address, for pixels AppKit then clipped away — undoing the first audit's #5
+   on the CPU side. Draw now takes the dirty rect (widened 24 pt for shadows)
+   and skips slots outside it, keeping what each slot said (a slot that goes is
+   drawn by what it last said); the bar skips the address when only its foot is
+   dirty (the badge's own square reaches into the foot, so it is still drawn).
+   The side effects (springs' aim, the line's state) still run.
+2. **History rides behind an `Arc`** (`history.rs`). `SaveHistory` cloned all
+   three maps on the main thread per finished page: 0.53 ms at 2,000 visits,
+   now a refcount. Writes go through `Arc::make_mut`, copying only while the
+   writer still holds a snapshot. Same file: `encode` decorates scores again
+   (it had regressed to score-in-comparator; 0.40 → 0.34 ms), and `record`
+   stops rebuilding the page text of a page or front door already remembered
+   (22 → 12 µs per repeat record).
+3. **Suggestions borrow first** (`history.rs`, `keyword.rs`, `browser.rs`).
+   Each key cloned three strings per match before sorting, and the comparator
+   counted characters per comparison: 0.90 ms for "co" at 2,000 visits.
+   Candidates are borrowed with sort keys ready, and only the winners are
+   built: 0.49 ms, under the same total order. `keyword::find` validates a
+   template's URL shape only for the keyword actually typed, and
+   `page_url`/`page_title` compare before copying (`Tab::set_text`).
+4. **The shared controller is rebuilt only on change** (`web.rs`, `shield.rs`).
+   Every page shares one `WKUserContentController`, yet each new or woken tab —
+   and each `apply_prefs`, once per open page — removed all user scripts and
+   rebuilt the same set, and each commit removed and re-added the same rule
+   list. Both remember what they last put there (the controller retained, so
+   its identity can't be recycled under the comparison) and skip when nothing
+   moved; this also closes the window where a new tab's `removeAllUserScripts`
+   could land while another tab was starting a document. Shield's paused hosts
+   are normalised once in `set`, not per navigation per site.
+5. **Settings is built when first shown, not at launch** (`settings.rs`,
+   `window.rs`). The hide path called `settings::view()`, building the whole
+   page ahead of the first frame on every launch. It hides
+   `settings::existing()` instead; `describe()` falls back to the kept page
+   name, so the bench reads the same answer.
+6. **A kept icon candidate is reused** (`icons.rs`). `try_next` fetched,
+   decoded and redrew a favicon another page of the same site had just brought
+   in; an icon this run kept and verified under the candidate's ident is now
+   recorded for the page instead (checked live: two pages, one favicon
+   request). Only this run's icons are reused: a file kept another day may be
+   the site's old icon, and the page would wear that.
+   `image_named`'s validation draw no longer encodes a PNG to throw away
+   (`square_rep`), and `image_for` answers per address from a cache emptied on
+   record, instead of re-parsing the URL and walking the index per tab per draw.
+7. **Quieter relays** (`forms.js`, `strip.rs`, `downloads.rs`). The reading
+   relay speaks only when the hundredth moves (the granularity the strip
+   keeps), and `page_read` sweeps dead tabs only when a tab has gone since the
+   last report, not on every scroll report. Download-progress KVO reaches
+   `sync_door` only when the whole-percent fraction or the going count changed;
+   the files' own Finder bars still update per tick.
+8. **Dev builds optimise their dependencies** (`Cargo.toml`). `[profile.dev]`
+   (`panic = "abort"`, opt-level 2 for non-workspace packages) is what §10
+   above specified and never landed: `cargo run` and bundle.sh's default build
+   are what a developer's own timings see, and an opt-0 dependency tree made
+   them slower than the release build they stand in for. The tests keep their
+   dependencies at opt-0 (they are built once and run thousands of times), and
+   the dev build now aborts on a panic like the release one — the one
+   behaviour change here. Release codegen was already at its ceiling
+   (opt 3, fat LTO, `apple-m1`; `clippy::perf` silent). PGO and a custom
+   allocator stay out: no profile shows this process's own CPU as a load's
+   bottleneck, and an arena allocator argues with the memory-per-tab budget.
+
+Checked by fmt, clippy `-D warnings` and the test suite, then through the bench
+in a probe world against a local server: multi-tab loads, an agent `snapshot`
+reaching into an iframe (the scripts stand in every later tab), find, a
+download, Settings opened on demand, and a window screenshot for the strip.
+`test-forms` is red on the base commit too — its iframe
+`Object.defineProperty(w, 'webkit')` throws since the console's page-world
+handler landed (0.2.18) — so the harness wants its own fix before `forms.js`
+has its WebKit net back.
+
+Not taken, with the measurement that would change the answer:
+- **WebContent prewarming** (`-[WKProcessPool _warmInitialProcess]`, SPI behind
+  `respondsToSelector`, the pool in `Shared`): cold-app `go`→`wait`,
+  interleaved ≥ 15 rounds, against the idle `phys_footprint` of one warmed
+  process. View pooling stays rejected: a reused view's history and state
+  can't be fully cleared, and delaying process launch makes an empty view
+  warm nothing.
+- **One flush per run-loop turn.** §5's `CFRunLoopObserver` was never built;
+  `rt::dispatch` flushes synchronously, so a KVO burst can flush several times
+  a turn. Count flushes per load first; deferring moves effect and focus
+  timing by a turn and wants its own pass.
+- **⌘T's field conversion** (`window.rs`'s `queue_launch_conversion`): the
+  default path puts the field up launching, then converts it in a second
+  flush. One dispatch should do, tangled as it is with first-responder timing.
+- **Shield lookup before compile** (identifier carrying a hash of the rules):
+  measure compile-ready against the first `didCommit` on a cold start first.
+- **Page-find's script** is re-sent and re-parsed per key (`page_find.rs`):
+  a two-phase stub on `globalThis.__tapFind` is the sketch; measure per-ask
+  latency on a large page first.
+- **Background tabs load at 0×0** (`inspect.rs`): one bench `eval innerWidth`
+  before first selection decides whether a stage-sized frame is owed.
+
 ## 11. Top technical risks
 
 Each spike's result is written next to its risk.
@@ -2075,6 +2183,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-06 | At the user's request, Return uses the typed address unless a suggestion was explicitly picked; Tab or → accepts an inline ending. History offers match URL paths and queries as well as hosts (`fixed-deviation`). The offers card and tab strip use native spring transitions, respecting Reduce Motion and light motion. |
 | 2026-11-06 | At the user's request ("地址栏加载效果还不够丝滑，还是一段一段的感觉 … 加载页面设计一个漂亮丝滑的等待过场，tab各种操作的效果 … 全部audit一遍；重新设计new tab默认背景，现在的太大了"), a motion audit. Found: the load line drew WebKit's coarse `estimatedProgress` steps as they came and vanished at the end; the press give eased on the 20 Hz tick (visible steps), and its ease back up never showed because the sink was dropped on release; hover washes, the hover cross and the live tab's title/address swap snapped. Now `motion.rs` has `Follow` (one value springing to a target that may change), `Loading` (the line chases the larger of WebKit's report and a slow creep capped at 0.92 on `CREEP` (0.6, 1.0), never back, then runs to the end and fades on `FADE` (0.34, 1.0)), and `Frames` (the one display-link helper the strip, the bar and the ground share). The bar and the strip draw the line through `Loading`, redrawing only its rect between model changes; the give and the hover washes (`QUICK`, 0.16/1.0) run on the strip's frames, and the wash follows whatever tab is under the pointer on every draw. The blank tab's isometric bench (about 60% of the stage) becomes a small ripple mark (~80 pt): a dot with three rings rippling out every 7.2 s. The same view is the first-load transition: a tab that has never committed a page (a link opened in a new tab, a restored tab, an address typed into a blank one) shows the mark with quicker rings (2.1 s), the accent dot and the host under it instead of WebKit's empty white, and fades away over the page when it commits (`TabFields::COMMITTED`, `Tab::committed`). A later navigation in the same tab keeps the old page until the new one commits, as WebKit does. Reduce Motion and light motion get a still mark and no fades. Tab switches stay instant (a crossfade would read as lag). `fixed-deviation`: Search leaves both blank. |
 | 2026-11-07 | At the user's request ("点击tab栏周围空白区域应该允许自动放大（适应屏幕尺寸）/还原整个浏览器的尺寸"), a double click on the tab row's empty ends does what the system's title-bar double click does: zoom to the screen and back by default, Minimize or nothing when System Settings › Desktop & Dock says so (`AppleActionOnDoubleClick`). A single press still moves the window. The strip covers the title bar and the window is unmovable (2026-11-05), so AppKit never saw this double click; the strip handles it. The bench's `click` takes a `count` and answers with the window's frame. |
+| 2026-11-08 | The page-load and rendering path is audited a second time at the user's request ("深度调研网页加载/渲染等维度的性能相关实现") and tightened in eight places (§10 "The second audit"), all behaviour-preserving but for the dev build's panic strategy, which now aborts like the release one: the load line stops redrawing the row, History rides behind an `Arc`, the shared content controller is rebuilt only on change, Settings waits to be shown. Prewarming, a coalesced flush and the ⌘T field conversion are left measured-first, with the deciding measurements written down. |
 
 ## Appendix A — Parity tracker
 

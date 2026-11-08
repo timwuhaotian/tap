@@ -263,8 +263,8 @@ define_class!(
         }
 
         #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            self.draw();
+        fn draw_rect(&self, dirty: NSRect) {
+            self.draw(dirty);
         }
 
         #[unsafe(method(viewDidChangeEffectiveAppearance))]
@@ -374,7 +374,7 @@ impl AddressBar {
         menu.popUpMenuPositioningItem_atLocation_inView(None, at, Some(self));
     }
 
-    fn draw(&self) {
+    fn draw(&self, dirty: NSRect) {
         let dark = palette::is_dark(self);
         let bounds = self.bounds();
         palette::GROUND.resolve(dark).setFill();
@@ -401,12 +401,24 @@ impl AddressBar {
             path.fill();
             palette::stroke_hairline(&path, dark);
         }
-        let (symbol, warns) = badge(shown.security);
-        if let Some(image) = badge_image(symbol, warns, dark) {
-            draw_symbol(&image, badge_rect(capsule));
+        // The badge and the address stand above the capsule's foot, and the load
+        // line's frames dirty only the foot: on those frames (one a frame, all
+        // through a load) measuring and drawing the address again was most of
+        // the bar's work, for pixels AppKit was going to clip away. The badge's
+        // own square reaches down into the foot, so it is drawn whenever the
+        // dirty ground reaches it.
+        let symbol_rect = badge_rect(capsule);
+        if palette::overlaps(dirty, symbol_rect) {
+            let (symbol, warns) = badge(shown.security);
+            if let Some(image) = badge_image(symbol, warns, dark) {
+                draw_symbol(&image, symbol_rect);
+            }
         }
         if !shown.editing {
-            draw_address(&shown, text_rect(capsule), dark);
+            let text = text_rect(capsule);
+            if palette::overlaps(dirty, text) {
+                draw_address(&shown, text, dark);
+            }
         }
         // The line follows the model on every draw; between draws its own frames
         // move it, redrawing only the capsule's foot.

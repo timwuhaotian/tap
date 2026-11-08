@@ -11,7 +11,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use block2::RcBlock;
-use objc2::{MainThreadMarker, rc::Retained};
+use objc2::{MainThreadMarker, Message, rc::Retained};
 use objc2_foundation::{NSError, NSString};
 use objc2_web_kit::{WKContentRuleList, WKContentRuleListStore, WKUserContentController};
 
@@ -27,18 +27,23 @@ struct State {
     compiling: bool,
     /// Settings › Privacy › Block ads and trackers.
     on: bool,
-    /// Sites Shield is off for, as Settings keeps them (no `www.`).
+    /// Sites Shield is off for, as [`host_key`]s (lower case, no `www.`), made so
+    /// once in [`set`] rather than at every navigation of every page.
     paused: Vec<String>,
     /// Told once the list lands, so pages opened meanwhile get it.
     ready: Option<Rc<dyn Fn()>>,
+    /// The controller last tuned and what it was tuned to: most navigations repeat
+    /// it, and each repeat had the pages' shared controller drop and re-take the
+    /// same list. The controller is held so its identity can't be recycled.
+    tuned: Option<(Retained<WKUserContentController>, bool)>,
 }
 
 /// What Settings says, kept here so a page tuned at navigation time and a script
 /// rebuilt at settings time agree.
-pub fn set(on: bool, paused: Vec<String>) {
+pub fn set(on: bool, paused: &[String]) {
     STATE.with_borrow_mut(|state| {
         state.on = on;
-        state.paused = paused;
+        state.paused = paused.iter().map(|site| host_key(site)).collect();
     });
 }
 
@@ -52,15 +57,17 @@ fn is_paused(state: &State, host: Option<&str>) -> bool {
     let Some(host) = host.map(host_key) else {
         return false;
     };
-    state.paused.iter().any(|site| host_key(site) == host)
+    state.paused.contains(&host)
 }
 
 /// A host as sites are kept: lower case, no `www.`.
 #[must_use]
 pub fn host_key(host: &str) -> String {
-    let host = host.to_lowercase();
-    host.strip_prefix("www.")
-        .map_or_else(|| host.clone(), str::to_owned)
+    let mut host = host.to_lowercase();
+    if host.starts_with("www.") {
+        host.replace_range(..4, "");
+    }
+    host
 }
 
 /// Compiles the list once; `ready` runs when it lands (or at once if it already has),
@@ -89,7 +96,17 @@ pub fn compile(mtm: MainThreadMarker, ready: impl Fn() + 'static) {
         let list = unsafe { Retained::retain(list) };
         let ready = STATE.with_borrow_mut(|state| {
             state.compiling = false;
-            state.list = list;
+            let old = std::mem::replace(&mut state.list, list);
+            // A new list: what the controller holds is the old one, and the next
+            // tune has to put this one there instead.
+            if let Some((controller, _)) = state.tuned.take()
+                && let Some(old) = old
+            {
+                // SAFETY: plain calls on a live page's controller with our own list.
+                unsafe {
+                    controller.removeContentRuleList(&old);
+                }
+            }
             state.ready.take()
         });
         if let Some(ready) = ready {
@@ -114,13 +131,23 @@ pub fn compile(mtm: MainThreadMarker, ready: impl Fn() + 'static) {
 pub fn tune(controller: &WKUserContentController, host: Option<&str>) {
     let list = STATE.with_borrow(|state| state.list.clone());
     let Some(list) = list else { return };
+    let on = on_for(host);
+    let already = STATE.with_borrow(|state| {
+        state.tuned.as_ref().is_some_and(|(kept, was)| {
+            std::ptr::from_ref(&**kept) == std::ptr::from_ref(controller) && *was == on
+        })
+    });
+    if already {
+        return;
+    }
     // SAFETY: plain calls on a live page's controller with our own list.
     unsafe {
         controller.removeContentRuleList(&list);
-        if on_for(host) {
+        if on {
             controller.addContentRuleList(&list);
         }
     }
+    STATE.with_borrow_mut(|state| state.tuned = Some((controller.retain(), on)));
 }
 
 /// Third parties whose only job is to watch or to sell (Search's `Shield.unwanted`).

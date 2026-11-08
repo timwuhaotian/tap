@@ -1,6 +1,7 @@
 //! When Tap itself goes down, what happened goes to `crash.log` in the store folder
-//! (Search's `Links.swift` keeps the same file). Release builds abort on a panic
-//! (`panic = "abort"`, docs/PLAN.md §10): this hook runs first and writes the report.
+//! (Search's `Links.swift` keeps the same file). Dev and release builds abort on a
+//! panic (`panic = "abort"`, docs/PLAN.md §10): this hook runs first and writes the
+//! report.
 
 use std::{fmt::Write as _, io::Write as _, panic::PanicHookInfo, path::Path};
 

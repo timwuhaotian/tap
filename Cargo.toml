@@ -59,3 +59,18 @@ debug = "line-tables-only"
 # Cold code: run once per import or export (docs/PLAN.md §10).
 [profile.release.package.tap-import]
 opt-level = "s"
+
+# Dependencies optimized in dev builds too: `cargo run` and bundle.sh's default
+# build are what a developer's own timings see, and an opt-0 dependency tree
+# makes them slower than the release build they stand in for (docs/PLAN.md §10).
+# Workspace crates stay opt-0.
+[profile.dev]
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The tests do not want that: their dependencies are built once and run
+# thousands of times, so optimizing them only makes the build slower.
+[profile.test.package."*"]
+opt-level = 0

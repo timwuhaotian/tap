@@ -55,10 +55,24 @@ const OBSERVED: [&str; 7] = [
     "hasOnlySecureContent",
 ];
 
+/// The scripts last put on a controller, and which controller: every page shares
+/// one controller, so without this each new tab (and each Settings touch, once
+/// per open page) dropped all its scripts and rebuilt the same set, telling
+/// every open WebContent along the way. Held retained, so the controller's
+/// identity can't be recycled under the comparison.
+struct Synced {
+    controller: Retained<WKUserContentController>,
+    dusk: bool,
+    shield: bool,
+    paused: Vec<String>,
+    autoscroll: bool,
+}
+
 thread_local! {
     static PAGES_WAS_FAST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WEBS: RefCell<HashMap<TabId, Retained<WKWebView>>> = RefCell::new(HashMap::new());
     static SHARED: RefCell<Option<Shared>> = const { RefCell::new(None) };
+    static SYNCED: RefCell<Option<Synced>> = const { RefCell::new(None) };
     static PAGES: std::cell::Cell<Pages> = const { std::cell::Cell::new(Pages::DEFAULT) };
 }
 
@@ -116,7 +130,7 @@ pub fn apply_prefs(kept: &crate::prefs::Kept) {
     let autoscroll = index::flag(kept, "autoscroll");
     let shield_on = index::flag(kept, "shield");
     let paused = paused_sites(kept);
-    shield::set(shield_on, paused.clone());
+    shield::set(shield_on, &paused);
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
@@ -606,6 +620,22 @@ fn sync_scripts(
     autoscroll: bool,
 ) {
     let controller = controller_of(web);
+    // The paused sites as Shield keeps them, so that the same hosts in another
+    // shape ("www.x.com" for "x.com") are the same list and do not rebuild the
+    // scripts for nothing.
+    let paused: Vec<String> = paused.iter().map(|site| shield::host_key(site)).collect();
+    let already = SYNCED.with_borrow(|last| {
+        last.as_ref().is_some_and(|kept| {
+            std::ptr::from_ref(&*kept.controller) == std::ptr::from_ref(&*controller)
+                && kept.dusk == dusk
+                && kept.shield == shield_on
+                && kept.paused.as_slice() == paused.as_slice()
+                && kept.autoscroll == autoscroll
+        })
+    });
+    if already {
+        return;
+    }
     // SAFETY: plain calls on a live page's own controller.
     unsafe {
         controller.removeAllUserScripts();
@@ -615,7 +645,7 @@ fn sync_scripts(
         if shield_on {
             controller.addUserScript(&user_script(
                 mtm,
-                &shield::youtube_page_script(paused),
+                &shield::youtube_page_script(&paused),
                 true,
                 false,
             ));
@@ -643,6 +673,15 @@ fn sync_scripts(
             ),
         );
     }
+    SYNCED.with_borrow_mut(|last| {
+        *last = Some(Synced {
+            controller,
+            dusk,
+            shield: shield_on,
+            paused,
+            autoscroll,
+        });
+    });
 }
 
 /// One script: at the document's start, ahead of the page's own. Tap's own world

@@ -85,6 +85,9 @@ thread_local! {
     /// The model has no such field and `web.rs` is not the strip's to change, so the
     /// numbers live here, keyed by tab, and only the live tab's is ever drawn.
     static READING: RefCell<HashMap<TabId, f64>> = RefCell::new(HashMap::new());
+    /// How many tabs there were at the last report: fewer now means one of them
+    /// went, and its number is the only thing left behind.
+    static SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The one strip, so the tick and a reading report can ask it to draw again.
     static LIVE_STRIP: RefCell<Option<Retained<Strip>>> = const { RefCell::new(None) };
     static TICKER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
@@ -158,8 +161,16 @@ pub fn page_read(tab: TabId, y: f64, ceiling: f64) {
     } else {
         0.0
     };
-    // Tabs that are gone leave no number behind.
-    if let Some(ids) = rt::read(|browser| browser.tabs().iter().map(|t| t.id).collect::<Vec<_>>()) {
+    // Tabs that are gone leave no number behind. The sweep collects every tab's
+    // id, so it runs only when a tab has gone since the last report — fewer tabs
+    // than last time — not on every report of every scroll.
+    let tabs = rt::read(|browser| browser.tabs().len()).unwrap_or(0);
+    let fewer = tabs < SEEN.get();
+    SEEN.set(tabs);
+    if fewer
+        && let Some(ids) =
+            rt::read(|browser| browser.tabs().iter().map(|t| t.id).collect::<Vec<_>>())
+    {
         READING.with_borrow_mut(|map| map.retain(|id, _| ids.contains(id)));
     }
     let changed = READING.with_borrow_mut(|map| map.insert(tab, fraction) != Some(fraction));
@@ -607,8 +618,8 @@ define_class!(
         }
 
         #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            self.draw();
+        fn draw_rect(&self, dirty: NSRect) {
+            self.draw(dirty);
         }
 
         #[unsafe(method(viewDidChangeEffectiveAppearance))]
@@ -1534,9 +1545,19 @@ impl Strip {
     }
 
     #[allow(clippy::too_many_lines)] // the row, gone slots, carried ones, then the plus
-    fn draw(&self) {
+    fn draw(&self, dirty: NSRect) {
         let dark = palette::is_dark(self);
         let bounds = self.bounds();
+        // What AppKit will show of this draw, widened past a shadow's spill: the
+        // load line's frames dirty only its sliver under the live tab, and a slot
+        // outside the shown ground can put no pixel in it, so its drawing is
+        // skipped below (what it said is still kept). Everything else here (the
+        // springs' aim, the line's own state) still runs, as it did when every
+        // slot was drawn.
+        let shown = NSRect::new(
+            NSPoint::new(dirty.origin.x - 24.0, dirty.origin.y - 24.0),
+            NSSize::new(dirty.size.width + 48.0, dirty.size.height + 48.0),
+        );
         // Read on every draw, so a Settings change is in the next frame (see `Look`).
         let look = look();
         palette::GROUND.resolve(dark).setFill();
@@ -1640,6 +1661,15 @@ impl Strip {
             let mut faces = self.ivars().faces.borrow_mut();
             for (slot, (item, rect)) in row.iter().zip(&layout.tabs).enumerate() {
                 let key = key_of(browser, item);
+                let (rect, alpha) = at(&key, *rect);
+                let drawn = palette::overlaps(rect, shown);
+                // What the slot says is kept even when it is not drawn: a slot
+                // that goes is drawn by what it last said. A slot already known
+                // is left alone; a new one is named once, so that a tab which
+                // never came into view still has something to fade out with.
+                if !drawn && faces.contains_key(&key) {
+                    continue;
+                }
                 let label = match item {
                     Item::Heading(place) => browser.groups()[*place].name.clone(),
                     Item::Tab(index) => browser.tabs()[*index].label(),
@@ -1647,10 +1677,12 @@ impl Strip {
                 if faces.get(&key) != Some(&label) {
                     faces.insert(key.clone(), label);
                 }
+                if !drawn {
+                    continue;
+                }
                 if carried.contains(&key) {
                     continue;
                 }
-                let (rect, alpha) = at(&key, *rect);
                 faded(alpha, || draw_item(browser, &paint, slot, item, rect));
             }
             drop(faces);

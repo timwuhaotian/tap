@@ -34,10 +34,12 @@ impl Keyword {
 /// wouldn't be accepted today is passed over rather than followed.
 #[must_use]
 pub fn find<'a>(typed: &str, keywords: &'a [Keyword]) -> Option<(&'a Keyword, String)> {
-    keywords
-        .iter()
-        .filter(|k| accepts(&k.template))
-        .find_map(|k| k.matches(typed).map(|rest| (k, rest)))
+    // The match is a word compare; `accepts` parses the template as a URL several
+    // times over. On every key, only the keyword actually named pays for it.
+    keywords.iter().find_map(|k| {
+        let rest = k.matches(typed)?;
+        accepts(&k.template).then_some((k, rest))
+    })
 }
 
 /// A keyword's template: http or https, one site whatever is searched for, and a single

@@ -674,8 +674,9 @@ fn show_own_page(views: &Views, page: Option<Page>) {
             own.setHidden(false);
         }
         None => {
-            let own = settings::view(mtm, views.stage.bounds());
-            own.setHidden(true);
+            if let Some(own) = settings::existing() {
+                own.setHidden(true);
+            }
         }
     }
 }

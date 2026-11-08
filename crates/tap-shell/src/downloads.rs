@@ -81,6 +81,10 @@ thread_local! {
     static DONE: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     /// How far the running ones are, together (`fetching::aggregate`); stale while none.
     static FRACTION: RefCell<Option<f64>> = const { RefCell::new(None) };
+    /// What the door was last told (fraction, how many are going): KVO speaks far
+    /// oftener than the ring's whole-percent steps move, and each saying had
+    /// `sync_door` rebuild the door whole.
+    static SAID: Cell<(Option<f64>, usize)> = const { Cell::new((None, 0)) };
     /// What the door says once nothing is going, until its round is over.
     static LINGER: RefCell<Option<Door>> = const { RefCell::new(None) };
     /// Which saying is the latest, so a late one lands nowhere.
@@ -324,8 +328,12 @@ fn measure() {
             })
             .collect()
     });
-    FRACTION.with_borrow_mut(|slot| *slot = fetching::aggregate(&parts));
-    crate::window::downloads_moved();
+    let fraction = fetching::aggregate(&parts);
+    FRACTION.with_borrow_mut(|slot| *slot = fraction);
+    if SAID.get() != (fraction, parts.len()) {
+        SAID.set((fraction, parts.len()));
+        crate::window::downloads_moved();
+    }
 }
 
 /// The door says `state` until a download starts or five seconds pass with none.
@@ -343,6 +351,10 @@ fn linger(state: Door) {
         LINGER.with_borrow_mut(Option::take);
         // Nothing to measure any more: the last fraction goes with the saying.
         FRACTION.with_borrow_mut(|slot| *slot = None);
+        // The door was told, so what it was told is what the next measure must
+        // differ from: a download still going would otherwise say the same
+        // fraction again and the ring would keep turning for it.
+        SAID.set((None, going()));
         crate::window::downloads_moved();
     });
 }

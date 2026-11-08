@@ -422,10 +422,17 @@
   // the page ends the page's user activation, and asking four times a
   // second had full-screen buttons refused.
   var reading = false;
+  var saidRead = -1;
   function read() {
     var root = document.documentElement;
     var y = window.scrollY || root.scrollTop || 0;
     var ceiling = Math.max(1, (root.scrollHeight || 0) - window.innerHeight);
+    // The app keeps the reading in hundredths, so a frame that doesn't move
+    // the hundredth has nothing to say: on a long page most scroll frames
+    // were a message across and back for no change at all.
+    var percent = Math.round(Math.min(1, Math.max(0, y / ceiling)) * 100);
+    if (percent === saidRead) { return; }
+    saidRead = percent;
     window.webkit.messageHandlers.tapForms.postMessage({ kind: 'reading', y: y, max: ceiling });
   }
   window.addEventListener('scroll', function () {
