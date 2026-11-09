@@ -8,9 +8,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![macOS 14+ · Apple silicon](https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20silicon-lightgrey)
 
-A small, fast, quiet web browser for the Mac, written in Rust. Pages run on WebKit, the
-engine already inside every Mac (Safari's), so there's no second browser engine to
-download, update and keep in memory.
+Tap is a free, open-source web browser for macOS, written in Rust. Pages run on
+the system WebKit — Safari's engine, already inside every Mac — so there's no
+second browser engine to download, update and keep in memory. It's about 3 MB
+installed, blocks ads and trackers, collects nothing, and coding agents can
+drive it from the terminal.
 
 Tap is a port of [Search](https://github.com/driceroland/Search), an MIT-licensed Swift
 browser by Office Commun. Search's behaviour is the specification. Tap rewrites all of
@@ -137,6 +139,54 @@ Everything else Search does, including:
   Keychain Access meanwhile), **passkeys**, Apple's Passwords app under the sign-in
   box, and **Chrome extensions** on WebKit's own extension engine.
 - **Extensions** imported from another browser.
+
+## Tap vs the rest
+
+| | Tap | Safari | Chrome | Orion | Search |
+|---|---|---|---|---|---|
+| Engine | System WebKit | System WebKit | Bundled Blink | System WebKit | System WebKit |
+| Open source | MIT | Engine only | Engine only | No | MIT |
+| Blocks ads and trackers, built in | Yes | Via extensions | Limited | Yes | Yes |
+| Driven by coding agents (`tap` CLI) | Yes | No | No | No | No |
+| Written in | Rust | C++ | C++ | Swift | Swift |
+| macOS-native UI | Yes | Yes | No | Yes | Yes |
+
+## FAQ
+
+**Is Tap free and open source?**
+Yes. Tap is MIT-licensed; the source is this repository. No account, no paywall,
+no feature flags.
+
+**How big is Tap?**
+About a 1.6 MB download and 3 MB installed (0.3.4). WebKit ships with macOS, so
+Tap carries no engine — just the browser.
+
+**How is Tap different from Search?**
+Tap is a Rust rewrite of [Search](https://github.com/driceroland/Search), a
+Swift browser by Office Commun. Search's behaviour is the specification; Tap adds
+its own fixes (agent control, input-method fixes) and drops page translation,
+which needs a Swift-only Apple API.
+
+**How is Tap different from Safari?**
+Same engine, so pages render identically — but Tap is open source, blocks ads and
+trackers out of the box, and can be driven by coding agents from the terminal.
+
+**Can AI coding agents use Tap?**
+Yes. Tap installs a `tap` command (`open`, `snapshot`, `click`, `fill`, `press`,
+`text`, `eval`, `console`) and a skill for Claude Code, Codex, Gemini and
+opencode. Agent tabs open behind yours, with your sign-ins. Settings turns it off.
+
+**Does Tap collect data or sync?**
+Neither. No account, no sync, no telemetry. The only request Tap makes on its own
+is an update check every six hours (Settings › About turns that off).
+
+**How do I install Tap?**
+macOS 14 or later on Apple silicon: download the DMG above, drag Tap to
+/Applications. It's signed and notarized by Apple.
+
+**What's missing?**
+Much of Search isn't ported yet (above). [`docs/PLAN.md`](docs/PLAN.md) tracks
+parity part by part.
 
 ## Building
 
