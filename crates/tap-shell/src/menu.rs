@@ -85,14 +85,21 @@ pub enum Command {
 }
 
 /// Whether a command can act right now: AppKit asks through `validateMenuItem:`.
-/// Back and Forward need history in the front tab, Stop and Reload need a page
-/// loading; everything else can always run.
+/// Back and Forward need history in the front tab, Stop needs a page loading,
+/// Reload needs a page that can be asked for again (a blank tab and Tap's own
+/// pages have nothing to reload, mirroring `Browser::reload_tab`); everything
+/// else can always run.
 fn can_run(tag: NSInteger) -> bool {
     match tag {
-        t if t == Command::Reload as NSInteger
-            || t == Command::Stop as NSInteger
-            || t == Command::ReloadOrStop as NSInteger =>
-        {
+        t if t == Command::Reload as NSInteger || t == Command::ReloadOrStop as NSInteger => {
+            rt::read(|browser| {
+                browser
+                    .active_tab()
+                    .is_some_and(|tab| !tab.is_blank() && !tab.is_internal())
+            })
+            .unwrap_or(false)
+        }
+        t if t == Command::Stop as NSInteger => {
             rt::read(|browser| browser.active_tab().is_some_and(Tab::loading)).unwrap_or(false)
         }
         t if t == Command::Back as NSInteger => {
@@ -258,8 +265,9 @@ define_class!(
         }
 
         // AppKit asks each menu item whether it can act (Search's
-        // `validateMenuItem:`): Back and Forward need history, Stop and Reload need
-        // a page loading. The rest stay enabled.
+        // `validateMenuItem:`): Back and Forward need history, Stop needs a page
+        // loading, Reload needs a page that can be asked for again. The rest stay
+        // enabled.
         #[unsafe(method(validateMenuItem:))]
         fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
             can_run(item.tag())
@@ -551,7 +559,11 @@ pub fn main_menu(
 mod tests {
     use std::cell::Cell;
 
-    use super::confirm_termination;
+    use objc2_foundation::NSInteger;
+    use tap_core::{browser::Browser, fnd::Url, internal::Page};
+
+    use super::{Command, can_run, confirm_termination};
+    use crate::rt;
 
     #[test]
     fn closing_the_last_window_does_not_confirm_and_does_not_mask_later_quits() {
@@ -566,5 +578,32 @@ mod tests {
         let last_window_closed = Cell::new(false);
         assert!(!confirm_termination(&last_window_closed, false, false));
         assert!(!confirm_termination(&last_window_closed, true, true));
+    }
+
+    #[test]
+    fn reload_needs_a_page_and_stop_needs_a_load() {
+        rt::install(Browser::new());
+        let reload = Command::Reload as NSInteger;
+        let stop = Command::Stop as NSInteger;
+
+        // A blank tab has nothing to reload and nothing to stop.
+        assert!(!can_run(reload));
+        assert!(!can_run(stop));
+
+        let id = rt::update(|browser| {
+            let url = Url::parse("https://example.com").expect("parses");
+            browser.open(Some(&url), true, None)
+        })
+        .expect("installed");
+        assert!(can_run(reload), "an idle page reloads (⌘R)");
+        assert!(!can_run(stop));
+
+        rt::update(|browser| browser.page_loading(id, true, 0.1));
+        assert!(can_run(reload));
+        assert!(can_run(stop));
+
+        rt::update(|browser| browser.open_page(Page::Settings));
+        assert!(!can_run(reload), "Tap's own pages never reload");
+        assert!(!can_run(stop));
     }
 }

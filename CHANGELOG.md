@@ -7,6 +7,16 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.4 — 2026-11-09
+
+### Fixed
+
+- **⌘R reloads again**: 0.3.3's menu validation wrongly needed a page *loading*
+  for Reload, so View › Reload Page sat disabled on every idle page and its key
+equivalent never fired. Reload is now enabled whenever the front tab holds a
+real page (blank tabs and Tap's own pages still have nothing to reload); Stop
+stays loading-only.
+
 ## 0.3.3 — 2026-11-08
 
 ### Fixed
