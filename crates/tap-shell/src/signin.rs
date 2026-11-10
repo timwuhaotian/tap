@@ -19,10 +19,11 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSControlSize, NSEvent, NSResponder,
+    NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor, NSControlSize, NSEvent,
+    NSFontAttributeName, NSForegroundColorAttributeName, NSImage, NSImageView, NSResponder,
     NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSString};
 use objc2_web_kit::WKWebView;
 use tap_core::browser::TabId;
 
@@ -90,6 +91,7 @@ struct State {
 
 struct Bar {
     pill: Retained<Pill>,
+    icon: Retained<NSImageView>,
     words: Retained<NSTextField>,
     save: Retained<NSButton>,
     later: Retained<NSButton>,
@@ -769,8 +771,11 @@ fn bar_hide() {
     });
 }
 
-const BAR_HEIGHT: f64 = 40.0;
+const BAR_HEIGHT: f64 = 56.0;
 const BAR_SHADOW: f64 = 18.0;
+/// The key at the bar's left, and the air from the stage's top.
+const BAR_ICON: f64 = 20.0;
+const BAR_TOP: f64 = 12.0;
 
 fn bar_show(words: &str, asking: bool, changed: bool) {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -787,8 +792,7 @@ fn bar_show(words: &str, asking: bool, changed: bool) {
         }
         bar.words.setStringValue(&NSString::from_str(words));
         bar.words.sizeToFit();
-        bar.save
-            .setTitle(&NSString::from_str(if changed { "Update" } else { "Save" }));
+        primary_title(&bar.save, if changed { "Update" } else { "Save" });
         for button in [&bar.save, &bar.later, &bar.never] {
             button.sizeToFit();
         }
@@ -796,12 +800,17 @@ fn bar_show(words: &str, asking: bool, changed: bool) {
         bar.later.setHidden(!asking);
         bar.never.setHidden(!asking || changed);
         let mut x = BAR_SHADOW + 16.0;
+        bar.icon.setFrame(NSRect::new(
+            NSPoint::new(x, BAR_SHADOW + (BAR_HEIGHT - BAR_ICON) / 2.0),
+            NSSize::new(BAR_ICON, BAR_ICON),
+        ));
+        x += BAR_ICON + 10.0;
         let text = bar.words.frame().size;
         bar.words.setFrameOrigin(NSPoint::new(
             x,
             BAR_SHADOW + (BAR_HEIGHT - text.height) / 2.0,
         ));
-        x += text.width + 12.0;
+        x += text.width + 16.0;
         for button in [&bar.save, &bar.later, &bar.never] {
             if button.isHidden() {
                 continue;
@@ -813,12 +822,14 @@ fn bar_show(words: &str, asking: bool, changed: bool) {
             ));
             x += size.width + 6.0;
         }
-        let width = x + 10.0 - BAR_SHADOW;
+        let width = x + 16.0 - BAR_SHADOW;
         let bounds = stage.bounds();
+        // Top centre, under the address bar: where the eye already is after a
+        // sign-in, not the page's bottom corner where a small pill went unseen.
         bar.pill.setFrame(NSRect::new(
             NSPoint::new(
                 (bounds.size.width - width) / 2.0 - BAR_SHADOW,
-                bounds.size.height - 30.0 - BAR_HEIGHT - BAR_SHADOW,
+                BAR_TOP - BAR_SHADOW,
             ),
             NSSize::new(width + 2.0 * BAR_SHADOW, BAR_HEIGHT + 2.0 * BAR_SHADOW),
         ));
@@ -827,13 +838,46 @@ fn bar_show(words: &str, asking: bool, changed: bool) {
     });
 }
 
+/// The primary answer's title in white, in the button's own face: a push button's
+/// `contentTintColor` leaves its title alone, which read black on the accent fill.
+fn primary_title(button: &NSButton, text: &str) {
+    let font = button.font().unwrap_or_else(palette::font);
+    let white = NSColor::whiteColor();
+    // SAFETY: AppKit's own attribute names, read as the constants they are.
+    let (font_key, color_key) = unsafe { (NSFontAttributeName, NSForegroundColorAttributeName) };
+    let attrs = NSDictionary::from_slices(&[font_key, color_key], &[font.as_ref(), white.as_ref()]);
+    // SAFETY: the dictionary holds the type AppKit expects for each name.
+    let rich = unsafe {
+        NSAttributedString::initWithString_attributes(
+            NSAttributedString::alloc(),
+            &NSString::from_str(text),
+            Some(&attrs),
+        )
+    };
+    button.setAttributedTitle(&rich);
+}
+
 fn make_bar(mtm: MainThreadMarker) -> Bar {
     let pill = Pill::new(mtm);
     pill.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewMinXMargin
             | NSAutoresizingMaskOptions::ViewMaxXMargin
-            | NSAutoresizingMaskOptions::ViewMinYMargin,
+            | NSAutoresizingMaskOptions::ViewMaxYMargin,
     );
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str("key.fill"),
+        None,
+    )
+    .or_else(|| {
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("lock.fill"),
+            None,
+        )
+    })
+    .unwrap_or_default();
+    let icon = NSImageView::imageViewWithImage(&image, mtm);
+    icon.setContentTintColor(Some(&NSColor::controlAccentColor()));
+    pill.addSubview(&icon);
     let words = NSTextField::labelWithString(&NSString::from_str(""), mtm);
     words.setFont(Some(&palette::font()));
     words.setTextColor(Some(&palette::INK.dynamic()));
@@ -854,11 +898,16 @@ fn make_bar(mtm: MainThreadMarker) -> Bar {
         button
     };
     let save = button("Save", sel!(keep:));
+    // The primary answer, filled with the accent: no Return key equivalent, which
+    // would fire from anywhere in the window and steal the page's own key.
+    save.setBezelColor(Some(&NSColor::controlAccentColor()));
+    primary_title(&save, "Save");
     let later = button("Not now", sel!(later:));
     let never = button("Never here", sel!(never:));
     pill.setHidden(true);
     Bar {
         pill,
+        icon,
         words,
         save,
         later,

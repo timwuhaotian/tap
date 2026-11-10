@@ -7,6 +7,15 @@ Info.plist.
 
 ## Unreleased
 
+### Fixed
+
+- **The save-password prompt moved to where the eye is**: it used to sit as a small
+  pill at the page's bottom corner and went unseen. It now hangs top-centre under
+  the address bar, with a key icon and a filled accent Save/Update button (white
+  title — a push button's content tint leaves its title black, which read badly
+  on blue). No Return key equivalent: one would fire window-wide and steal the
+  page's own key.
+
 ## 0.3.4 — 2026-11-09
 
 ### Fixed
