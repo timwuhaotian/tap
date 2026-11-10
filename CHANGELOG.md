@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.7 — 2026-11-10
+
+### Fixed
+
+- **The active tab keeps its close button in a crowded row**: it widens to make
+  room for the ×, and an overflowing row moves to bring it into view. The button
+  also stays available while editing the address.
+
 ## 0.3.6 — 2026-11-10
 
 ### Added

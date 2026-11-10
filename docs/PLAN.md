@@ -1488,10 +1488,11 @@ pointer; a tab with no button on it reads as one only ⌘W can close.
   its cross whether the pointer is on it or not, drawn where the title keeps its 30
   points clear, and a click there is `Spot::Close` as it was, closing that tab
   (`Browser::close`). Wide enough is now one rule, `titled`, shared by the draw and
-  the hit test, so a cross is always where a click closes its tab. A tab down to its
-  narrowest (a crowded row) has room for neither title nor cross, as before; one on
-  its way out fades at rest with no cross; the live tab while the field is open on it
-  has neither, the field standing in its place. Titles now always keep their 30
+  the hit test, so a cross is always where a click closes its tab. In a crowded row,
+  the live tab keeps at least `TAB_TITLED` width for its cross while other tabs can
+  narrow to their mark; an overflowing row shifts to keep the live tab visible. The
+  field leaves room for the cross while editing; a tab on its way out fades at rest
+  with no cross. Titles now always keep their 30
   points, as the live tab's already did. `fixed-deviation` from Search's hover-only
   cross, at the user's request. Test:
   `every_titled_tab_wears_a_cross_where_a_click_closes_it`.
@@ -2260,7 +2261,8 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-07 | At the user's request ("点击tab栏周围空白区域应该允许自动放大（适应屏幕尺寸）/还原整个浏览器的尺寸"), a double click on the tab row's empty ends does what the system's title-bar double click does: zoom to the screen and back by default, Minimize or nothing when System Settings › Desktop & Dock says so (`AppleActionOnDoubleClick`). A single press still moves the window. The strip covers the title bar and the window is unmovable (2026-11-05), so AppKit never saw this double click; the strip handles it. The bench's `click` takes a `count` and answers with the window's frame. |
 | 2026-11-08 | The page-load and rendering path is audited a second time at the user's request ("深度调研网页加载/渲染等维度的性能相关实现") and tightened in eight places (§10 "The second audit"), all behaviour-preserving but for the dev build's panic strategy, which now aborts like the release one: the load line stops redrawing the row, History rides behind an `Arc`, the shared content controller is rebuilt only on change, Settings waits to be shown. Prewarming, a coalesced flush and the ⌘T field conversion are left measured-first, with the deciding measurements written down. |
 | 2026-11-10 | The offer to keep a password moves to the top of the page at the user's request ("提示用户是否保存密码的modal不是太明显，请重新设计"): it hung at the page's bottom corner as a small pill and went unseen, which read as Tap not remembering the sign-in. It now sits top-centre under the address bar, with a key icon and a filled accent Save/Update button whose title is white (a push button's content tint leaves its title black). No Return key equivalent on the primary button: it would fire window-wide and take the page's own key. |
-| 2026-11-10 | At the user's request ("还是给tab增加一个close button吧，现在只能靠快捷键关闭tab"), every tab wide enough to show a title wears its close cross at rest, not only the live tab and the one under the pointer (`fixed-deviation` from Search's `TabBar.swift`, which shows it on hover alone). `strip.rs` draws and hit-tests the cross by one `titled` rule, so a cross is always where a click closes its tab; a tab down to its narrowest in a crowded row has room for neither title nor cross, one on its way out fades with none, and the live tab keeps neither while the field stands in its place. Verified through the bench: a click on a tab's cross closed it. |
+| 2026-11-10 | At the user's request, the active tab in a crowded strip keeps enough width for its close cross, the overflowing row shifts to reveal it, and the cross remains available while editing (`fixed-deviation`). |
+| 2026-11-10 | At the user's request ("还是给tab增加一个close button吧，现在只能靠快捷键关闭tab"), every tab wide enough to show a title wears its close cross at rest, not only the live tab and the one under the pointer (`fixed-deviation` from Search's `TabBar.swift`, which shows it on hover alone). `strip.rs` draws and hit-tests the cross by one `titled` rule, so a cross is always where a click closes its tab; a tab down to its narrowest in a crowded row has room for neither title nor cross, and one on its way out fades with none. Verified through the bench: a click on a tab's cross closed it. |
 
 ## Appendix A — Parity tracker
 

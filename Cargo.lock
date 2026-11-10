@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "tap-app"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "serde_json",
  "tap-core",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "tap-core"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "bitflags",
  "objc2",
@@ -1039,7 +1039,7 @@ dependencies = [
 
 [[package]]
 name = "tap-import"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "aes",
  "cbc",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "tap-shell"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "block2",
  "dispatch2",
@@ -1252,7 +1252,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "resvg",
 ]

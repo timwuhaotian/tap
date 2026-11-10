@@ -289,12 +289,15 @@ fn heading_width(name: &str) -> f64 {
         .min(palette::TAB_WIDTH)
 }
 
-/// The row's geometry: tabs from the lights, each its fixed width until the row is full,
-/// the live tab as wide as the field while it is being edited; headings keep their own
-/// width. `editing` is the live tab's slot, `trailing` what the right end keeps clear
-/// (see `trailing`). However far the tabs overflow at their narrowest, the plus is
-/// pinned before `trailing` rather than running under the doors there.
-fn layout(width: f64, slots: &[Slot], editing: Option<usize>, trailing: f64) -> Layout {
+/// The row's geometry: headings keep their width, and the live tab has room for its
+/// cross, or for the field while editing. The plus stays before the trailing doors.
+fn layout(
+    width: f64,
+    slots: &[Slot],
+    editing: Option<usize>,
+    trailing: f64,
+    active: Option<usize>,
+) -> Layout {
     let count = slots.len();
     let top = (palette::STRIP - palette::ROW) / 2.0;
     let room = (width - palette::LIGHTS - trailing - palette::PLUS - 12.0).max(0.0);
@@ -307,18 +310,24 @@ fn layout(width: f64, slots: &[Slot], editing: Option<usize>, trailing: f64) -> 
             Slot::Tab => 0.0,
         })
         .sum();
-    let field = editing.map_or(0.0, |_| palette::FIELD.min(room * 0.6));
     let tabs_count = slots.iter().filter(|s| **s == Slot::Tab).count();
-    let others = if editing.is_some() {
-        tabs_count.saturating_sub(1)
+    let active = active.filter(|&i| slots.get(i) == Some(&Slot::Tab));
+    #[allow(clippy::cast_precision_loss)]
+    let shared = (room - gaps - headings) / tabs_count.max(1) as f64;
+    let special = editing.or(active.filter(|_| shared < palette::TAB_TITLED));
+    let reserved = if editing.is_some() {
+        palette::FIELD.min(room * 0.6)
+    } else if special.is_some() {
+        palette::TAB_TITLED
     } else {
-        tabs_count
+        0.0
     };
+    let others = tabs_count.saturating_sub(usize::from(special.is_some()));
     #[allow(clippy::cast_precision_loss)]
     let each = if others == 0 {
         palette::TAB_WIDTH
     } else {
-        ((room - field - gaps - headings) / others as f64)
+        ((room - reserved - gaps - headings) / others as f64)
             .clamp(palette::TAB_MIN, palette::TAB_WIDTH)
     };
     let mut x = palette::LIGHTS;
@@ -326,7 +335,7 @@ fn layout(width: f64, slots: &[Slot], editing: Option<usize>, trailing: f64) -> 
     for (index, slot) in slots.iter().enumerate() {
         let w = match slot {
             Slot::Heading(w) => *w,
-            Slot::Tab if editing == Some(index) => field.max(each),
+            Slot::Tab if special == Some(index) => reserved.max(each),
             Slot::Tab => each,
         };
         tabs.push(NSRect::new(
@@ -346,6 +355,14 @@ fn layout(width: f64, slots: &[Slot], editing: Option<usize>, trailing: f64) -> 
     } else {
         width - trailing
     };
+    if let Some(rect) = editing.or(active).and_then(|i| tabs.get(i)) {
+        let shift = (rect.origin.x + rect.size.width - end)
+            .max(0.0)
+            .min((rect.origin.x - palette::LIGHTS).max(0.0));
+        for rect in &mut tabs {
+            rect.origin.x -= shift;
+        }
+    }
     Layout { tabs, plus, end }
 }
 
@@ -402,6 +419,9 @@ fn column(rect: NSRect, height: f64) -> NSRect {
 /// overflows, the tabs laid out past `end` aren't drawn, and the end past the plus
 /// stays title bar rather than a tab nobody can see.
 fn slot_at(layout: &Layout, point: NSPoint, height: f64) -> Option<usize> {
+    if point.x < palette::LIGHTS {
+        return None;
+    }
     layout.tabs.iter().rposition(|rect| {
         let shown = (rect.size.width + palette::TAB_GAP).min(layout.end - rect.origin.x);
         shown > 0.0
@@ -489,6 +509,12 @@ fn in_group(browser: &Browser, item: &Item, group: &str) -> bool {
     }
 }
 
+fn active_slot(browser: &Browser, row: &[Item]) -> Option<usize> {
+    let active = browser.active()?;
+    let index = browser.tabs().iter().position(|t| t.id == active)?;
+    row.iter().position(|item| *item == Item::Tab(index))
+}
+
 /// The live tab's slot, while the field is open on it in the row (not in the address
 /// bar, nor floating for ⌘T).
 fn editing_slot(browser: &Browser, row: &[Item], bar: bool) -> Option<usize> {
@@ -499,9 +525,7 @@ fn editing_slot(browser: &Browser, row: &[Item], bar: bool) -> Option<usize> {
     if editing.launching {
         return None;
     }
-    let active = browser.active()?;
-    let index = browser.tabs().iter().position(|t| t.id == active)?;
-    row.iter().position(|item| *item == Item::Tab(index))
+    active_slot(browser, row)
 }
 
 /// Draws with everything at `alpha`: a slot fading in or out.
@@ -790,7 +814,13 @@ impl Strip {
         rt::read(|browser| {
             let (row, slots) = slots(browser);
             let editing = editing_slot(browser, &row, bar);
-            let layout = layout(width, &slots, editing, trailing(bar));
+            let layout = layout(
+                width,
+                &slots,
+                editing,
+                trailing(bar),
+                active_slot(browser, &row),
+            );
             f(browser, &row, &layout)
         })
     }
@@ -800,7 +830,8 @@ impl Strip {
         self.with_layout(|browser, row, layout| {
             let index = editing_slot(browser, row, self.look_now().bar)?;
             let rect = layout.tabs.get(index).copied()?;
-            Some(palette::field_frame(palette::text_line(rect, 12.0, 12.0)))
+            let right = if titled(rect) { 30.0 } else { 12.0 };
+            Some(palette::field_frame(palette::text_line(rect, 12.0, right)))
         })
         .flatten()
     }
@@ -881,10 +912,8 @@ impl Strip {
 
     fn spot_at(&self, event: &NSEvent) -> Spot {
         let point = self.convertPoint_fromView(event.locationInWindow(), None);
-        let bar = self.look_now().bar;
         let height = self.bounds().size.height;
         self.with_layout(|browser, row, layout| {
-            let editing = editing_slot(browser, row, bar);
             let flock = self.ivars().flock.borrow();
             let layout = Layout {
                 tabs: row
@@ -910,8 +939,7 @@ impl Strip {
                 Item::Heading(place) => return Spot::Heading(*place),
                 Item::Tab(index) => *index,
             };
-            let can_close = editing != Some(slot) && titled(*rect);
-            if can_close && contains(close_rect(*rect), point) {
+            if titled(*rect) && contains(close_rect(*rect), point) {
                 Spot::Close(index)
             } else {
                 Spot::Tab(index)
@@ -1584,7 +1612,13 @@ impl Strip {
         let _ = rt::read(|browser| {
             let (row, slots) = slots(browser);
             let editing = editing_slot(browser, &row, look.bar);
-            let layout = layout(bounds.size.width, &slots, editing, trailing);
+            let layout = layout(
+                bounds.size.width,
+                &slots,
+                editing,
+                trailing,
+                active_slot(browser, &row),
+            );
             self.aim(browser, &row, &layout);
             let carried = self.hold_carried(browser, &row, &layout);
             // The live tab's load line, here only while the address bar is away.
@@ -1635,8 +1669,8 @@ impl Strip {
             // the state is restored below, before the plus itself is drawn.
             NSGraphicsContext::saveGraphicsState_class();
             NSBezierPath::clipRect(NSRect::new(
-                NSPoint::new(0.0, 0.0),
-                NSSize::new(layout.end, bounds.size.height),
+                NSPoint::new(palette::LIGHTS, 0.0),
+                NSSize::new((layout.end - palette::LIGHTS).max(0.0), bounds.size.height),
             ));
             let top = (palette::STRIP - palette::ROW) / 2.0;
             // What has gone, fading under the rest.
@@ -2030,6 +2064,9 @@ fn draw_tab(
         reading_fill(*rect, read, dark);
     }
     if editing_here {
+        if titled {
+            draw_close(*rect, paint.spot == Spot::Close(index), dark);
+        }
         return;
     }
     // Every titled tab wears its cross at rest, so a tab closes under the pointer
@@ -2145,12 +2182,7 @@ fn draw_tab(
         }
     }
     if crossed {
-        let square = close_rect(*rect);
-        if paint.spot == Spot::Close(index) {
-            palette::HAIRLINE.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0).fill();
-        }
-        self::cross(square, &palette::MUTED.resolve(dark));
+        draw_close(*rect, paint.spot == Spot::Close(index), dark);
     }
     // The load's progress: along the pill's foot, unless the address bar says it.
     if live
@@ -2163,6 +2195,15 @@ fn draw_tab(
             &palette::INK.resolve(dark).colorWithAlphaComponent(alpha),
         );
     }
+}
+
+fn draw_close(rect: NSRect, hovered: bool, dark: bool) {
+    let square = close_rect(rect);
+    if hovered {
+        palette::HAIRLINE.resolve(dark).setFill();
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0).fill();
+    }
+    self::cross(square, &palette::MUTED.resolve(dark));
 }
 
 /// A short word (a digit, a letter) centred both ways in `rect`.
@@ -2473,7 +2514,7 @@ mod tests {
 
     #[test]
     fn tabs_keep_their_width_until_the_row_is_full_then_give_way() {
-        let wide = layout(1600.0, &tabs(3), None, palette::HELM);
+        let wide = layout(1600.0, &tabs(3), None, palette::HELM, None);
         assert!(
             wide.tabs
                 .iter()
@@ -2481,7 +2522,7 @@ mod tests {
         );
         assert!((wide.tabs[0].origin.x - palette::LIGHTS).abs() < f64::EPSILON);
 
-        let crowded = layout(900.0, &tabs(30), None, palette::HELM);
+        let crowded = layout(900.0, &tabs(30), None, palette::HELM, None);
         assert!(
             crowded
                 .tabs
@@ -2492,8 +2533,44 @@ mod tests {
     }
 
     #[test]
+    fn the_live_tab_keeps_its_cross_in_a_crowded_row() {
+        let row = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
+        assert!(titled(row.tabs[5]));
+        assert!(row.tabs[0].size.width < palette::TAB_TITLED);
+        assert!(row.tabs.last().unwrap().origin.x + row.tabs.last().unwrap().size.width <= row.end);
+        let cross = close_rect(row.tabs[5]);
+        assert_eq!(slot_at(&row, cross.origin, palette::STRIP), Some(5));
+
+        let overflow = layout(900.0, &tabs(30), None, palette::HELM, Some(20));
+        let live = overflow.tabs[20];
+        assert!(titled(live));
+        assert!(live.origin.x >= palette::LIGHTS);
+        assert!(live.origin.x + live.size.width <= overflow.end);
+        assert_eq!(
+            slot_at(&overflow, close_rect(live).origin, palette::STRIP),
+            Some(20)
+        );
+        assert_eq!(
+            slot_at(
+                &overflow,
+                NSPoint::new(palette::LIGHTS - 1.0, 20.0),
+                palette::STRIP
+            ),
+            None
+        );
+
+        let editing = layout(900.0, &tabs(30), Some(20), palette::HELM, Some(20));
+        assert!(editing.tabs[20].origin.x >= palette::LIGHTS);
+        assert!(editing.tabs[20].origin.x + editing.tabs[20].size.width <= editing.end);
+        let field = palette::field_frame(palette::text_line(editing.tabs[20], 12.0, 30.0));
+        let cross = close_rect(editing.tabs[20]);
+        assert!(field.origin.x + field.size.width <= cross.origin.x);
+        assert_eq!(slot_at(&editing, cross.origin, palette::STRIP), Some(20));
+    }
+
+    #[test]
     fn the_live_tab_widens_into_the_field() {
-        let row = layout(1600.0, &tabs(3), Some(1), palette::HELM);
+        let row = layout(1600.0, &tabs(3), Some(1), palette::HELM, None);
         assert!((row.tabs[1].size.width - palette::FIELD).abs() < f64::EPSILON);
         assert!(row.tabs[2].origin.x > row.tabs[1].origin.x + palette::FIELD);
     }
@@ -2501,14 +2578,14 @@ mod tests {
     #[test]
     fn the_plus_stays_before_the_doors_however_many_tabs_there_are() {
         // Few tabs: the plus sits after the last one, as before.
-        let few = layout(1600.0, &tabs(3), None, palette::HELM);
+        let few = layout(1600.0, &tabs(3), None, palette::HELM, None);
         let after_last = few.tabs[2].origin.x + few.tabs[2].size.width + palette::TAB_GAP + 2.0;
         assert!((few.plus.origin.x - after_last).abs() < f64::EPSILON);
         assert!((few.end - (1600.0 - palette::HELM)).abs() < f64::EPSILON);
 
         // Tabs at their narrowest still overflow: the plus is pinned before
         // the helm instead of running under it, and the tabs stop before it.
-        let crowded = layout(900.0, &tabs(30), None, palette::HELM);
+        let crowded = layout(900.0, &tabs(30), None, palette::HELM, None);
         let doors = 900.0 - palette::HELM;
         assert!(crowded.plus.origin.x + palette::PLUS <= doors - 4.0 + f64::EPSILON);
         assert!(crowded.end <= crowded.plus.origin.x - 2.0 + f64::EPSILON);
@@ -2516,13 +2593,13 @@ mod tests {
         // With the downloads door shown, the reserve grows by its width and
         // the plus keeps the same distance from it.
         let trailing = palette::HELM + palette::DOOR + 4.0;
-        let fetching = layout(900.0, &tabs(30), None, trailing);
+        let fetching = layout(900.0, &tabs(30), None, trailing, None);
         assert!(fetching.plus.origin.x + palette::PLUS <= 900.0 - trailing - 4.0 + f64::EPSILON);
     }
 
     #[test]
     fn a_press_takes_a_shown_slot_by_its_column_and_never_one_past_the_end() {
-        let few = layout(1600.0, &tabs(3), None, palette::HELM);
+        let few = layout(1600.0, &tabs(3), None, palette::HELM, None);
         let middle = |r: NSRect| r.origin.x + r.size.width / 2.0;
         // Above and below the pill, and in the gap after it: still the tab.
         for y in [1.0, palette::STRIP - 1.0] {
@@ -2539,7 +2616,7 @@ mod tests {
 
         // Overflowed: the tabs laid out past the pinned plus aren't drawn, so the
         // end beyond it is title bar at any height, not a tab nobody can see.
-        let crowded = layout(1200.0, &tabs(60), None, palette::HELM);
+        let crowded = layout(1200.0, &tabs(60), None, palette::HELM, None);
         let past_plus = crowded.plus.origin.x + crowded.plus.size.width + 2.0;
         assert!(crowded.tabs.last().is_some_and(|r| r.origin.x > past_plus));
         for y in [3.0, palette::STRIP / 2.0, palette::STRIP - 3.0] {
@@ -2747,6 +2824,7 @@ mod tests {
             ],
             None,
             palette::HELM,
+            None,
         );
         assert!((row.tabs[0].size.width - 70.0).abs() < f64::EPSILON);
         assert!((row.tabs[3].size.width - 50.0).abs() < f64::EPSILON);
