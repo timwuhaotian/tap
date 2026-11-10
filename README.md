@@ -34,8 +34,9 @@ with its own name and icon, and with fixes of its own.
   Tab or → takes the ending; Return uses what you typed unless you pick a suggestion.
   Pinyin and kana are left alone while an input method is composing.
 - **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
-  ⌘1–⌘9, links opened behind the page with ⌘-click, each tab with its site's icon
-  (including sites whose only icon is an SVG); blank cached icons are fetched again.
+  ⌘1–⌘9, links opened behind the page with ⌘-click, a × on every tab that closes it,
+  each tab with its site's icon (including sites whose only icon is an SVG); blank
+  cached icons are fetched again.
 - **An address bar** under the tabs, with back, forward and reload on its left: the
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
   the load's progress as a line that glides forward and fades once the page is in.

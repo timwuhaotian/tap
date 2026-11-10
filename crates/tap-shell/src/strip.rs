@@ -1,10 +1,10 @@
 //! The row of tabs at the top of the window (Search's `TabBar.swift`). Titles, the live
-//! one on a grey pill, a cross on the one under the pointer, the plus after the last,
-//! and the field in place of the live tab while you type (unless the address bar holds
-//! it). A tab group's name heads its tabs on a chip of the group's colour, a line of it
-//! under them; a click on it folds the group to its name (and the tab in front, if it
-//! is one of its own) or opens it again. Drawn as one view: a row of three hundred tabs
-//! is one draw, not three hundred views.
+//! one on a grey pill, a cross on every tab wide enough to hold one, the plus after
+//! the last, and the field in place of the live tab while you type (unless the address
+//! bar holds it). A tab group's name heads its tabs on a chip of the group's colour, a
+//! line of it under them; a click on it folds the group to its name (and the tab in
+//! front, if it is one of its own) or opens it again. Drawn as one view: a row of three
+//! hundred tabs is one draw, not three hundred views.
 //!
 //! Every slot (tab, heading, plus) is followed by what it is, not where it stands, and
 //! springs to where the layout puts it (`motion.rs`): opened, closed, moved, folded,
@@ -379,6 +379,13 @@ fn close_rect(tab: NSRect) -> NSRect {
         ),
         NSSize::new(size, size),
     )
+}
+
+/// Whether a tab is wide enough to say its title — and so to wear a cross, which
+/// stands where the title keeps clear. Drawn and hit-tested by the one rule, so a
+/// cross is always where a click on it closes its tab.
+fn titled(rect: NSRect) -> bool {
+    rect.size.width >= palette::TAB_TITLED
 }
 
 /// What a press takes a slot by: its whole column, the strip's height and the gap to
@@ -903,7 +910,7 @@ impl Strip {
                 Item::Heading(place) => return Spot::Heading(*place),
                 Item::Tab(index) => *index,
             };
-            let can_close = editing != Some(slot) && rect.size.width >= palette::TAB_TITLED;
+            let can_close = editing != Some(slot) && titled(*rect);
             if can_close && contains(close_rect(*rect), point) {
                 Spot::Close(index)
             } else {
@@ -2010,7 +2017,7 @@ fn draw_tab(
             .setFill();
         palette::pill_path(*rect).fill();
     }
-    let titled = rect.size.width >= palette::TAB_TITLED;
+    let titled = titled(*rect);
     // Search's `ReadingFill`: ink at 5.5% over the live pill, from its
     // left, as far as the page has been read. Not on a tab down to its
     // mark, where thirty points of grey would say nothing.
@@ -2025,9 +2032,9 @@ fn draw_tab(
     if editing_here {
         return;
     }
-    // The cross comes and goes with the wash; the live tab always has one.
-    let cross = if live { 1.0 } else { wash };
-    let crossed = cross > 0.001 && titled;
+    // Every titled tab wears its cross at rest, so a tab closes under the pointer
+    // and not only under ⌘W; one on its way out has none, as it fades at rest.
+    let crossed = titled && !gone;
     let number = if paint.cmd_held && !gone {
         shortcut_number(index, browser.tabs().len())
     } else {
@@ -2139,13 +2146,11 @@ fn draw_tab(
     }
     if crossed {
         let square = close_rect(*rect);
-        faded(cross, || {
-            if paint.spot == Spot::Close(index) {
-                palette::HAIRLINE.resolve(dark).setFill();
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0).fill();
-            }
-            self::cross(square, &palette::MUTED.resolve(dark));
-        });
+        if paint.spot == Spot::Close(index) {
+            palette::HAIRLINE.resolve(dark).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 5.0, 5.0).fill();
+        }
+        self::cross(square, &palette::MUTED.resolve(dark));
     }
     // The load's progress: along the pill's foot, unless the address bar says it.
     if live
@@ -2639,6 +2644,33 @@ mod tests {
         assert_eq!(shortcut_number(19, 20), Some(9), "the last is always 9");
         assert_eq!(shortcut_number(8, 9), Some(9));
         assert_eq!(shortcut_number(0, 0), None);
+    }
+
+    #[test]
+    fn every_titled_tab_wears_a_cross_where_a_click_closes_it() {
+        let wide = NSRect::new(
+            NSPoint::new(40.0, 5.0),
+            NSSize::new(palette::TAB_WIDTH, palette::ROW),
+        );
+        assert!(titled(wide), "a tab of the ordinary width says its title");
+        // The cross sits inside the tab, at its right end, clear of the 30 points
+        // the title keeps for it — drawn and hit-tested by the one rule.
+        let cross = close_rect(wide);
+        assert!(contains(wide, cross.origin));
+        assert!(contains(
+            wide,
+            NSPoint::new(
+                cross.origin.x + cross.size.width - 1.0,
+                cross.origin.y + cross.size.height - 1.0,
+            )
+        ));
+        assert!(cross.origin.x >= wide.origin.x + wide.size.width - 30.0);
+        // A tab down to its narrowest has room for neither, and wears neither.
+        let narrow = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(palette::TAB_MIN, palette::ROW),
+        );
+        assert!(!titled(narrow));
     }
 
     #[test]

@@ -7,6 +7,16 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.6 — 2026-11-10
+
+### Added
+
+- **A close button on every tab**: the × used to appear only on the tab you were on and
+  on the one under the pointer, which left closing a tab to ⌘W. Every tab wide enough
+  to show its title now wears one at rest, and a click on it closes that tab. A row
+  too crowded for titles has no room for a cross either; the tab you're on keeps its
+  cross as before, and the field still stands in its place while you type an address.
+
 ## 0.3.5 — 2026-11-10
 
 ### Fixed
