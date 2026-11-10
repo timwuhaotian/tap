@@ -7,6 +7,8 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.5 — 2026-11-10
+
 ### Fixed
 
 - **The save-password prompt moved to where the eye is**: it used to sit as a small

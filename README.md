@@ -74,8 +74,9 @@ with its own name and icon, and with fixes of its own.
 - **Passwords**, Search's way, in the macOS keychain under Tap's name: a login page
   fills itself in with the newest account kept for the site, and the accounts hang
   from a sign-in box you click into, one click switching to another; after a
-  sign-in that took, Tap offers to save or update the password (or never ask on that
-  site). Sign-in detection avoids unnecessary input scans as pages change. A page sent
+  sign-in that took, Tap offers to save or update the password, the offer hanging
+  at the top of the page where you cannot miss it (or never ask on that site).
+  Sign-in detection avoids unnecessary input scans as pages change. A page sent
   over plain http is only ever offered what was kept from one.
 - **Your profile on your other Mac.** File › Export Tap Profile… writes one offline
   file of your tabs and their groups, history, bookmarks and settings, and offers it to
@@ -158,7 +159,7 @@ Yes. Tap is MIT-licensed; the source is this repository. No account, no paywall,
 no feature flags.
 
 **How big is Tap?**
-About a 1.6 MB download and 3 MB installed (0.3.4). WebKit ships with macOS, so
+About a 1.6 MB download and 3 MB installed. WebKit ships with macOS, so
 Tap carries no engine — just the browser.
 
 **How is Tap different from Search?**
