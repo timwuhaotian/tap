@@ -42,6 +42,9 @@ with its own name and icon, and with fixes of its own.
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
   the load's progress as a line that glides forward and fades once the page is in.
   Settings can hide it.
+- **A star in the address bar** keeps the page you are on, or lets it go (⇧⌘B), and
+  the list beside it says what is kept and takes you there. A folder that came from
+  another browser is kept too, with its places under it.
 - **Tab groups** in colours of their own: a group's name heads its tabs on a chip of
   its colour (right-click it to choose another), and a click folds it away or opens it.
 - **Pick several tabs** with ⌘-click or ⇧-click: ⌘C copies their addresses, one to a
@@ -94,7 +97,10 @@ with its own name and icon, and with fixes of its own.
 - **Find on page** (⌘F) with a live "3 of 17", Match Case and Whole Words.
 - **Downloads** into Downloads, under their own names; the door in the tab row fills
   a ring as they come in (turning while a file says no size), says when one failed
-  and why, and each file carries its own progress bar in the Finder.
+  and why, and each file carries its own progress bar in the Finder. Click the door
+  (or press ⇧⌘J) for a card of what came down: the files coming in, with their bars
+  and their bytes and a cross to stop one, and the ones that came, newest first. A
+  file you asked for flies from your pointer to the door, and the door takes it.
 - **Pages can ask**: alerts, confirms, prompts, file uploads and site sign-ins, each
   titled with the site that asks.
 - **It can be your browser.** Choose Tap under System Settings › Desktop & Dock ›

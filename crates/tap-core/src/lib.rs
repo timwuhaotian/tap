@@ -10,6 +10,7 @@
 #![deny(unsafe_code)]
 
 pub mod address;
+pub mod bookmarks;
 pub mod browser;
 pub mod crash;
 pub mod engine;

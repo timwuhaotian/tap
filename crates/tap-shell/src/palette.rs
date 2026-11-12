@@ -8,9 +8,9 @@ use block2::RcBlock;
 use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSLineBreakMode, NSMutableParagraphStyle,
-    NSParagraphStyleAttributeName, NSShadow, NSStringDrawing, NSView,
+    NSBezierPath, NSColor, NSCompositingOperation, NSFont, NSFontAttributeName,
+    NSFontWeightRegular, NSForegroundColorAttributeName, NSImage, NSLineBreakMode,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSShadow, NSStringDrawing, NSView,
 };
 use objc2_foundation::{
     NSArray, NSAttributedStringKey, NSDictionary, NSPoint, NSRect, NSSize, NSString,
@@ -69,6 +69,15 @@ pub fn overlaps(a: NSRect, b: NSRect) -> bool {
         && b.origin.x < a.origin.x + a.size.width
         && a.origin.y < b.origin.y + b.size.height
         && b.origin.y < a.origin.y + a.size.height
+}
+
+/// Whether a point is on a rect: what a click is measured against.
+#[must_use]
+pub fn inside(rect: NSRect, point: NSPoint) -> bool {
+    point.x >= rect.origin.x
+        && point.x < rect.origin.x + rect.size.width
+        && point.y >= rect.origin.y
+        && point.y < rect.origin.y + rect.size.height
 }
 
 /// A pill's outline at the chrome radius: tabs, picked rows, the address capsule.
@@ -323,6 +332,29 @@ pub fn field_frame(line: NSRect) -> NSRect {
 
 /// The air a borderless `NSTextField`'s cell keeps at each end of its text.
 const FIELD_INSET: f64 = 2.0;
+
+/// An image, centred in `rect` at its own size.
+pub fn draw_image(image: &NSImage, rect: NSRect) {
+    let size = image.size();
+    let square = NSRect::new(
+        NSPoint::new(
+            rect.origin.x + (rect.size.width - size.width) / 2.0,
+            rect.origin.y + (rect.size.height - size.height) / 2.0,
+        ),
+        size,
+    );
+    // SAFETY: drawing an image into the view's own context, no hints.
+    unsafe {
+        image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+            square,
+            NSRect::ZERO,
+            NSCompositingOperation::SourceOver,
+            1.0,
+            true,
+            None,
+        );
+    }
+}
 
 /// How wide a line of chrome text is, in points.
 #[must_use]

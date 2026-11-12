@@ -125,7 +125,10 @@ pub(crate) fn bring_in(incoming: Incoming, from: &str) -> Taken {
         let file = store::file("bookmarks.json");
         let kept = std::fs::read(&file).ok();
         let (data, added, _) = profile::merge_bookmarks(kept.as_deref(), bookmarks);
+        // The model keeps what is kept: the file has just changed under it.
+        let merged = tap_core::bookmarks::Bookmarks::load(&data).unwrap_or_default();
         store::save(file, data);
+        rt::update(|b| b.set_bookmarks(merged));
         added
     };
     let set = prefs::from_profile(&settings);

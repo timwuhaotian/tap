@@ -47,10 +47,10 @@ use tap_core::{
 use crate::{
     address_bar::{self, AddressBar},
     blank::{BlankView, Ground},
-    dialogs, downloads, findbar,
+    bookmarks, cards, dialogs, downloads, findbar,
     menu::{Command, Commands},
     offers::{self, Offers},
-    palette,
+    palette, panels,
     prefs::Kept,
     rt, settings, signin,
     strip::Strip,
@@ -69,6 +69,10 @@ pub struct View {
     can_forward: bool,
     loading: bool,
     blank: bool,
+    /// Whether the page in front is kept: the star in the address bar is filled.
+    kept: bool,
+    /// Whether the page in front is a place that can be kept at all.
+    keepable: bool,
     /// What stands in for the page on the stage while it has none to show.
     ground: Ground,
     title: String,
@@ -78,6 +82,8 @@ pub struct View {
 impl View {
     pub fn of(browser: &Browser) -> View {
         let tab = browser.active_tab();
+        let address = tab.map(|t| t.url().to_owned()).unwrap_or_default();
+        let keepable = tab.is_some_and(|t| !t.is_internal() && !t.url().is_empty());
         View {
             active: browser.active(),
             page: tab.and_then(tap_core::browser::Tab::page),
@@ -87,6 +93,8 @@ impl View {
             can_forward: tab.is_some_and(tap_core::browser::Tab::can_forward),
             loading: tab.is_some_and(tap_core::browser::Tab::loading),
             blank: tab.is_some_and(tap_core::browser::Tab::is_blank),
+            kept: keepable && browser.bookmarks().contains(&address),
+            keepable,
             ground: tab.map_or(Ground::Away, ground_of),
             title: tab.map_or_else(|| "Tap".to_owned(), tap_core::browser::Tab::label),
             find: findbar::State::of(browser),
@@ -133,6 +141,16 @@ struct Views {
     /// it while files come in.
     fetch_door: Retained<NSButton>,
     fetch_ring: Retained<downloads::Ring>,
+    /// The star that keeps the page, and the list of what is kept, at the address
+    /// bar's right end.
+    star: Retained<NSButton>,
+    list: Retained<NSButton>,
+    /// The card of what is kept, under the list.
+    bookmarks_panel: Retained<bookmarks::Panel>,
+    /// The card of what came down, under the downloads door.
+    downloads_panel: Retained<downloads::Panel>,
+    /// The file on its way to the door, laid over the window.
+    flight: Retained<downloads::Flight>,
     ending: Retained<NSTextField>,
     trouble: Retained<NSView>,
     trouble_text: Retained<NSTextField>,
@@ -143,6 +161,8 @@ struct Views {
     stopping: Cell<bool>,
     /// The window's last title, so AppKit is told only when it moves.
     title: RefCell<String>,
+    /// Whether the star last showed a kept page, so its face is made only on change.
+    starred: Cell<bool>,
     _field_delegate: Retained<FieldDelegate>,
     _window_delegate: Retained<WindowDelegate>,
 }
@@ -233,6 +253,29 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
     fetch_door.addSubview(&fetch_ring);
     strip.addSubview(&fetch_door);
 
+    // The star and the list live in the address bar, at the capsule's right end.
+    let star = bookmarks::star(mtm);
+    star.setFrame(address_bar::star_rect(width));
+    star.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+    bar.addSubview(&star);
+    let list = bookmarks::list(mtm);
+    list.setFrame(address_bar::list_rect(width));
+    list.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+    bar.addSubview(&list);
+    let bookmarks_panel = bookmarks::panel(mtm);
+    bookmarks_panel.setHidden(true);
+    root.addSubview(&bookmarks_panel);
+    let downloads_panel = downloads::panel(mtm);
+    downloads_panel.setHidden(true);
+    root.addSubview(&downloads_panel);
+    // The file on its way to the door is over everything: it is only a picture.
+    let flight = downloads::flight(mtm);
+    flight.setFrame(root.bounds());
+    flight.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    root.addSubview(&flight);
+
     let field_delegate = FieldDelegate::new(mtm);
     let field = field(mtm, &field_delegate);
     let field_editor = FieldEditor::new(mtm);
@@ -283,6 +326,11 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             suggest,
             fetch_door,
             fetch_ring,
+            star,
+            list,
+            bookmarks_panel,
+            downloads_panel,
+            flight,
             ending,
             trouble,
             trouble_text,
@@ -290,6 +338,7 @@ pub fn open(mtm: MainThreadMarker, commands: &Commands) {
             shown: RefCell::new(None),
             stopping: Cell::new(true),
             title: RefCell::new(String::new()),
+            starred: Cell::new(false),
             _field_delegate: field_delegate,
             _window_delegate: window_delegate,
         });
@@ -359,6 +408,16 @@ fn arrange(views: &Views) {
     views
         .fetch_door
         .setFrameOrigin(NSPoint::new(x, fetch.origin.y));
+    // The star and the list stand at the capsule's right end, whatever the window's
+    // width is.
+    views.star.setFrame(address_bar::star_rect(width));
+    views.list.setFrame(address_bar::list_rect(width));
+    // The card that is up follows the chrome it hangs from.
+    match panels::opened() {
+        Some(panels::Kind::Bookmarks) => place_bookmarks_panel(views),
+        Some(panels::Kind::Downloads) => place_downloads_panel(views),
+        None => {}
+    }
     views.window.invalidateCursorRectsForView(&views.bar);
     views.strip.setNeedsDisplay(true);
     views.bar.setNeedsDisplay(true);
@@ -531,6 +590,9 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
         }
         views.helm[0].setEnabled(view.can_back);
         views.helm[1].setEnabled(view.can_forward);
+        // The star's face: filled when the page is kept, and only there to keep
+        // something.
+        star_face(views, view, dirty);
         // Loading flips twice a load; the SF Symbol lookup ran on every update.
         if views.stopping.replace(view.loading) != view.loading {
             let (symbol, name) = if view.loading {
@@ -600,6 +662,22 @@ pub fn update(dirty: BrowserFields, tabs: &[(TabId, TabFields)], view: &View) {
             place_offers(views, view);
         }
     });
+}
+
+/// The star in the address bar: filled when the page in front is kept, and only
+/// there to keep something. What is kept changed, the list of it follows.
+fn star_face(views: &Views, view: &View, dirty: BrowserFields) {
+    views.star.setEnabled(view.keepable);
+    if views.starred.replace(view.kept) != view.kept
+        && let Some(image) = bookmarks::star_image(view.kept)
+    {
+        views.star.setImage(Some(&image));
+    }
+    if dirty.contains(BrowserFields::BOOKMARKS) && panels::opened() == Some(panels::Kind::Bookmarks)
+    {
+        place_bookmarks_panel(views);
+        views.bookmarks_panel.setNeedsDisplay(true);
+    }
 }
 
 /// The active tab's page in the stage, or what it says in place of the page.
@@ -887,15 +965,159 @@ fn refresh_fetch_door(views: &Views) {
     downloads::sync_door(&views.fetch_door, &views.fetch_ring);
 }
 
+/// The card of what came down, under the door at the strip's far end.
+fn place_downloads_panel(views: &Views) {
+    let Some(root) = views.window.contentView() else {
+        return;
+    };
+    let anchor = views
+        .fetch_door
+        .convertRect_toView(views.fetch_door.bounds(), Some(&root));
+    // The card hangs under the chrome, whichever row the door is in.
+    let top = if address_bar::shown() {
+        palette::STRIP + palette::BAR + 2.0
+    } else {
+        palette::STRIP + 2.0
+    };
+    let x = anchor.origin.x + anchor.size.width - downloads::WIDTH - cards::SHADOW;
+    views.downloads_panel.setFrame(NSRect::new(
+        NSPoint::new(x, top - cards::SHADOW),
+        NSSize::new(
+            downloads::WIDTH + 2.0 * cards::SHADOW,
+            downloads::panel_height(),
+        ),
+    ));
+}
+
+/// The card of what came down comes up under the door, or goes away.
+pub fn toggle_downloads() {
+    if panels::opened() == Some(panels::Kind::Downloads) {
+        close_panels();
+        return;
+    }
+    with_views(|views| {
+        views.bookmarks_panel.hide();
+        place_downloads_panel(views);
+        views.downloads_panel.show();
+    });
+    panels::mark_open(panels::Kind::Downloads);
+}
+
+/// A download started: the file flies from the pointer to the door.
+pub fn download_started(asked: bool) {
+    with_views(|views| {
+        if !asked {
+            return;
+        }
+        let Some(from) = pointer() else {
+            return;
+        };
+        let to = door_point(views);
+        downloads::fly_to(&views.flight, from, to);
+    });
+}
+
+/// The file landed on the door: the door takes it.
+pub fn downloads_landed() {
+    with_views(|views| downloads::bounce(&views.fetch_ring));
+}
+
+/// Where the pointer is, in the window's own coordinates.
+fn pointer() -> Option<NSPoint> {
+    let window = main_window()?;
+    Some(window.convertPointFromScreen(NSEvent::mouseLocation()))
+}
+
+/// Where the downloads door stands, in the window's own coordinates.
+fn door_point(views: &Views) -> NSPoint {
+    let door = &views.fetch_door;
+    let centre = NSPoint::new(
+        door.frame().size.width / 2.0,
+        door.frame().size.height / 2.0,
+    );
+    door.convertPoint_toView(centre, None)
+}
+
+/// The card of what is kept, under the list at the address bar's right end.
+fn place_bookmarks_panel(views: &Views) {
+    let Some(root) = views.window.contentView() else {
+        return;
+    };
+    let anchor = views
+        .list
+        .convertRect_toView(views.list.bounds(), Some(&root));
+    let rows = rt::read(|browser| browser.bookmarks().entries()).map_or(0, |rows| rows.len());
+    // The card's right edge lines up with the list's, and it hangs under the bar.
+    let x = anchor.origin.x + anchor.size.width - bookmarks::WIDTH - cards::SHADOW;
+    let y = palette::STRIP + palette::BAR + 2.0 - cards::SHADOW;
+    views.bookmarks_panel.setFrame(NSRect::new(
+        NSPoint::new(x, y),
+        NSSize::new(
+            bookmarks::WIDTH + 2.0 * cards::SHADOW,
+            bookmarks::height(rows),
+        ),
+    ));
+}
+
+/// The card of what is kept comes up under the list in the address bar.
+pub fn open_bookmarks() {
+    with_views(|views| {
+        views.downloads_panel.hide();
+        place_bookmarks_panel(views);
+        views.bookmarks_panel.show();
+    });
+    panels::mark_open(panels::Kind::Bookmarks);
+}
+
+/// The card that is up goes away.
+pub fn close_panels() {
+    with_views(|views| {
+        views.bookmarks_panel.hide();
+        views.downloads_panel.hide();
+    });
+    panels::mark_closed();
+}
+
+/// Whether a click at this point is on the card that is up, or on the button it hangs
+/// from: those clicks do not put the card away.
+pub fn on_a_panel(point: NSPoint) -> bool {
+    with_views(|views| match panels::opened() {
+        Some(panels::Kind::Bookmarks) => {
+            views.bookmarks_panel.holds(point) || on_view(&views.list, point)
+        }
+        Some(panels::Kind::Downloads) => {
+            views.downloads_panel.holds(point) || on_view(&views.fetch_door, point)
+        }
+        None => false,
+    })
+    .unwrap_or(false)
+}
+
+/// Whether a point in the window is on a view.
+fn on_view(view: &NSView, point: NSPoint) -> bool {
+    let rect = view.convertRect_toView(view.bounds(), None);
+    palette::inside(rect, point)
+}
+
 /// A download started, moved or ended: the door follows, without waiting for the
 /// model. The row lays out again only as the door comes or goes; a tick of the ring
 /// is no reason to redraw three hundred tabs.
-pub fn downloads_moved() {
+pub fn downloads_said() {
     with_views(|views| {
         let shown = views.fetch_door.isHidden();
         refresh_fetch_door(views);
         if views.fetch_door.isHidden() != shown {
             views.strip.setNeedsDisplay(true);
+        }
+    });
+}
+
+/// A file's bytes moved: the card of what came down follows.
+pub fn downloads_moved() {
+    with_views(|views| {
+        if panels::opened() == Some(panels::Kind::Downloads) {
+            place_downloads_panel(views);
+            views.downloads_panel.setNeedsDisplay(true);
         }
     });
 }
@@ -2023,6 +2245,13 @@ define_class!(
                     })
                 })
                 .map(|(_, editor)| editor)
+        }
+
+        /// The window is a different width: the chrome, and the card hanging from it,
+        /// are laid out again.
+        #[unsafe(method(windowDidResize:))]
+        fn did_resize(&self, _sender: &NSWindow) {
+            with_views(arrange);
         }
     }
 );

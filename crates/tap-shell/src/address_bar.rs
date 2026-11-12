@@ -15,7 +15,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSCompositingOperation, NSCursor, NSEvent, NSFontWeightMedium, NSImage,
+    NSBezierPath, NSColor, NSCursor, NSEvent, NSFontWeightMedium, NSImage,
     NSImageSymbolConfiguration, NSMenu, NSMenuItem, NSResponder, NSView,
 };
 use objc2_foundation::{
@@ -40,6 +40,13 @@ const CAPSULE: f64 = 28.0;
 /// The badge's square, and where the address starts after it.
 const BADGE: f64 = 24.0;
 const TEXT: f64 = 30.0;
+/// The buttons at the capsule's right end: the star that keeps the page, and the
+/// list of what is kept.
+const BUTTON: f64 = 20.0;
+/// The air between the capsule's edge and the buttons, and between the buttons.
+const AIR: f64 = 4.0;
+/// The room the two buttons and the air take at the capsule's right end.
+const BUTTONS: f64 = 2.0 * BUTTON + 3.0 * AIR;
 
 /// Whether Settings has the bar up.
 #[must_use]
@@ -58,6 +65,27 @@ pub fn door_rect(index: usize) -> NSRect {
     )
 }
 
+/// Where the star stands: the capsule's right end, where it keeps the page.
+#[must_use]
+pub fn star_rect(width: f64) -> NSRect {
+    NSRect::new(
+        NSPoint::new(width - 10.0 - AIR - BUTTON, (palette::BAR - BUTTON) / 2.0),
+        NSSize::new(BUTTON, BUTTON),
+    )
+}
+
+/// Where the list of what is kept stands: just before the star.
+#[must_use]
+pub fn list_rect(width: f64) -> NSRect {
+    NSRect::new(
+        NSPoint::new(
+            width - 10.0 - 2.0 * (BUTTON + AIR),
+            (palette::BAR - BUTTON) / 2.0,
+        ),
+        NSSize::new(BUTTON, BUTTON),
+    )
+}
+
 fn capsule(width: f64) -> NSRect {
     NSRect::new(
         NSPoint::new(LEAD, (palette::BAR - CAPSULE) / 2.0),
@@ -72,9 +100,10 @@ fn badge_rect(capsule: NSRect) -> NSRect {
     )
 }
 
-/// The address's line, centred in the capsule as the badge is.
+/// The address's line, centred in the capsule as the badge is, and stopping short of
+/// the buttons at its right end.
 fn text_rect(capsule: NSRect) -> NSRect {
-    palette::text_line(capsule, TEXT, 10.0)
+    palette::text_line(capsule, TEXT, BUTTONS)
 }
 
 /// What the bar shows, read from the model in one go.
@@ -411,7 +440,7 @@ impl AddressBar {
         if palette::overlaps(dirty, symbol_rect) {
             let (symbol, warns) = badge(shown.security);
             if let Some(image) = badge_image(symbol, warns, dark) {
-                draw_symbol(&image, symbol_rect);
+                palette::draw_image(&image, symbol_rect);
             }
         }
         if !shown.editing {
@@ -550,29 +579,6 @@ fn make_badge(symbol: &str, warns: bool, dark: bool) -> Option<Retained<NSImage>
         &NSImageSymbolConfiguration::configurationWithHierarchicalColor(&tint),
     );
     image.imageWithSymbolConfiguration(&config)
-}
-
-/// An SF Symbol, centred in `rect`.
-fn draw_symbol(image: &NSImage, rect: NSRect) {
-    let size = image.size();
-    let square = NSRect::new(
-        NSPoint::new(
-            rect.origin.x + (rect.size.width - size.width) / 2.0,
-            rect.origin.y + (rect.size.height - size.height) / 2.0,
-        ),
-        size,
-    );
-    // SAFETY: drawing a symbol image into the view's own context, no hints.
-    unsafe {
-        image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
-            square,
-            NSRect::ZERO,
-            NSCompositingOperation::SourceOver,
-            1.0,
-            true,
-            None,
-        );
-    }
 }
 
 #[cfg(test)]

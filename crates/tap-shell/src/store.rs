@@ -16,7 +16,7 @@ use std::{
     thread,
 };
 
-use tap_core::{history::History, identity, session};
+use tap_core::{bookmarks::Bookmarks, history::History, identity, session};
 
 /// The store folder, made on first use.
 pub fn folder() -> &'static Path {
@@ -90,6 +90,26 @@ pub fn save_history(history: History, now: f64) {
     });
 }
 
+/// The places you kept. A file that won't decode is moved aside, as the session is.
+pub fn read_bookmarks() -> Bookmarks {
+    let path = file("bookmarks.json");
+    let Ok(data) = std::fs::read(&path) else {
+        return Bookmarks::default();
+    };
+    Bookmarks::load(&data).unwrap_or_else(|| {
+        quarantine(&path);
+        Bookmarks::default()
+    })
+}
+
+/// Writes `bookmarks.json` on the writer thread, encoded there.
+pub fn save_bookmarks(bookmarks: Bookmarks) {
+    let _ = writer().send(Job {
+        body: Body::Bookmarks(bookmarks),
+        done: None,
+    });
+}
+
 /// Writes any of Tap's files on the writer thread, newest winning.
 pub fn save(path: PathBuf, data: Vec<u8>) {
     write(path, data, false);
@@ -115,6 +135,7 @@ enum Body {
     Bytes(PathBuf, Vec<u8>),
     Session(session::Shape),
     History(History, f64),
+    Bookmarks(Bookmarks),
 }
 
 impl Body {
@@ -123,6 +144,7 @@ impl Body {
             Body::Bytes(path, _) => path.clone(),
             Body::Session(_) => session_file(),
             Body::History(_, _) => file("history.json"),
+            Body::Bookmarks(_) => file("bookmarks.json"),
         }
     }
 
@@ -132,6 +154,7 @@ impl Body {
             Body::Bytes(_, data) => data,
             Body::Session(shape) => shape.encode(),
             Body::History(history, now) => history.encode(now),
+            Body::Bookmarks(bookmarks) => bookmarks.encode(),
         }
     }
 }

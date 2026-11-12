@@ -614,8 +614,11 @@ BookmarksFile, Registrable.
   when one failed, each for Search's 5-second linger; every file carries its own bar in
   the Finder while it comes in. Saying a failure on the door is an interim deviation:
   Search says it in its panel, and the door goes back to quiet once the list lands.
-  Not yet: the list (⇧⌘J) and `downloads.json`, pause, cancel and resume, asking where
-  to save, the PDF bar's save button, local text files shown as text.
+  The list is here (2026-11-11, Search's `DownloadsPanel` as a card under the door
+  rather than a page of its own): the files coming in with their bars and their bytes,
+  the ones that came, and the door's own card. Not yet: `downloads.json` (the list of
+  what came is for this run only), pause, resume and retry, asking where to save, the
+  PDF bar's save button, local text files shown as text.
 - [x] Find on page (2026-11-04): Search's page script, verbatim but for its names, in
   `assets/js/page-find.js` (copied from `PageFind.swift` at d1639aa by hand; the
   `extract-js` drift check comes with M1's tooling), run in Tap's own content world
@@ -874,7 +877,7 @@ privacy rows included).
   (Search's endpoints and sendability rules, a card under the offers — the
   model's offer list has no injection point, so arrow keys don't reach them),
   `newtab.floating` (gated at `window::update`, the one place all ⌘T paths
-  pass), `downloads.button` (the folder, there being no Downloads page yet).
+  pass), `downloads.button` (the door, which opens the card of what came down).
 - [x] **Reader and float** (new `reader.rs`, `float.rs`): `reader.twins`
   (⇧⌘R; Search's same-origin Markdown twin, else a scored prose guess),
   `reader.follows` (the article-corner look switch is Search's stage overlay
@@ -882,7 +885,7 @@ privacy rows included).
   or Tap's panel with the page's own view moved into it), `float.own` (a 0.5 s
   poll of the active tab, Search's known-players table only).
 - Still hidden, with their triggers: the sidebar family and `pins.list`
-  (`tabs.layout` — M3's column), `bookmarks.bar` (no bookmarks surface — M3),
+  (`tabs.layout` — M3's column), `bookmarks.bar` (the list of what is kept is here; the bar is not — M3),
   `links.little`/`links.peek` (off-row web views — M3, hooks named in
   `links.rs`/`window.rs`), `swipe.history` (WebKit owns the gesture — M5),
   `arc.setup`/`arc.import`, `spaces`, `profiles`, `pins.keep` (M4/M6),
@@ -1637,13 +1640,72 @@ agents' tabs, handing a tab back after a sign-in, Copy Details for several picke
   opened by a real right-click and the pasteboard written from them (a synthetic click
   landed on another app's window in front of the test world, so it was stopped).
 
+### Unreleased — A star in the address bar, and a card of what came down
+
+At the user's request (2026-11-11: "增加地址栏收藏的功能" and "下载文件的UX应该更明显一些，比如下载icon点击可以看到各个正在/最近下载文件的进度等等; 点击下载/触发下载应该有个简单的过场动画'文件飞到下载icon'").
+
+Asked and answered before the work: the star sits in the address capsule's right end
+and toggles the page in front (filled when it is kept); a second small button beside
+it opens the list of what is kept; the list is a card under the chrome, as the
+downloads card is; the downloads card lists the files coming in with how far each has
+come, and the ones that came, newest first; the file flies from the pointer to the
+downloads door in a straight line, shrinking and fading, and the door bounces when it
+lands. The keys are ⇧⌘B (keep the page) and ⇧⌘J (the downloads); the menu bar is
+untouched.
+
+- [x] **The model** (`tap-core/src/bookmarks.rs`): `Bookmark { id, title, url?,
+  children? }` and `Bookmarks`, the file Search writes (`bookmarks.json`, a list of
+  those) read, written, added to and taken from. The importers' file is the same one,
+  so a folder that came from Chrome is kept and never lost. Tests: a place is kept
+  once and let go, a folder from elsewhere survives, what is written is what was read.
+- [x] **The model holds it** (`browser.rs`): `bookmarks` on the window model, as
+  `history` is; `toggle_bookmark()` (the star, and ⇧⌘B), `open_bookmark(url)` (a click
+  in the list), and `Effect::SaveBookmarks`, written by the store's writer thread like
+  `history.json` is. An import tells the model what it wrote, so the two do not
+  disagree (`profile.rs`).
+- [x] **The star and the list** (`address_bar.rs`, `bookmarks.rs`, `window.rs`): two
+  buttons at the capsule's right end — the star (`bookmark` / `bookmark.fill`) and the
+  list (`list.bullet`). The address stops short of them. The star is dim where there
+  is nothing to keep (a blank tab, one of Tap's own pages).
+- [x] **The list** (`bookmarks.rs`, `cards.rs`): a card under the chrome, with a
+  shadow and a hairline edge, the places in the order the file keeps them and a
+  folder's places under it. It scrolls when the list is longer than the card, and a
+  click on a place goes there.
+- [x] **The downloads card** (`downloads.rs`): the door opens it now. The files
+  coming in, each with its name, its bar and its bytes, and a cross to stop it; the
+  ones that came, newest first, with the file's name and when it did — a click shows
+  it in the Finder — and a failed file with the reason. The foot says where the files
+  land and opens the folder. The list of what came is for this run only.
+- [x] **The file flies** (`downloads.rs`, `window.rs`): a download the person asked
+  for flies from the pointer to the door, shrinking and fading on the way, on the
+  springs the chrome already uses; the door's ring pops as it lands. Under Reduce
+  Motion the file simply lands.
+- [x] **The cards move** (`panels.rs`, `cards.rs`): Escape and a click anywhere but
+  on the card put it away, and the keys are ⇧⌘B and ⇧⌘J. A text field keeps its own
+  Escape.
+- Not yet, and said so: folders of one's own (the file's folders are kept and shown,
+  but none is made), a bookmarks bar, the bookmarks in the field's suggestions, the
+  list across restarts (`downloads.json`), pause, resume and retry, and a Downloads
+  page of its own (Search has one; Tap's card is the list).
+- Differences from Search, on purpose: the star is in the address bar (Search's
+  bookmark door is in the tab row), the list is a card and not a menu, and a place is
+  kept without asking for a name or a folder (Search's card asks after the fact).
+- Checked: `cargo test` (tap-core 136, tap-import 35, tap-shell 113), clippy
+  `-D warnings`, nightly fmt; by eye in a test world (`TAP_PROBE=verify`): the star
+  fills and empties, the list opens, the downloads card follows the bytes, the cross
+  stops a file (and the door lets go of it, which WebKit does not say), a broken
+  connection is said with its reason, and the file flies from the pointer to the door
+  and the door bounces when it lands.
+
 ### M3 — Window chrome parity
 - Sidebar column and full tab bar, pins, groups, Fold, Peek, Little window
 - Bookmarks, bookmarks bar and dropdown, the ⌘K switcher, site card, status line and
-  link bubble
+  link bubble. The star in the address bar, the list of what is kept and the file
+  that flies to the downloads door are here (see "Unreleased — A star in the address
+  bar"); the bar, the dropdown, folders of one's own and the bookmarks page are not.
 - Welcome and What's New
 - Every internal page: Settings generated from the index, History, Downloads,
-  Bookmarks
+  Bookmarks. The downloads list is a card under the door for now, not a page.
 - Shortcuts and the menu table
 - Tab drag within the strip and column (pins, groups, PinDrop)
 
@@ -2302,7 +2364,7 @@ added below this one as M1 starts.
 | AutoScroll.swift | 107 | a/auto-scroll, w/auto_scroll | M5 | todo |
 | Bench.swift | 4631 | c/bench/proto, s/bench/* | M1→M8 | partial |
 | BlockedPopups.swift | 247 | c/blocked_popups, s/ui/blocked_popups | M5 | todo |
-| Bookmarks.swift | 1735 | c/bookmarks, s/ui/bookmarks/* | M3 | todo |
+| Bookmarks.swift | 1735 | c/bookmarks, s/ui/bookmarks/* | M3 | partial |
 | BookmarksBar.swift | 160 | s/ui/bookmarks_bar | M3 | todo |
 | BookmarksFile.swift | 165 | c/bookmarks_file | M1 | todo |
 | Browser.swift | 7518 | c/browser/*, w/delegate, w/downloads, w/print | M2→M5 | partial |

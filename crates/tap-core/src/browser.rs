@@ -11,6 +11,7 @@ use bitflags::bitflags;
 
 use crate::{
     address,
+    bookmarks::Bookmarks,
     crash::{CrashCount, PageEnd},
     engine::{self, Engine},
     find::{self, Find},
@@ -68,6 +69,9 @@ bitflags! {
         const FIND_FOCUS = 1 << 8;
         /// Tabs picked with ⌘ or ⇧, or let go of.
         const SELECTION = 1 << 9;
+        /// The places you kept changed: the star in the address bar, and the list of
+        /// what is kept.
+        const BOOKMARKS = 1 << 10;
     }
 }
 
@@ -96,6 +100,9 @@ pub enum Effect {
     /// Write `history.json` (`now` fixes its ordering); the shell's writer thread
     /// encodes it, off the main thread.
     SaveHistory(History, f64),
+    /// Write `bookmarks.json`; the shell's writer thread encodes it, off the main
+    /// thread.
+    SaveBookmarks(Bookmarks),
     /// Ask the tab's page about the word looked for.
     Find(find::Ask),
     /// Take what the find painted off the tab's page.
@@ -444,6 +451,9 @@ pub struct Browser {
     /// Where you have been (Search's per-window `history`, the profile's).
     history: History,
     history_changed: bool,
+    /// The places you kept (Search's `Bookmarks`, the profile's).
+    bookmarks: Bookmarks,
+    bookmarks_changed: bool,
     /// The find bar (⌘F), for whichever tab is in front.
     find: Find,
     /// The row's tab groups, in order; each tab's entry says which it is in.
@@ -483,6 +493,8 @@ impl Browser {
             session_changed: false,
             history: History::default(),
             history_changed: false,
+            bookmarks: Bookmarks::default(),
+            bookmarks_changed: false,
             find: Find::default(),
             groups: Vec::new(),
             next: 1,
@@ -643,6 +655,9 @@ impl Browser {
         if std::mem::take(&mut self.history_changed) {
             effects.push(Effect::SaveHistory(self.history.clone(), history::now()));
         }
+        if std::mem::take(&mut self.bookmarks_changed) {
+            effects.push(Effect::SaveBookmarks(self.bookmarks.clone()));
+        }
         effects
     }
 
@@ -671,6 +686,54 @@ impl Browser {
     pub fn clear_history(&mut self) {
         self.history = History::default();
         self.history_changed = true;
+    }
+
+    /// Hands over the bookmarks read at launch.
+    pub fn set_bookmarks(&mut self, bookmarks: Bookmarks) {
+        self.bookmarks = bookmarks;
+    }
+
+    /// The places you kept (Search's `Bookmarks`).
+    #[must_use]
+    pub fn bookmarks(&self) -> &Bookmarks {
+        &self.bookmarks
+    }
+
+    /// Keeps the page in front, or lets it go: the star in the address bar (Search's
+    /// `bookmarkCurrent`). Answers whether it is kept now.
+    pub fn toggle_bookmark(&mut self) -> bool {
+        let Some(tab) = self.active_tab() else {
+            return false;
+        };
+        // One of Tap's own pages is not a place to keep.
+        if tab.is_internal() {
+            return false;
+        }
+        let (url, title) = (tab.url().to_owned(), tab.title().to_owned());
+        if url.is_empty() {
+            return false;
+        }
+        let kept = if self.bookmarks.contains(&url) {
+            self.bookmarks.remove(&url);
+            false
+        } else {
+            self.bookmarks.add(&url, &title);
+            true
+        };
+        self.bookmarks_changed = true;
+        self.dirty.insert(BrowserFields::BOOKMARKS);
+        kept
+    }
+
+    /// Opens a place you kept, in the tab in front.
+    pub fn open_bookmark(&mut self, url: &str) {
+        let Some(id) = self.active else {
+            return;
+        };
+        let Some(url) = Url::parse(url) else {
+            return;
+        };
+        self.go(id, &url);
     }
 
     /// The session as Search writes it.

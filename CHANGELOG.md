@@ -7,6 +7,28 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.8 — 2026-11-12
+
+### Added
+
+- **A star in the address bar** keeps the page you are on, or lets it go. It fills
+  when the page is kept, and it is dim where there is nothing to keep.
+- **A list of what is kept**, beside the star: a card under the chrome with the
+  places in the order the file keeps them, a folder's places under it, and a click
+  that goes there. ⇧⌘B keeps the page in front.
+- **A card of what came down**, under the downloads door (⇧⌘J): the files coming in,
+  each with its name, its bar, its bytes and a cross to stop it; the ones that came,
+  newest first, with the file's name and when it did, and a failed one with the
+  reason. The foot says where the files land and opens the folder.
+- **A file flies to the downloads door**: a download you asked for starts at your
+  pointer, shrinks and fades on its way, and the door bounces when it lands. Less
+  motion when your Mac asks for it.
+
+### Changed
+
+- The downloads door opens the card of what came down instead of the folder, which
+  the card's foot still opens.
+
 ## 0.3.7 — 2026-11-10
 
 ### Fixed
