@@ -24,6 +24,10 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-14 hard reload:** ⇧⌘R reloads the active page from origin using WebKit,
+without clearing the browser-wide cache. This differs from Search's ⇧⌘R reading mode
+and ⌥⌘R origin reload shortcuts.
+
 **2026-11-08 UI/UX audit fixes (0.3.3):** a UI/UX audit pass (impeccable `audit`,
 11 dimensions across the shell) found no P0s; this patch ships its P1/P2 bug fixes:
 full-screen Escape now spares a field editor, Settings fits its narrowest window and

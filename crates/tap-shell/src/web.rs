@@ -15,7 +15,7 @@ use objc2_foundation::{
     NSArray, NSBundle, NSDictionary, NSError, NSHTTPURLResponse, NSInteger, NSKeyValueChangeKey,
     NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize,
     NSString, NSURL, NSURLAuthenticationChallenge, NSURLCredential, NSURLRequest,
-    NSURLSessionAuthChallengeDisposition,
+    NSURLRequestCachePolicy, NSURLSessionAuthChallengeDisposition,
 };
 #[allow(deprecated)]
 use objc2_web_kit::WKProcessPool;
@@ -1043,6 +1043,26 @@ pub fn perform(effect: Effect) {
         Effect::Reload(tab) => {
             // SAFETY: plain call on a live web view.
             let _ = existing(tab).map(|web| unsafe { web.reload() });
+        }
+        Effect::ReloadFromOrigin(tab) => {
+            // SAFETY: plain call on a live web view.
+            let _ = existing(tab).map(|web| unsafe { web.reloadFromOrigin() });
+        }
+        Effect::LoadFromOrigin { tab, url } => {
+            let page = web_view(mtm, tab);
+            if let Some(target) = NSURL::URLWithString(&NSString::from_str(&url)) {
+                if target.isFileURL() {
+                    load(&page, &url);
+                } else {
+                    let request = NSURLRequest::requestWithURL_cachePolicy_timeoutInterval(
+                        &target,
+                        NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData,
+                        60.0,
+                    );
+                    // SAFETY: a valid request on a live web view.
+                    unsafe { page.loadRequest(&request) };
+                }
+            }
         }
         Effect::Back(tab) => {
             // SAFETY: plain call on a live web view.

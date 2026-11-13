@@ -60,6 +60,7 @@ pub enum Command {
     InspectElement,
     /// ⌘1 to ⌘9 are 101 to 109.
     Tab = 100,
+    ReloadFromOrigin = 110,
     /// The tab menu's (tabmenu): they act on the tab under the pointer, whose
     /// identity tabmenu keeps, not on the one in front.
     TabNew = 200,
@@ -91,7 +92,10 @@ pub enum Command {
 /// else can always run.
 fn can_run(tag: NSInteger) -> bool {
     match tag {
-        t if t == Command::Reload as NSInteger || t == Command::ReloadOrStop as NSInteger => {
+        t if t == Command::Reload as NSInteger
+            || t == Command::ReloadOrStop as NSInteger
+            || t == Command::ReloadFromOrigin as NSInteger =>
+        {
             rt::read(|browser| {
                 browser
                     .active_tab()
@@ -194,6 +198,7 @@ pub fn run(tag: NSInteger) {
         }
         19 => browser.open_page(Page::Settings),
         101..=109 => browser.select_number(usize::try_from(tag - 100).unwrap_or(1)),
+        110 => browser.reload_from_origin(),
         _ => {}
     });
 }
@@ -499,6 +504,7 @@ pub fn main_menu(
             "View",
             vec![
                 item("Reload Page", "r", Command::Reload),
+                item("Reload Page From Origin", "R", Command::ReloadFromOrigin),
                 item("Stop", ".", Command::Stop),
                 separator(),
                 with(

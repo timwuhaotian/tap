@@ -84,6 +84,11 @@ pub enum Effect {
         url: String,
     },
     Reload(TabId),
+    ReloadFromOrigin(TabId),
+    LoadFromOrigin {
+        tab: TabId,
+        url: String,
+    },
     Back(TabId),
     Forward(TabId),
     Stop(TabId),
@@ -2127,9 +2132,20 @@ impl Browser {
         }
     }
 
+    /// Reload the active page, bypassing cached content.
+    pub fn reload_from_origin(&mut self) {
+        if let Some(id) = self.active {
+            self.reload_tab_impl(id, true);
+        }
+    }
+
     /// Reloads one tab, whichever is in front: ⌘R, or Try again over a page that said
     /// why it isn't there.
     pub fn reload_tab(&mut self, id: TabId) {
+        self.reload_tab_impl(id, false);
+    }
+
+    fn reload_tab_impl(&mut self, id: TabId, from_origin: bool) {
         let Some(tab) = self.tab_mut(id) else { return };
         if tab.url.is_empty() || tab.is_internal() {
             return;
@@ -2141,13 +2157,21 @@ impl Browser {
             tab.failure = None;
             tab.dirty.insert(TabFields::FAILURE);
             let url = tab.url.clone();
-            self.effects.push(Effect::Load { tab: id, url });
+            self.effects.push(if from_origin {
+                Effect::LoadFromOrigin { tab: id, url }
+            } else {
+                Effect::Load { tab: id, url }
+            });
             return;
         }
         if tab.failure.take().is_some() {
             tab.dirty.insert(TabFields::FAILURE);
         }
-        self.effects.push(Effect::Reload(id));
+        self.effects.push(if from_origin {
+            Effect::ReloadFromOrigin(id)
+        } else {
+            Effect::Reload(id)
+        });
     }
     pub fn stop(&mut self) {
         if let Some(id) = self.active {
@@ -2625,6 +2649,23 @@ mod tests {
             browser.tab(fresh).and_then(Tab::group).is_none(),
             "a pin's group is none"
         );
+    }
+
+    #[test]
+    fn hard_reload_targets_the_active_page() {
+        let mut browser = Browser::new();
+        browser.take_effects();
+        browser.reload_from_origin();
+        assert_eq!(browser.take_effects(), Vec::<Effect>::new());
+        let url = Url::parse("https://example.com").expect("parses");
+        let id = browser.open(Some(&url), true, None);
+        browser.take_effects();
+        browser.reload_from_origin();
+        assert_eq!(browser.take_effects(), vec![Effect::ReloadFromOrigin(id)]);
+        browser.open_page(Page::Settings);
+        browser.take_effects();
+        browser.reload_from_origin();
+        assert_eq!(browser.take_effects(), Vec::<Effect>::new());
     }
 
     #[test]

@@ -7,6 +7,12 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.9 — 2026-11-14
+
+### Added
+
+- **Hard reload** (⇧⌘R) reloads the current page from its origin instead of relying on cached content.
+
 ## 0.3.8 — 2026-11-12
 
 ### Added
