@@ -266,6 +266,67 @@ impl Follow {
     }
 }
 
+/// Each slot's pick of two faces, 0 to 1, fading from one to the other when its pick
+/// changes (a tab's mark and its title with its cross). A slot first seen wears its
+/// pick at once: it has its own entrance.
+#[derive(Debug)]
+pub struct Reveal<K> {
+    faces: HashMap<K, Follow>,
+}
+
+impl<K> Default for Reveal<K> {
+    fn default() -> Self {
+        Reveal {
+            faces: HashMap::new(),
+        }
+    }
+}
+
+impl<K: Eq + Hash + Clone> Reveal<K> {
+    /// `key` should wear its second face (`on`) or its first. Answers whether a fade
+    /// set off.
+    pub fn aim(&mut self, key: &K, on: bool, curve: Curve) -> bool {
+        let target = if on { 1.0 } else { 0.0 };
+        match self.faces.get_mut(key) {
+            None => {
+                self.faces.insert(key.clone(), Follow::at(target));
+                false
+            }
+            Some(face) if (face.target() - target).abs() > f64::EPSILON => {
+                face.aim(target, curve);
+                curve != Curve::Instant
+            }
+            Some(_) => false,
+        }
+    }
+
+    /// Every face as picked, at once.
+    pub fn arrive(&mut self) {
+        for face in self.faces.values_mut() {
+            face.set(face.target());
+        }
+    }
+
+    /// `dt` seconds on. Answers whether any face is still fading.
+    pub fn step(&mut self, dt: f64) -> bool {
+        let mut fading = false;
+        for face in self.faces.values_mut() {
+            fading |= face.step(dt);
+        }
+        fading
+    }
+
+    #[must_use]
+    pub fn value(&self, key: &K) -> Option<f64> {
+        self.faces.get(key).map(|face| face.value().clamp(0.0, 1.0))
+    }
+
+    /// Forgets the slots `keep` says no to.
+    pub fn retain(&mut self, keep: impl Fn(&K) -> bool) {
+        self.faces.retain(|key, _| keep(key));
+    }
+}
+
 /// Where the load's line stops while WebKit says nothing new: close to the end but
 /// short of it, so a stalled load still reads as on its way and never as done.
 const CREEP_CAP: f64 = 0.92;
@@ -794,6 +855,33 @@ mod tests {
             (light.value - 100.0).abs() < 1.0,
             "the light curve is there in a quarter second"
         );
+    }
+
+    #[test]
+    fn a_face_fades_to_its_new_pick_and_a_new_slot_wears_its_own_at_once() {
+        let mut reveal = Reveal::default();
+        assert!(!reveal.aim(&"a", false, Curve::FADE), "first seen: no fade");
+        assert!(!reveal.aim(&"b", true, Curve::FADE));
+        assert_eq!(reveal.value(&"a"), Some(0.0));
+        assert_eq!(reveal.value(&"b"), Some(1.0));
+        assert!(reveal.aim(&"a", true, Curve::FADE), "picked again: fades");
+        assert!(reveal.aim(&"b", false, Curve::FADE));
+        assert!(reveal.step(1.0 / 60.0));
+        let (a, b) = (reveal.value(&"a").unwrap(), reveal.value(&"b").unwrap());
+        assert!(a > 0.0 && a < 1.0, "a on its way in: {a}");
+        assert!(b > 0.0 && b < 1.0, "b on its way out: {b}");
+        for _ in 0..90 {
+            reveal.step(1.0 / 60.0);
+        }
+        assert!(!reveal.step(1.0 / 60.0));
+        assert_eq!(reveal.value(&"a"), Some(1.0));
+        assert_eq!(reveal.value(&"b"), Some(0.0));
+        // With nothing to fade on, or told to arrive, it is there at once.
+        assert!(!reveal.aim(&"a", false, Curve::Instant));
+        assert_eq!(reveal.value(&"a"), Some(0.0));
+        reveal.aim(&"b", true, Curve::FADE);
+        reveal.arrive();
+        assert_eq!(reveal.value(&"b"), Some(1.0));
     }
 
     #[test]

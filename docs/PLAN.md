@@ -24,6 +24,19 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-15 the title and cross fade with the width (0.3.11):** at the user's request
+("标题和×能否也淡入，不要突然出现"), a tab whose width crosses `TAB_TITLED` crossfades
+between its mark and its titled face (title, cross, reading fill) on `fade`, instead
+of swapping when the drawn width reaches it. Each tab's face is a `motion::Reveal`
+aimed by its laid-out width, so at rest it is exactly `titled` as before; a tab first
+seen wears its face at once, and the field opening puts every face in place with the
+row. The cross is still hit-tested by `titled` on the drawn rect, so for the fraction
+of a second a cross is fading in on a tab not yet wide enough, or out on one that has
+narrowed, it is not yet, or no longer, a target. `faded` now multiplies with the fade
+it is drawn in, as a closing tab's face crossfade inside its own fade needs. Tests:
+`a_face_fades_to_its_new_pick_and_a_new_slot_wears_its_own_at_once`,
+`a_switch_fades_the_title_and_cross_in_and_out_with_the_width`.
+
 **2026-11-15 the live tab's width glides (0.3.10):** at the user's request ("tab很窄的时候被
 点击，扩展宽度…直接撑开的，能否优化smooth过渡"), another tab going live is a change the
 row glides on `settle`, as a reorder is: in a crowded row the tab taken widens to

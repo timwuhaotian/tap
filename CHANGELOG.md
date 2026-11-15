@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.11 — 2026-11-15
+
+### Fixed
+
+- **A tab's title and × fade in as it widens**, and out as it narrows, instead of
+  appearing all at once when it has room.
+
 ## 0.3.10 — 2026-11-15
 
 ### Fixed

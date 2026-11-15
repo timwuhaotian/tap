@@ -42,7 +42,7 @@ use tap_core::{
 use crate::{
     downloads, icons,
     menu::Commands,
-    motion::{self, Aim, Curve, Flock, Follow, Frames, Glide, Loading},
+    motion::{self, Aim, Curve, Flock, Follow, Frames, Glide, Loading, Reveal},
     palette, prefs, rt,
     tabmenu::{self, TabState},
 };
@@ -402,7 +402,11 @@ fn close_rect(tab: NSRect) -> NSRect {
 /// stands where the title keeps clear. Drawn and hit-tested by the one rule, so a
 /// cross is always where a click on it closes its tab.
 fn titled(rect: NSRect) -> bool {
-    rect.size.width >= palette::TAB_TITLED
+    titled_width(rect.size.width)
+}
+
+fn titled_width(width: f64) -> bool {
+    width >= palette::TAB_TITLED
 }
 
 /// What a press takes a slot by: its whole column, the strip's height and the gap to
@@ -450,6 +454,24 @@ fn settle_row(
     if opened {
         flock.arrive();
     }
+}
+
+/// Aims each tab's face at the width the layout gives it, `fade` being how it
+/// crossfades there: a tab widening past `TAB_TITLED` brings its title and cross in
+/// as it goes, one narrowing below it takes them out. Once the field has `opened`,
+/// every face is there at once, as the row is. Answers whether a fade set off.
+fn reveal_row(reveal: &mut Reveal<TabId>, aims: &[Aim<Key>], opened: bool, fade: Curve) -> bool {
+    let mut fading = false;
+    for aim in aims {
+        if let Key::Tab(id) = aim.key {
+            fading |= reveal.aim(&id, titled_width(aim.width), fade);
+        }
+    }
+    if opened {
+        reveal.arrive();
+        fading = false;
+    }
+    fading
 }
 
 fn drawn_rect(flock: &Flock<Key>, key: &Key, rect: NSRect) -> NSRect {
@@ -548,7 +570,15 @@ fn editing_slot(browser: &Browser, row: &[Item], bar: bool) -> Option<usize> {
     active_slot(browser, row)
 }
 
-/// Draws with everything at `alpha`: a slot fading in or out.
+thread_local! {
+    /// The alpha of the `faded` draws now under way, multiplied: the context's alpha
+    /// is set, not multiplied, so a fade inside a fade (a tab's face crossfading
+    /// while the tab itself fades out) has to be told the one around it.
+    static FADED: Cell<f64> = const { Cell::new(1.0) };
+}
+
+/// Draws with everything at `alpha`, within any fade it is drawn in: a slot fading in
+/// or out.
 fn faded(alpha: f64, draw: impl FnOnce()) {
     if alpha >= 0.999 {
         draw();
@@ -557,11 +587,15 @@ fn faded(alpha: f64, draw: impl FnOnce()) {
     if alpha <= 0.001 {
         return;
     }
+    let outer = FADED.get();
+    let inner = outer * alpha;
     NSGraphicsContext::saveGraphicsState_class();
     if let Some(context) = NSGraphicsContext::currentContext() {
-        CGContext::set_alpha(Some(&context.CGContext()), alpha);
+        CGContext::set_alpha(Some(&context.CGContext()), inner);
     }
+    FADED.set(inner);
     draw();
+    FADED.set(outer);
     NSGraphicsContext::restoreGraphicsState_class();
 }
 
@@ -584,6 +618,8 @@ struct Paint<'a> {
     give: f64,
     /// Each hover wash still showing, coming or going, and how strongly.
     wash: &'a [(TabId, Follow)],
+    /// Each tab's titled face, coming or going.
+    reveal: &'a Reveal<TabId>,
     /// The live tab's load line: how far along, and how strongly.
     line: Option<(f64, f64)>,
     cmd_held: bool,
@@ -600,6 +636,14 @@ impl Paint<'_> {
             .iter()
             .find(|(id, _)| *id == tab)
             .map_or(0.0, |(_, wash)| wash.value().clamp(0.0, 1.0))
+    }
+
+    /// How far `tab`, drawn in `rect`, wears its titled face this frame; one not yet
+    /// aimed is as wide as it is drawn.
+    fn reveal_of(&self, tab: TabId, rect: NSRect) -> f64 {
+        self.reveal
+            .value(&tab)
+            .unwrap_or(if titled(rect) { 1.0 } else { 0.0 })
     }
 }
 
@@ -634,6 +678,8 @@ pub struct Ivars {
     folded: RefCell<HashMap<String, bool>>,
     /// The tab the field stood in as last aimed, to tell the field opening.
     field: RefCell<Option<Key>>,
+    /// Each tab's titled face, fading with its width past `TAB_TITLED`.
+    reveal: RefCell<Reveal<TabId>>,
     /// What each slot last said, to draw it while it fades once gone.
     faces: RefCell<HashMap<Key, String>>,
     grab: RefCell<Option<Grab>>,
@@ -794,6 +840,7 @@ impl Strip {
             shown: RefCell::new(Vec::new()),
             folded: RefCell::new(HashMap::new()),
             field: RefCell::new(None),
+            reveal: RefCell::new(Reveal::default()),
             faces: RefCell::new(HashMap::new()),
             grab: RefCell::new(None),
             drop: RefCell::new(None),
@@ -1376,7 +1423,8 @@ impl Strip {
             on
         };
         let lining = ivars.line.borrow_mut().step(dt);
-        let row = moving || gliding || washing || giving;
+        let revealing = ivars.reveal.borrow_mut().step(dt);
+        let row = moving || gliding || washing || giving || revealing;
         match ivars.line_rect.get() {
             // Only the load's line moved: only it is drawn again, not every tab.
             Some(rect) if lining && !row && !self.carrying() => self.setNeedsDisplayInRect(rect),
@@ -1390,6 +1438,10 @@ impl Strip {
                 .faces
                 .borrow_mut()
                 .retain(|key, _| flock.place(key).is_some());
+            ivars
+                .reveal
+                .borrow_mut()
+                .retain(|id| flock.place(&Key::Tab(*id)).is_some());
         }
     }
 
@@ -1477,21 +1529,7 @@ impl Strip {
             width: layout.plus.size.width,
             from: None,
         });
-        // Another tab is live: the pill sets off from the one that was.
-        let active = browser.active();
-        let switched = {
-            let mut live = self.ivars().live.borrow_mut();
-            if live.1 == active {
-                false
-            } else {
-                let from = live.1.take();
-                *live = (from, active, live.2);
-                if from.is_some() {
-                    live.2.restart(Curve::glide_now());
-                }
-                from.is_some()
-            }
-        };
+        let switched = self.switch_live(browser.active());
         let curve = if moved || switched {
             Curve::settle_now()
         } else {
@@ -1513,12 +1551,33 @@ impl Strip {
                 Key::Heading(_) | Key::Plus => None,
             },
         );
+        let fading = reveal_row(
+            &mut self.ivars().reveal.borrow_mut(),
+            &aims,
+            opened,
+            Curve::FADE.now(),
+        );
         if *self.ivars().shown.borrow() != keys {
             self.ivars().shown.replace(keys);
         }
-        if moved || switched {
+        if moved || switched || fading {
             self.animate();
         }
+    }
+
+    /// Another tab is live: the pill sets off from the one that was. Answers whether
+    /// it did.
+    fn switch_live(&self, active: Option<TabId>) -> bool {
+        let mut live = self.ivars().live.borrow_mut();
+        if live.1 == active {
+            return false;
+        }
+        let from = live.1.take();
+        *live = (from, active, live.2);
+        if from.is_some() {
+            live.2.restart(Curve::glide_now());
+        }
+        from.is_some()
     }
 
     /// The live tab's pill where it is this frame: between the tab it left and the
@@ -1678,6 +1737,7 @@ impl Strip {
                 giving: self.ivars().giving.get(),
                 give: self.ivars().give.borrow().value(),
                 wash: &wash,
+                reveal: &self.ivars().reveal.borrow(),
                 line: self.ivars().line.borrow().drawn(),
                 cmd_held: self.ivars().cmd_held.get(),
                 active: browser.active(),
@@ -2083,27 +2143,26 @@ fn draw_tab(
             .setFill();
         palette::pill_path(*rect).fill();
     }
-    let titled = titled(*rect);
+    // How far the tab wears its titled face (title and cross) rather than its mark:
+    // 1 or 0 at rest, by `titled`, and in between while it widens past
+    // `TAB_TITLED` or narrows below it, the two crossfading instead of swapping.
+    let reveal = paint.reveal_of(tab.id, *rect);
     // Search's `ReadingFill`: ink at 5.5% over the live pill, from its
     // left, as far as the page has been read. Not on a tab down to its
     // mark, where thirty points of grey would say nothing.
     if live
         && look.reading
-        && titled
         && let Some(read) = READING.with_borrow(|map| map.get(&tab.id).copied())
         && read > 0.0
     {
-        reading_fill(*rect, read, dark);
+        faded(reveal, || reading_fill(*rect, read, dark));
     }
     if editing_here {
-        if titled {
+        faded(reveal, || {
             draw_close(*rect, paint.spot == Spot::Close(index), dark);
-        }
+        });
         return;
     }
-    // Every titled tab wears its cross at rest, so a tab closes under the pointer
-    // and not only under ⌘W; one on its way out has none, as it fades at rest.
-    let crossed = titled && !gone;
     let number = if paint.cmd_held && !gone {
         shortcut_number(index, browser.tabs().len())
     } else {
@@ -2117,104 +2176,117 @@ fn draw_tab(
     } else {
         None
     };
-    if let Some(number) = number.filter(|_| !titled) {
-        let digit = number.to_string();
-        palette::draw_text(
-            &digit,
-            centred_word(&digit, *rect),
-            &palette::MUTED.resolve(dark),
-        );
-    } else if let Some(icon) = &icon {
-        // Beside the title, or alone in the middle of a narrow tab.
-        let x = if titled {
-            rect.origin.x + 10.0
-        } else {
-            rect.origin.x + (rect.size.width - ICON) / 2.0
-        };
-        let square = NSRect::new(
-            NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
-            NSSize::new(ICON, ICON),
-        );
-        // SAFETY: drawing a decoded image into the view's own context, no hints.
-        unsafe {
-            icon.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
-                square,
-                NSRect::ZERO,
-                NSCompositingOperation::SourceOver,
-                1.0,
-                true,
-                None,
-            );
-        }
-    } else if !titled || look.icons {
-        // No icon to show (none kept yet, or Letters is the choice): a
-        // narrow tab shows its letter on a tile rather than nothing at
-        // all, and in icons mode a titled tab does the same beside its
-        // title, as Search's `Mark` falls back to the monogram.
-        let x = if titled {
-            rect.origin.x + 10.0
-        } else {
-            rect.origin.x + (rect.size.width - ICON) / 2.0
-        };
-        let square = NSRect::new(
-            NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
-            NSSize::new(ICON, ICON),
-        );
-        palette::HOVER.resolve(dark).setFill();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
-        let letter = monogram(tab);
-        palette::draw_text(
-            &letter,
-            centred_word(&letter, square),
-            &palette::MUTED.resolve(dark),
-        );
-    }
-    if titled {
-        let mut right = if crossed { 30.0 } else { 12.0 };
-        if number.is_some() {
-            right += 18.0;
-        }
-        // In icons mode a glyph (icon or letter tile) always stands
-        // beside the title; in letters mode the title starts at the edge.
-        let left = if look.icons { 10.0 + ICON + 6.0 } else { 12.0 };
-        let text = palette::text_line(*rect, left, right);
-        let ink = if live || picked {
-            palette::INK
-        } else {
-            palette::MUTED
-        };
-        // The tab you're on says where its page is instead of its title,
-        // and the title comes back under the pointer (Search's
-        // `TitleAtRest`): the two swap in the same rect. Not with the address
-        // bar up: the bar says where, and the tab keeps its title.
-        let said = if live && !look.bar {
-            at_rest(tab.url(), look.address)
-        } else {
-            None
-        };
-        // Under the pointer the title comes back through where the page is, the
-        // two crossfading with the wash rather than one snapping to the other.
-        match said {
-            Some(said) if wash < 0.999 => {
-                faded(1.0 - wash, || draw_rest(&said, text, dark));
-                faded(wash, || {
-                    palette::draw_text(&tab.label(), text, &ink.resolve(dark));
-                });
-            }
-            _ => palette::draw_text(&tab.label(), text, &ink.resolve(dark)),
-        }
-        if let Some(number) = number {
+    // Every titled tab wears its cross at rest, so a tab closes under the pointer
+    // and not only under ⌘W; one on its way out has none, as it fades at rest.
+    let face = |titled: bool| {
+        let crossed = titled && !gone;
+        if let Some(number) = number.filter(|_| !titled) {
             let digit = number.to_string();
-            let at = if crossed { 30.0 } else { 12.0 };
             palette::draw_text(
                 &digit,
-                palette::text_line(*rect, rect.size.width - at - 15.0, at - 1.0),
+                centred_word(&digit, *rect),
+                &palette::MUTED.resolve(dark),
+            );
+        } else if let Some(icon) = &icon {
+            // Beside the title, or alone in the middle of a narrow tab.
+            let x = if titled {
+                rect.origin.x + 10.0
+            } else {
+                rect.origin.x + (rect.size.width - ICON) / 2.0
+            };
+            let square = NSRect::new(
+                NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
+                NSSize::new(ICON, ICON),
+            );
+            // SAFETY: drawing a decoded image into the view's own context, no hints.
+            unsafe {
+                icon.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+                    square,
+                    NSRect::ZERO,
+                    NSCompositingOperation::SourceOver,
+                    1.0,
+                    true,
+                    None,
+                );
+            }
+        } else if !titled || look.icons {
+            // No icon to show (none kept yet, or Letters is the choice): a
+            // narrow tab shows its letter on a tile rather than nothing at
+            // all, and in icons mode a titled tab does the same beside its
+            // title, as Search's `Mark` falls back to the monogram.
+            let x = if titled {
+                rect.origin.x + 10.0
+            } else {
+                rect.origin.x + (rect.size.width - ICON) / 2.0
+            };
+            let square = NSRect::new(
+                NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
+                NSSize::new(ICON, ICON),
+            );
+            palette::HOVER.resolve(dark).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
+            let letter = monogram(tab);
+            palette::draw_text(
+                &letter,
+                centred_word(&letter, square),
                 &palette::MUTED.resolve(dark),
             );
         }
-    }
-    if crossed {
-        draw_close(*rect, paint.spot == Spot::Close(index), dark);
+        if titled {
+            let mut right = if crossed { 30.0 } else { 12.0 };
+            if number.is_some() {
+                right += 18.0;
+            }
+            // In icons mode a glyph (icon or letter tile) always stands
+            // beside the title; in letters mode the title starts at the edge.
+            let left = if look.icons { 10.0 + ICON + 6.0 } else { 12.0 };
+            let text = palette::text_line(*rect, left, right);
+            let ink = if live || picked {
+                palette::INK
+            } else {
+                palette::MUTED
+            };
+            // The tab you're on says where its page is instead of its title,
+            // and the title comes back under the pointer (Search's
+            // `TitleAtRest`): the two swap in the same rect. Not with the address
+            // bar up: the bar says where, and the tab keeps its title.
+            let said = if live && !look.bar {
+                at_rest(tab.url(), look.address)
+            } else {
+                None
+            };
+            // Under the pointer the title comes back through where the page is, the
+            // two crossfading with the wash rather than one snapping to the other.
+            match said {
+                Some(said) if wash < 0.999 => {
+                    faded(1.0 - wash, || draw_rest(&said, text, dark));
+                    faded(wash, || {
+                        palette::draw_text(&tab.label(), text, &ink.resolve(dark));
+                    });
+                }
+                _ => palette::draw_text(&tab.label(), text, &ink.resolve(dark)),
+            }
+            if let Some(number) = number {
+                let digit = number.to_string();
+                let at = if crossed { 30.0 } else { 12.0 };
+                palette::draw_text(
+                    &digit,
+                    palette::text_line(*rect, rect.size.width - at - 15.0, at - 1.0),
+                    &palette::MUTED.resolve(dark),
+                );
+            }
+        }
+        if crossed {
+            draw_close(*rect, paint.spot == Spot::Close(index), dark);
+        }
+    };
+    if reveal >= 0.999 {
+        face(true);
+    } else if reveal <= 0.001 {
+        face(false);
+    } else {
+        faded(1.0 - reveal, || face(false));
+        faded(reveal, || face(true));
     }
     // The load's progress: along the pill's foot, unless the address bar says it.
     if live
@@ -2658,6 +2730,42 @@ mod tests {
         let open = drawn_rect(&flock, &keys[6], after.tabs[6]);
         assert!((open.size.width - after.tabs[6].size.width).abs() < f64::EPSILON);
         assert!(titled(open));
+    }
+
+    #[test]
+    fn a_switch_fades_the_title_and_cross_in_and_out_with_the_width() {
+        let keys: Vec<Key> = (0..12).map(|i| Key::Tab(TabId(i))).collect();
+        let aims = |row: &Layout| -> Vec<Aim<Key>> {
+            keys.iter()
+                .zip(&row.tabs)
+                .map(|(key, rect)| Aim {
+                    key: key.clone(),
+                    x: rect.origin.x,
+                    width: rect.size.width,
+                    from: None,
+                })
+                .collect()
+        };
+        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
+        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6));
+        let field = layout(900.0, &tabs(12), Some(5), palette::HELM, Some(5));
+        let mut reveal = Reveal::default();
+        // First seen: each wears the face its width gives it, with no fade.
+        assert!(!reveal_row(&mut reveal, &aims(&before), false, Curve::FADE));
+        assert_eq!(reveal.value(&TabId(5)), Some(1.0));
+        assert_eq!(reveal.value(&TabId(6)), Some(0.0));
+        // The switch: the tab taken fades its title and cross in, the one left out.
+        assert!(reveal_row(&mut reveal, &aims(&after), false, Curve::FADE));
+        reveal.step(1.0 / 60.0);
+        let coming = reveal.value(&TabId(6)).unwrap();
+        let going = reveal.value(&TabId(5)).unwrap();
+        assert!(coming > 0.0 && coming < 1.0, "fading in: {coming}");
+        assert!(going > 0.0 && going < 1.0, "fading out: {going}");
+        assert_eq!(reveal.value(&TabId(0)), Some(0.0), "the rest keep theirs");
+        // The field opening on the one left: every face there at once.
+        assert!(!reveal_row(&mut reveal, &aims(&field), true, Curve::FADE));
+        assert_eq!(reveal.value(&TabId(5)), Some(1.0));
+        assert_eq!(reveal.value(&TabId(6)), Some(0.0));
     }
 
     #[test]
