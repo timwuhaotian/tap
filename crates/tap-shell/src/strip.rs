@@ -432,6 +432,26 @@ fn slot_at(layout: &Layout, point: NSPoint, height: f64) -> Option<usize> {
     })
 }
 
+/// Aims the row's springs. Slots that came, went or moved glide on `curve`, and so
+/// does a switch of the live tab: in a crowded row it is the one wide enough for its
+/// cross, so the widths trade places between the tab it left and the one it took.
+/// The field, once `opened`, is framed where its tab is going, so the row is there at
+/// once rather than leaving the field over a tab, or a neighbour, still on its way.
+fn settle_row(
+    flock: &mut Flock<Key>,
+    aims: &[Aim<Key>],
+    moved: bool,
+    switched: bool,
+    opened: bool,
+    curve: Curve,
+    to: impl Fn(&Key) -> Option<f64>,
+) {
+    flock.aim(aims, moved || switched, curve, to);
+    if opened {
+        flock.arrive();
+    }
+}
+
 fn drawn_rect(flock: &Flock<Key>, key: &Key, rect: NSRect) -> NSRect {
     flock.place(key).map_or(rect, |place| {
         NSRect::new(
@@ -612,6 +632,8 @@ pub struct Ivars {
     shown: RefCell<Vec<Key>>,
     /// Each group's fold as last aimed, to tell a group unfolding from a tab opening.
     folded: RefCell<HashMap<String, bool>>,
+    /// The tab the field stood in as last aimed, to tell the field opening.
+    field: RefCell<Option<Key>>,
     /// What each slot last said, to draw it while it fades once gone.
     faces: RefCell<HashMap<Key, String>>,
     grab: RefCell<Option<Grab>>,
@@ -771,6 +793,7 @@ impl Strip {
             flock: RefCell::new(Flock::default()),
             shown: RefCell::new(Vec::new()),
             folded: RefCell::new(HashMap::new()),
+            field: RefCell::new(None),
             faces: RefCell::new(HashMap::new()),
             grab: RefCell::new(None),
             drop: RefCell::new(None),
@@ -1394,16 +1417,20 @@ impl Strip {
     }
 
     /// Tells the springs where the row now wants every slot. A change in the slots
-    /// themselves (opened, closed, moved, folded) glides there; anything else (a
-    /// resize, the field widening the live tab) is there at once. A group that
-    /// unfolds sends its tabs out from under its heading; one that folds takes them
-    /// back under it.
-    fn aim(&self, browser: &Browser, row: &[Item], layout: &Layout) {
+    /// themselves (opened, closed, moved, folded) glides there, and so does another
+    /// tab going live (see `settle_row`); anything else (a resize, the field widening
+    /// the live tab) is there at once. A group that unfolds sends its tabs out from
+    /// under its heading; one that folds takes them back under it. `editing` is the
+    /// slot the field stands in.
+    fn aim(&self, browser: &Browser, row: &[Item], layout: &Layout, editing: Option<usize>) {
         let keys: Vec<Key> = row
             .iter()
             .map(|item| key_of(browser, item))
             .chain([Key::Plus])
             .collect();
+        let field = editing.and_then(|index| keys.get(index).cloned());
+        let opened = field.is_some() && *self.ivars().field.borrow() != field;
+        self.ivars().field.replace(field);
         let moved = {
             let shown = self.ivars().shown.borrow();
             !shown.is_empty() && *shown != keys
@@ -1450,25 +1477,6 @@ impl Strip {
             width: layout.plus.size.width,
             from: None,
         });
-        let curve = if moved {
-            Curve::settle_now()
-        } else {
-            Curve::SETTLE
-        };
-        self.ivars()
-            .flock
-            .borrow_mut()
-            .aim(&aims, moved, curve, |key| match key {
-                Key::Tab(id) => browser
-                    .tab(*id)
-                    .and_then(group_of)
-                    .filter(|g| turned(g, true))
-                    .and_then(|g| headings.get(g).copied()),
-                Key::Heading(_) | Key::Plus => None,
-            });
-        if *self.ivars().shown.borrow() != keys {
-            self.ivars().shown.replace(keys);
-        }
         // Another tab is live: the pill sets off from the one that was.
         let active = browser.active();
         let switched = {
@@ -1484,6 +1492,30 @@ impl Strip {
                 from.is_some()
             }
         };
+        let curve = if moved || switched {
+            Curve::settle_now()
+        } else {
+            Curve::SETTLE
+        };
+        settle_row(
+            &mut self.ivars().flock.borrow_mut(),
+            &aims,
+            moved,
+            switched,
+            opened,
+            curve,
+            |key| match key {
+                Key::Tab(id) => browser
+                    .tab(*id)
+                    .and_then(group_of)
+                    .filter(|g| turned(g, true))
+                    .and_then(|g| headings.get(g).copied()),
+                Key::Heading(_) | Key::Plus => None,
+            },
+        );
+        if *self.ivars().shown.borrow() != keys {
+            self.ivars().shown.replace(keys);
+        }
         if moved || switched {
             self.animate();
         }
@@ -1619,7 +1651,7 @@ impl Strip {
                 trailing,
                 active_slot(browser, &row),
             );
-            self.aim(browser, &row, &layout);
+            self.aim(browser, &row, &layout, editing);
             let carried = self.hold_carried(browser, &row, &layout);
             // The live tab's load line, here only while the address bar is away.
             let front = browser.active_tab().filter(|_| !look.bar);
@@ -2566,6 +2598,106 @@ mod tests {
         let cross = close_rect(editing.tabs[20]);
         assert!(field.origin.x + field.size.width <= cross.origin.x);
         assert_eq!(slot_at(&editing, cross.origin, palette::STRIP), Some(20));
+    }
+
+    #[test]
+    fn a_switch_in_a_crowded_row_glides_the_cross_open() {
+        let keys: Vec<Key> = (0..12).map(|i| Key::Tab(TabId(i))).collect();
+        let aims = |row: &Layout| -> Vec<Aim<Key>> {
+            keys.iter()
+                .zip(&row.tabs)
+                .map(|(key, rect)| Aim {
+                    key: key.clone(),
+                    x: rect.origin.x,
+                    width: rect.size.width,
+                    from: None,
+                })
+                .collect()
+        };
+        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
+        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6));
+        let narrow = before.tabs[6].size.width;
+        assert!(narrow < palette::TAB_TITLED && titled(after.tabs[6]));
+
+        let mut flock = Flock::default();
+        settle_row(
+            &mut flock,
+            &aims(&before),
+            false,
+            false,
+            false,
+            Curve::SETTLE,
+            |_| None,
+        );
+        settle_row(
+            &mut flock,
+            &aims(&after),
+            false,
+            true,
+            false,
+            Curve::SETTLE,
+            |_| None,
+        );
+        flock.step(1.0 / 60.0);
+        let growing = drawn_rect(&flock, &keys[6], after.tabs[6]).size.width;
+        let giving = drawn_rect(&flock, &keys[5], after.tabs[5]).size.width;
+        assert!(
+            growing > narrow && growing < palette::TAB_TITLED,
+            "on its way open: {growing}"
+        );
+        assert!(
+            giving > after.tabs[5].size.width && giving < palette::TAB_TITLED,
+            "on its way back: {giving}"
+        );
+        // The cross shows only once there is room for it, where a click closes.
+        assert!(!titled(drawn_rect(&flock, &keys[6], after.tabs[6])));
+
+        for _ in 0..90 {
+            flock.step(1.0 / 60.0);
+        }
+        let open = drawn_rect(&flock, &keys[6], after.tabs[6]);
+        assert!((open.size.width - after.tabs[6].size.width).abs() < f64::EPSILON);
+        assert!(titled(open));
+    }
+
+    #[test]
+    fn the_field_opening_mid_glide_finds_the_row_in_place() {
+        let keys: Vec<Key> = (0..12).map(|i| Key::Tab(TabId(i))).collect();
+        let aims = |row: &Layout| -> Vec<Aim<Key>> {
+            keys.iter()
+                .zip(&row.tabs)
+                .map(|(key, rect)| Aim {
+                    key: key.clone(),
+                    x: rect.origin.x,
+                    width: rect.size.width,
+                    from: None,
+                })
+                .collect()
+        };
+        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
+        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6));
+        let field = layout(900.0, &tabs(12), Some(6), palette::HELM, Some(6));
+        let mut flock = Flock::default();
+        let mut settle = |row: &Layout, switched: bool, opened: bool| {
+            settle_row(
+                &mut flock,
+                &aims(row),
+                false,
+                switched,
+                opened,
+                Curve::SETTLE,
+                |_| None,
+            );
+        };
+        settle(&before, false, false);
+        settle(&after, true, false);
+        settle(&field, false, true);
+        // The field is framed on the layout, so the tab and its neighbour are there.
+        for index in [6, 7] {
+            let drawn = drawn_rect(&flock, &keys[index], field.tabs[index]);
+            assert!((drawn.origin.x - field.tabs[index].origin.x).abs() < f64::EPSILON);
+            assert!((drawn.size.width - field.tabs[index].size.width).abs() < f64::EPSILON);
+        }
     }
 
     #[test]

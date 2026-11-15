@@ -617,6 +617,14 @@ impl<K: Eq + Hash + Clone> Flock<K> {
             .map(|(key, mover)| (key, mover.place()))
     }
 
+    /// Every slot that stays is where it is going at once; those leaving keep fading.
+    pub fn arrive(&mut self) {
+        self.movers
+            .values_mut()
+            .filter(|mover| !mover.leaving)
+            .for_each(Mover::rest);
+    }
+
     /// The hand has the slot: it is drawn where the hand is, and springs home from
     /// there once let go.
     pub fn hold(&mut self, key: &K, x: f64) {

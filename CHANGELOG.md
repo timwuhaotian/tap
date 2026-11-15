@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.10 — 2026-11-15
+
+### Fixed
+
+- **A narrow tab opens smoothly when you pick it**: in a crowded row, the tab you
+  click glides wider to show its title and ×, and the one you left narrows back, on
+  the same spring as the rest of the row, instead of jumping.
+
 ## 0.3.9 — 2026-11-14
 
 ### Added

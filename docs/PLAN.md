@@ -24,6 +24,17 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-15 the live tab's width glides (0.3.10):** at the user's request ("tab很窄的时候被
+点击，扩展宽度…直接撑开的，能否优化smooth过渡"), another tab going live is a change the
+row glides on `settle`, as a reorder is: in a crowded row the tab taken widens to
+`TAB_TITLED` for its cross while the one left narrows to its mark, under the pill's
+own glide, instead of both jumping. Its title and cross still appear only once it is
+`titled`, so a cross is always where a click closes. When the field opens in the row,
+the row is put in place at once, since the field is framed on the layout rather than
+on the springs. Reduce Motion and Low Power keep their curves. Tests:
+`a_switch_in_a_crowded_row_glides_the_cross_open`,
+`the_field_opening_mid_glide_finds_the_row_in_place`.
+
 **2026-11-14 hard reload:** ⇧⌘R reloads the active page from origin using WebKit,
 without clearing the browser-wide cache. This differs from Search's ⇧⌘R reading mode
 and ⌥⌘R origin reload shortcuts.
@@ -1038,9 +1049,10 @@ release.
   of the strip (tab, heading, plus) is keyed by identity, not place, and springs to
   where the layout puts it on `settle` (0.30, 0.86). Search's
   `.animation(Motion.settle, value: tabs.map(\.id))`, run by hand since the strip
-  is one drawn view: a row whose slots changed (opened, closed, moved, folded) goes
-  there on the spring; a row whose slots didn't (a resize, the field widening the live
-  tab) goes at once, anything in flight kept in flight. A slot that leaves fades where
+  is one drawn view: a row whose slots changed (opened, closed, moved, folded), or
+  whose live tab did (0.3.10: its width for the cross), goes there on the spring; a
+  row whose slots didn't (a resize) goes at once, anything in flight kept in flight,
+  and the field opening in the row puts it in place. A slot that leaves fades where
   it stood, one that comes fades in. Reduce Motion: no motion. Settings › Reduce
   animations in Low Power Mode, while the Mac saves power: a short damped spring
   (0.12, 1.0) in place of Search's 0.16 s ease-out (`fixed-deviation`: one curve
