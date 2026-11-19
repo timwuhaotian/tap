@@ -12,10 +12,10 @@ use objc2::{
 };
 use objc2_app_kit::{NSEventModifierFlags, NSWindow, NSWindowStyleMask, NSWorkspace};
 use objc2_foundation::{
-    NSArray, NSBundle, NSDictionary, NSError, NSHTTPURLResponse, NSInteger, NSKeyValueChangeKey,
-    NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize,
-    NSString, NSURL, NSURLAuthenticationChallenge, NSURLCredential, NSURLRequest,
-    NSURLRequestCachePolicy, NSURLSessionAuthChallengeDisposition,
+    NSArray, NSBundle, NSDate, NSDictionary, NSError, NSHTTPURLResponse, NSInteger,
+    NSKeyValueChangeKey, NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration,
+    NSPoint, NSRect, NSSet, NSSize, NSString, NSURL, NSURLAuthenticationChallenge, NSURLCredential,
+    NSURLRequest, NSURLRequestCachePolicy, NSURLSessionAuthChallengeDisposition,
 };
 #[allow(deprecated)]
 use objc2_web_kit::WKProcessPool;
@@ -25,7 +25,8 @@ use objc2_web_kit::{
     WKNavigationResponsePolicy, WKNavigationType, WKOpenPanelParameters, WKPreferences,
     WKSecurityOrigin, WKUIDelegate, WKUserContentController, WKUserScript,
     WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration, WKWebsiteDataStore,
-    WKWindowFeatures,
+    WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeFetchCache, WKWebsiteDataTypeMemoryCache,
+    WKWebsiteDataTypeOfflineWebApplicationCache, WKWindowFeatures,
 };
 use serde_json::Value;
 use tap_core::{
@@ -1147,6 +1148,14 @@ fn again(web: &WKWebView, tab: TabId, from_origin: bool) {
         }
         return;
     }
+    if from_origin {
+        // Hard reload clears first: Tap's own icon for the page goes (icons::evict),
+        // so the finished load probes it again, and every cache WebKit keeps goes
+        // too (drop_caches): the page, its files, its favicon, and what service
+        // workers cached. The page is then asked for from its origin clean.
+        icons::evict(web);
+        drop_caches();
+    }
     // SAFETY: plain calls on a live web view.
     unsafe {
         if from_origin {
@@ -1154,6 +1163,35 @@ fn again(web: &WKWebView, tab: TabId, from_origin: bool) {
         } else {
             web.reload();
         }
+    }
+}
+
+/// A hard reload's clear: every cache WebKit keeps — the disk and the memory cache
+/// (pages, files, favicons), the fetch cache service workers write to, and the
+/// old offline web application cache. Stored page data and cookies stay as they
+/// are: a hard reload clears caches, it does not sign anything out.
+fn drop_caches() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    // SAFETY: WebKit's own type names, read as the constants they are.
+    let types = unsafe {
+        NSSet::from_slice(&[
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeFetchCache,
+            WKWebsiteDataTypeOfflineWebApplicationCache,
+        ])
+    };
+    let done = RcBlock::new(|| {});
+    // SAFETY: the data store Tap's pages use, every record since the beginning of time.
+    unsafe {
+        WKWebsiteDataStore::defaultDataStore(mtm)
+            .removeDataOfTypes_modifiedSince_completionHandler(
+                &types,
+                &NSDate::distantPast(),
+                &done,
+            );
     }
 }
 

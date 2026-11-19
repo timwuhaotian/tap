@@ -23,8 +23,8 @@ use objc2_app_kit::{
     NSGraphicsContext, NSImage,
 };
 use objc2_foundation::{
-    NSData, NSDictionary, NSError, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLResponse,
-    NSURLSession,
+    NSData, NSDictionary, NSError, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest,
+    NSURLRequestCachePolicy, NSURLResponse, NSURLSession,
 };
 use objc2_web_kit::WKWebView;
 use tap_core::{
@@ -134,6 +134,27 @@ fn cached_image(
     Some(image)
 }
 
+/// A hard reload asks for the page again, with nothing cached: what Tap kept for the
+/// tab's icon goes with it — the PNG, its index record, and what this run already
+/// fetched — so the finished load is probed and fetched anew, like the page is.
+pub fn evict(web: &WKWebView) {
+    let Some(page) = web::url_of(web).and_then(|u| Url::parse(&u)) else {
+        return;
+    };
+    let Some(name) = with_index(|index| index.exact(&page, false)) else {
+        return;
+    };
+    IMAGES.with_borrow_mut(|images| images.remove(&name));
+    KEPT.with_borrow_mut(|kept| kept.remove(&name));
+    let _ = std::fs::remove_file(folder().join(format!("{name}.png")));
+    let data = with_index(|index| {
+        index.forget(&page);
+        index.encode()
+    });
+    store::save(folder().join("pages.json"), data);
+    BY_ADDRESS.with_borrow_mut(HashMap::clear);
+}
+
 /// A page finished loading in the tab: it is asked what it declares, and the best icon
 /// that comes back is kept.
 pub fn fetch(tab: TabId, web: &WKWebView) {
@@ -221,9 +242,17 @@ fn try_next(tab: TabId, page: Url, candidates: Vec<String>, at: usize) {
             });
         },
     );
-    // SAFETY: a valid URL and a block that outlives the request.
-    let task =
-        unsafe { NSURLSession::sharedSession().dataTaskWithURL_completionHandler(&url, &block) };
+    // Straight from the origin, cache left out: a re-asked icon is the site's now,
+    // not what a shared session cache kept for it.
+    let request = NSURLRequest::requestWithURL_cachePolicy_timeoutInterval(
+        &url,
+        NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData,
+        30.0,
+    );
+    // SAFETY: a valid request and a block that outlives the request.
+    let task = unsafe {
+        NSURLSession::sharedSession().dataTaskWithRequest_completionHandler(&request, &block)
+    };
     task.resume();
 }
 

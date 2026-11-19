@@ -84,7 +84,10 @@ on the springs. Reduce Motion and Low Power keep their curves. Tests:
 
 **2026-11-14 hard reload:** ⇧⌘R reloads the active page from origin using WebKit,
 without clearing the browser-wide cache. This differs from Search's ⇧⌘R reading mode
-and ⌥⌘R origin reload shortcuts.
+and ⌥⌘R origin reload shortcuts. **2026-11-20:** the reader port later also claimed
+⇧⌘R (`reader.rs` swallowed it before the View menu could see it), so hard reload
+never fired. Reading mode now rides on ⌥⌘R, the key Search gives its origin reload
+and Tap therefore leaves free.
 
 **2026-11-08 UI/UX audit fixes (0.3.3):** a UI/UX audit pass (impeccable `audit`,
 11 dimensions across the shell) found no P0s; this patch ships its P1/P2 bug fixes:

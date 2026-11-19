@@ -1,5 +1,7 @@
 //! Reading mode (Search's `Reader.swift` and `Markdown.swift`, in their smallest form):
-//! ⇧⌘R puts the article alone on the page, in clean type. When the site publishes a
+//! ⌥⌘R puts the article alone on the page, in clean type. Search uses ⇧⌘R here,
+//! but Tap has given that key to hard reload (PLAN.md 2026-11-14), so reading
+//! mode rides on ⌥⌘R, which Search gives to its origin reload instead. When the site publishes a
 //! Markdown copy of the page (`reader.twins`, off unless asked for, Search's
 //! `Prefs.readsTwins`) that copy is drawn instead of the guess at the article, and
 //! nothing in it can run: it is turned into HTML here, with every piece of text
@@ -38,7 +40,7 @@ thread_local! {
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Puts the ⇧⌘R monitor in place, once. Tap's menus have no Reading Mode item yet
+/// Puts the ⌥⌘R monitor in place, once. Tap's menus have no Reading Mode item yet
 /// (that is `menu.rs`, which this module may not touch), so the key is taken here,
 /// the way Search's menu takes it, and swallowed when it is ours.
 pub fn install() {
@@ -51,7 +53,7 @@ pub fn install() {
             let event = unsafe { event.as_ref() };
             let flags = event.modifierFlags();
             let ours = flags.contains(NSEventModifierFlags::Command)
-                && flags.contains(NSEventModifierFlags::Shift)
+                && flags.contains(NSEventModifierFlags::Option)
                 && !event.isARepeat()
                 && event
                     .charactersIgnoringModifiers()
@@ -71,7 +73,7 @@ pub fn install() {
     std::mem::forget(monitor);
 }
 
-/// ⇧⌘R on the tab in front.
+/// ⌥⌘R on the tab in front.
 pub fn toggle_active() {
     let Some(tab) = rt::read(tap_core::browser::Browser::active) else {
         return;

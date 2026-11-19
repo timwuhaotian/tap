@@ -44,7 +44,7 @@ with its own name and icon, and with fixes of its own.
 - **An address bar** under the tabs, with back, forward and reload on its left: the
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
   the load's progress as a line that glides forward and fades once the page is in.
-  Settings can hide it. ⇧⌘R reloads the page from its origin.
+  Settings can hide it. ⇧⌘R hard-reloads the page, clearing the cache first.
 - **A star in the address bar** keeps the page you are on, or lets it go (⇧⌘B), and
   the list beside it says what is kept and takes you there. A folder that came from
   another browser is kept too, with its places under it.

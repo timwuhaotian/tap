@@ -264,6 +264,18 @@ impl Index {
             .map(str::to_owned)
     }
 
+    /// Forget what a page wore, both looks: a hard reload probes it again.
+    pub fn forget(&mut self, url: &Url) {
+        let Some(host) = site(url) else { return };
+        let page = page(url);
+        if let Some(pages) = self.pages.get_mut(&host) {
+            pages.remove(&page);
+            if pages.is_empty() {
+                self.pages.remove(&host);
+            }
+        }
+    }
+
     /// The icon a page wears: its own, or the page of its site that shares the most of
     /// its path; the same site with or without www. A host whose pages don't agree on one
     /// icon is several apps, and another one's page is no guide.
@@ -421,6 +433,23 @@ mod tests {
                 .as_deref(),
             Some("radarr")
         );
+    }
+
+    #[test]
+    fn forget_drops_one_page_and_leaves_its_neighbours() {
+        let mut index = Index::default();
+        index.record(&url("https://example.com/a"), "a-icon", false, 1.0);
+        index.record(&url("https://example.com/a/b"), "b-icon", false, 2.0);
+        index.forget(&url("https://example.com/a"));
+        assert_eq!(index.exact(&url("https://example.com/a"), false), None);
+        assert_eq!(
+            index
+                .exact(&url("https://example.com/a/b"), false)
+                .as_deref(),
+            Some("b-icon")
+        );
+        index.forget(&url("https://example.com/a/b"));
+        assert_eq!(index.lookup(&url("https://example.com/a/b/c"), false), None);
     }
 
     #[test]

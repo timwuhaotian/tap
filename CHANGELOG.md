@@ -7,6 +7,20 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.16 — 2026-11-20
+
+### Fixed
+
+- **⇧⌘R hard reloads again**: the reader port had claimed ⇧⌘R for reading mode in a
+  key monitor that swallowed the key before the View menu could see it, so
+  `Reload Page From Origin` never fired. Reading mode now rides on ⌥⌘R, and ⇧⌘R
+  reloads the page from its origin as documented.
+- **⇧⌘R also clears the caches**: a hard reload now drops every cache WebKit
+  keeps — disk and memory caches (the page, its files, its favicon), the fetch
+  cache service workers write to, and the offline application cache — and drops
+  Tap's kept icon for the page so it is fetched again. Icon fetches bypass the
+  shared session cache. Cookies and stored page data stay as they are.
+
 ## 0.3.15 — 2026-11-20
 
 ### Fixed
