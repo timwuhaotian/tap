@@ -7,6 +7,15 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.13 — 2026-11-19
+
+### Fixed
+
+- **Tabs past the edge of the window are reachable**: tabs shrink as before, and
+  once they are at their narrowest the row scrolls sideways under a trackpad
+  swipe or wheel, with the + pinned. A tab you switch to is scrolled into view;
+  afterwards the row stays where you put it.
+
 ## 0.3.12 — 2026-11-19
 
 ### Fixed
