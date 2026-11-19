@@ -7,6 +7,15 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.14 — 2026-11-19
+
+### Fixed
+
+- **⌘R refreshes a page whose first load failed**: a page that never committed (its
+  dev server was down when it was asked for) sits on about:blank, where a plain
+  reload does nothing. ⌘R now asks for the address afresh in that case, as pressing
+  Enter in the address bar did.
+
 ## 0.3.13 — 2026-11-19
 
 ### Fixed

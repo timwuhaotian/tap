@@ -9,6 +9,7 @@
     scripts/bench eval id=3 js='document.title'
     scripts/bench test-forms                         # WebKit form regression tests
     scripts/bench test-agent                         # WebKit agent snapshot/eval regression tests
+    scripts/bench test-reload                        # ⌘R recovers a load that failed against a down server
 
 Values are read as JSON when they parse (true, 3, ["a"]) and as text otherwise. The
 world is TAP_PROBE's, as for the app: `TAP_PROBE=dev scripts/bench probe` talks to the
@@ -363,6 +364,70 @@ document.getElementById('go').addEventListener('click', () => { fetch('/ping?nam
         request({"do": "close", "id": b})
 
 
+def test_reload():
+    if world() is None:
+        raise RuntimeError("test-reload requires TAP_PROBE and an isolated test world")
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    # A port with nothing behind it: the first load fails, as a dev server mid-restart.
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    url = f"http://localhost:{port}/"
+    served = {"title": "reload-proof"}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = f"<html><head><title>{served['title']}</title></head><body>up</body></html>".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    def check(ok, message):
+        if not ok:
+            raise RuntimeError(message)
+
+    tab = request({"do": "open", "url": url})["id"]
+    httpd = None
+    try:
+        request({"do": "select", "id": tab})
+        failed = request({"do": "wait", "id": tab, "seconds": 10})
+        check(failed["failure"], "the first load should fail with nothing listening")
+
+        # The server comes back, as a restarted dev server does.
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+        # ⌘R on the failed tab: its view never committed, so reload alone has nothing
+        # to reload and the address must be asked for afresh.
+        request({"do": "keyeq", "key": "r"})
+        state = request({"do": "wait", "id": tab, "seconds": 10})
+        check(not state["failure"] and state["progress"] >= 1.0,
+              f"⌘R did not bring the page back: {state}")
+        check(request({"do": "eval", "id": tab, "js": "document.title"})["value"]
+              == "reload-proof", "⌘R loaded the wrong page")
+
+        # A committed page still reloads the normal way.
+        served["title"] = "reload-again"
+        request({"do": "keyeq", "key": "r"})
+        request({"do": "wait", "id": tab, "seconds": 10})
+        check(request({"do": "eval", "id": tab, "js": "document.title"})["value"]
+              == "reload-again", "reload of a committed page broke")
+        print("reload: ⌘R recovers a failed first load and still reloads a committed page")
+    finally:
+        request({"do": "close", "id": tab})
+        if httpd is not None:
+            httpd.shutdown()
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
@@ -379,6 +444,13 @@ def main(argv):
             test_agent()
         except (OSError, RuntimeError, KeyError, ValueError) as error:
             print(f"agent: {error}", file=sys.stderr)
+            return 1
+        return 0
+    if argv[0] == "test-reload":
+        try:
+            test_reload()
+        except (OSError, RuntimeError, KeyError, ValueError) as error:
+            print(f"reload: {error}", file=sys.stderr)
             return 1
         return 0
     request = {"do": argv[0]}

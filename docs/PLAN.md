@@ -24,6 +24,18 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-19 ⌘R on a page that never loaded:** at the user's report that ⌘R sometimes
+did nothing while Enter in the address bar refreshed (a restarted `localhost:5173` dev
+server), the cause was WebKit's `reload` reloading the current back/forward item: a view
+whose first load failed while the server was down never committed, sits on about:blank,
+and `reload` there does nothing. `web::again` now asks for the address afresh when the
+view holds nothing (or the address is a file, read again with its folder), as Search's
+`Tab.reload` does for a `hollow` view (`Tab.swift`); `page_url` never lets about:blank
+overwrite a kept address, as Search's url watcher does. Tests:
+`an_emptied_view_does_not_take_the_address_with_it`, `scripts/bench test-reload` (a load
+failed against a dead port, the server brought back, ⌘R recovers it; a committed page
+still reloads).
+
 **2026-11-19 one favicon through the width fade (0.3.12):** at the user's report that
 expanding and narrowing tabs showed two favicons, 0.3.11's whole-face crossfade was the
 cause: the narrow and titled faces each drew the mark, at its centred and left-hand

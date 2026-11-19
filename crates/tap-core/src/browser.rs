@@ -2183,7 +2183,9 @@ impl Browser {
 
     pub fn page_url(&mut self, id: TabId, url: &str) {
         let Some(tab) = self.tab_mut(id) else { return };
-        if url.is_empty() || url == "about:blank" && tab.url.is_empty() {
+        // about:blank is never a destination (Search's url watcher): a view emptied
+        // behind an address must not overwrite the only thing that can bring it back.
+        if url.is_empty() || url == "about:blank" {
             return;
         }
         if !Tab::set_text(&mut tab.url, url, &mut tab.dirty, TabFields::URL) {
@@ -2918,6 +2920,21 @@ mod tests {
                 .take_effects()
                 .iter()
                 .any(|e| matches!(e, Effect::Save(_)))
+        );
+    }
+
+    #[test]
+    fn an_emptied_view_does_not_take_the_address_with_it() {
+        let mut browser = with_pages(&["http://localhost:5173"]);
+        let id = browser.active().expect("a tab");
+        let _ = browser.take_effects();
+
+        // A view whose load never committed (the server was down) reports
+        // about:blank; the address stays, so ⌘R can ask for it afresh.
+        browser.page_url(id, "about:blank");
+        assert_eq!(
+            browser.tab(id).expect("the tab").url(),
+            "http://localhost:5173"
         );
     }
 

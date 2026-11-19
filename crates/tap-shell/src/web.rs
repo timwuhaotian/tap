@@ -1041,28 +1041,18 @@ pub fn perform(effect: Effect) {
             }
         }
         Effect::Reload(tab) => {
-            // SAFETY: plain call on a live web view.
-            let _ = existing(tab).map(|web| unsafe { web.reload() });
+            if let Some(web) = existing(tab) {
+                again(&web, tab, false);
+            }
         }
         Effect::ReloadFromOrigin(tab) => {
-            // SAFETY: plain call on a live web view.
-            let _ = existing(tab).map(|web| unsafe { web.reloadFromOrigin() });
+            if let Some(web) = existing(tab) {
+                again(&web, tab, true);
+            }
         }
         Effect::LoadFromOrigin { tab, url } => {
             let page = web_view(mtm, tab);
-            if let Some(target) = NSURL::URLWithString(&NSString::from_str(&url)) {
-                if target.isFileURL() {
-                    load(&page, &url);
-                } else {
-                    let request = NSURLRequest::requestWithURL_cachePolicy_timeoutInterval(
-                        &target,
-                        NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData,
-                        60.0,
-                    );
-                    // SAFETY: a valid request on a live web view.
-                    unsafe { page.loadRequest(&request) };
-                }
-            }
+            load_from_origin(&page, &url);
         }
         Effect::Back(tab) => {
             // SAFETY: plain call on a live web view.
@@ -1111,6 +1101,58 @@ fn load(web: &WKWebView, address: &str) {
             web.loadFileURL_allowingReadAccessToURL(&url, &folder);
         } else {
             web.loadRequest(&NSURLRequest::requestWithURL(&url));
+        }
+    }
+}
+
+/// The page asked for again, bypassing cached content: a file is read again with the
+/// folder it may read, anything else with the cache left out of the request.
+fn load_from_origin(web: &WKWebView, address: &str) {
+    let Some(target) = NSURL::URLWithString(&NSString::from_str(address)) else {
+        return;
+    };
+    if target.isFileURL() {
+        load(web, address);
+        return;
+    }
+    let request = NSURLRequest::requestWithURL_cachePolicy_timeoutInterval(
+        &target,
+        NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData,
+        60.0,
+    );
+    // SAFETY: a valid request on a live web view.
+    unsafe { web.loadRequest(&request) };
+}
+
+/// ⌘R: the page asked for again. A view holding nothing — its first load never
+/// committed (the server was down when it was asked for), or emptied since — has
+/// nothing to reload: WebKit's `reload` on about:blank does nothing, so the address
+/// is asked for afresh, as Search's `Tab.reload` does for a hollow view. A file is
+/// read again with the folder it may read (see `load`).
+fn again(web: &WKWebView, tab: TabId, from_origin: bool) {
+    let address = rt::read(|browser| browser.tab(tab).map(|t| t.url().to_owned())).flatten();
+    // SAFETY: plain property reads on a live web view.
+    let held = unsafe {
+        web.URL()
+            .and_then(|url| url.absoluteString())
+            .map(|url| url.to_string())
+            .unwrap_or_default()
+    };
+    let hollow = held.is_empty() || held == "about:blank";
+    if let Some(address) = address.filter(|a| hollow || a.starts_with("file:")) {
+        if from_origin {
+            load_from_origin(web, &address);
+        } else {
+            load(web, &address);
+        }
+        return;
+    }
+    // SAFETY: plain calls on a live web view.
+    unsafe {
+        if from_origin {
+            web.reloadFromOrigin();
+        } else {
+            web.reload();
         }
     }
 }
