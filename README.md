@@ -36,8 +36,9 @@ with its own name and icon, and with fixes of its own.
 - **Tabs across the top**, with the traffic lights in the row: ⌘T, ⌘W, ⇧⌘T, ⌃Tab,
   ⌘1–⌘9, links opened behind the page with ⌘-click, and a × on tabs wide enough to
   show it. The active tab glides wider to keep its × in a crowded row, its title and
-  × fading in as it goes, even while editing. Each tab has its site's icon (including
-  sites whose only icon is an SVG); blank cached icons are fetched again.
+  × fading in as it goes, even while editing. Each tab's site icon moves with it, from
+  the middle of a narrow tab to beside its title (including sites whose only icon is
+  an SVG); blank cached icons are fetched again.
 - **An address bar** under the tabs, with back, forward and reload on its left: the
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
   the load's progress as a line that glides forward and fades once the page is in.

@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.12 — 2026-11-19
+
+### Fixed
+
+- **A tab keeps one favicon while its width changes**: the icon moves from the middle
+  of a narrow tab to its place beside the title; only the title and × crossfade, so
+  expanding and collapsing no longer show two icons.
+
 ## 0.3.11 — 2026-11-15
 
 ### Fixed

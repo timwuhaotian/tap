@@ -2086,6 +2086,18 @@ fn live_pill(rect: NSRect, dark: bool) {
     }
 }
 
+fn mark_rect(rect: NSRect, reveal: f64) -> NSRect {
+    let centred = (rect.size.width - ICON) / 2.0;
+    let left = centred + (10.0 - centred) * reveal;
+    NSRect::new(
+        NSPoint::new(
+            rect.origin.x + left,
+            rect.origin.y + (rect.size.height - ICON) / 2.0,
+        ),
+        NSSize::new(ICON, ICON),
+    )
+}
+
 /// One tab where it is drawn this frame. `slot` is its place in the row (`None` for
 /// one that has gone); `gone` draws it as it fades, at rest: no pill, no cross.
 #[allow(clippy::too_many_lines)] // one tab, left to right, in one pass
@@ -2187,50 +2199,6 @@ fn draw_tab(
                 centred_word(&digit, *rect),
                 &palette::MUTED.resolve(dark),
             );
-        } else if let Some(icon) = &icon {
-            // Beside the title, or alone in the middle of a narrow tab.
-            let x = if titled {
-                rect.origin.x + 10.0
-            } else {
-                rect.origin.x + (rect.size.width - ICON) / 2.0
-            };
-            let square = NSRect::new(
-                NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
-                NSSize::new(ICON, ICON),
-            );
-            // SAFETY: drawing a decoded image into the view's own context, no hints.
-            unsafe {
-                icon.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
-                    square,
-                    NSRect::ZERO,
-                    NSCompositingOperation::SourceOver,
-                    1.0,
-                    true,
-                    None,
-                );
-            }
-        } else if !titled || look.icons {
-            // No icon to show (none kept yet, or Letters is the choice): a
-            // narrow tab shows its letter on a tile rather than nothing at
-            // all, and in icons mode a titled tab does the same beside its
-            // title, as Search's `Mark` falls back to the monogram.
-            let x = if titled {
-                rect.origin.x + 10.0
-            } else {
-                rect.origin.x + (rect.size.width - ICON) / 2.0
-            };
-            let square = NSRect::new(
-                NSPoint::new(x, rect.origin.y + (rect.size.height - ICON) / 2.0),
-                NSSize::new(ICON, ICON),
-            );
-            palette::HOVER.resolve(dark).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
-            let letter = monogram(tab);
-            palette::draw_text(
-                &letter,
-                centred_word(&letter, square),
-                &palette::MUTED.resolve(dark),
-            );
         }
         if titled {
             let mut right = if crossed { 30.0 } else { 12.0 };
@@ -2280,6 +2248,40 @@ fn draw_tab(
             draw_close(*rect, paint.spot == Spot::Close(index), dark);
         }
     };
+    // The mark is shared by both faces: draw it once, moving between its centred and
+    // titled positions, rather than crossfading two copies of it.
+    let mark_alpha = if number.is_some() {
+        if look.icons { reveal } else { 0.0 }
+    } else if look.icons {
+        1.0
+    } else {
+        1.0 - reveal
+    };
+    faded(mark_alpha, || {
+        let square = mark_rect(*rect, reveal);
+        if let Some(icon) = &icon {
+            // SAFETY: drawing a decoded image into the view's own context, no hints.
+            unsafe {
+                icon.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+                    square,
+                    NSRect::ZERO,
+                    NSCompositingOperation::SourceOver,
+                    1.0,
+                    true,
+                    None,
+                );
+            }
+        } else {
+            palette::HOVER.resolve(dark).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 4.0, 4.0).fill();
+            let letter = monogram(tab);
+            palette::draw_text(
+                &letter,
+                centred_word(&letter, square),
+                &palette::MUTED.resolve(dark),
+            );
+        }
+    });
     if reveal >= 0.999 {
         face(true);
     } else if reveal <= 0.001 {
@@ -2730,6 +2732,15 @@ mod tests {
         let open = drawn_rect(&flock, &keys[6], after.tabs[6]);
         assert!((open.size.width - after.tabs[6].size.width).abs() < f64::EPSILON);
         assert!(titled(open));
+    }
+
+    #[test]
+    fn the_mark_moves_between_its_narrow_and_titled_positions() {
+        let rect = NSRect::new(NSPoint::new(40.0, 4.0), NSSize::new(150.0, 28.0));
+        assert_eq!(mark_rect(rect, 0.0).origin.x, 107.0);
+        assert_eq!(mark_rect(rect, 0.5).origin.x, 78.5);
+        assert_eq!(mark_rect(rect, 1.0).origin.x, 50.0);
+        assert_eq!(mark_rect(rect, 0.0).size, NSSize::new(ICON, ICON));
     }
 
     #[test]

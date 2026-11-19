@@ -24,6 +24,15 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-19 one favicon through the width fade (0.3.12):** at the user's report that
+expanding and narrowing tabs showed two favicons, 0.3.11's whole-face crossfade was the
+cause: the narrow and titled faces each drew the mark, at its centred and left-hand
+positions. The mark is now drawn once, its rectangle interpolated by `reveal`; only the
+title, cross and reading fill crossfade. A shortcut number still takes the narrow mark's
+place, and Letters mode still lets the narrow monogram fade away. Test:
+`the_mark_moves_between_its_narrow_and_titled_positions`. In a 32-tab probe world,
+growing and shrinking frames each showed one favicon per tab.
+
 **2026-11-15 the title and cross fade with the width (0.3.11):** at the user's request
 ("标题和×能否也淡入，不要突然出现"), a tab whose width crosses `TAB_TITLED` crossfades
 between its mark and its titled face (title, cross, reading fill) on `fade`, instead
