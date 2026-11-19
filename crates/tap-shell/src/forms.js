@@ -207,10 +207,12 @@
 
   window.__tapForms = {
     unsaved: unsaved,
+    // A pick is a choice: it puts in the name even over one the page
+    // already holds (an autofill's), unlike autofill above.
     fill: function (user, password) {
       var both = pair();
       if (!both) return false;
-      if (both.user && !both.user.value) put(both.user, user);
+      if (both.user) put(both.user, user);
       put(both.pass, password);
       return true;
     },

@@ -310,14 +310,28 @@ pub fn forget_tab(tab: TabId) {
     STATE.with_borrow_mut(|s| s.filled.remove(&tab));
 }
 
-/// The box's rect in the stage's points: CSS pixels times the page's zoom, in the web
-/// view's (flipped) space, then the stage's.
+/// The box's rect in the stage's points: CSS pixels times the page's zoom and
+/// magnification, from the page's top-left origin into the web view's own
+/// (unflipped, bottom-left) space, then the stage's.
 fn spot(web: &WKWebView, rect: NSRect) -> NSRect {
-    // SAFETY: a plain property read on a live web view.
-    let zoom = unsafe { web.pageZoom() };
+    // SAFETY: plain property reads on a live web view.
+    let (scale, flipped, height) = unsafe {
+        let view: &NSView = web.as_ref();
+        let scale = web.pageZoom() * web.magnification();
+        (
+            if scale > 0.0 { scale } else { 1.0 },
+            view.isFlipped(),
+            view.bounds().size.height,
+        )
+    };
+    let y = if flipped {
+        rect.origin.y * scale
+    } else {
+        height - (rect.origin.y + rect.size.height) * scale
+    };
     let local = NSRect::new(
-        NSPoint::new(rect.origin.x * zoom, rect.origin.y * zoom),
-        NSSize::new(rect.size.width * zoom, rect.size.height * zoom),
+        NSPoint::new(rect.origin.x * scale, y),
+        NSSize::new(rect.size.width * scale, rect.size.height * scale),
     );
     match window::stage() {
         Some(stage) => web.convertRect_toView(local, Some(&stage)),

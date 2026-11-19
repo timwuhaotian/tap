@@ -109,10 +109,10 @@ def test_forms():
           check(f.fill('alice', 'secret') && u.value === 'alice' && pw.value === 'secret', 'fill selected pair');
           check(events.join(',') === 'u2:input,u2:change,pw:input,pw:change', 'fill events');
           f.fill('bob', 'other');
-          check(u.value === 'alice' && pw.value === 'other', 'fill preserves existing username');
+          check(u.value === 'bob' && pw.value === 'other', 'fill overwrites existing username');
           d.dispatchEvent(new p.w.Event('submit'));
           let sent = p.messages.filter(m => m.kind === 'submit').pop();
-          check(sent.user === 'alice' && sent.password === 'other', 'submit reports selected pair');
+          check(sent.user === 'bob' && sent.password === 'other', 'submit reports selected pair');
           pw.focus();
           d.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter' }));
           check(p.messages.filter(m => m.kind === 'submit').length === 2, 'Enter reports the pair');

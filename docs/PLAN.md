@@ -24,6 +24,19 @@ of Tap from the start:
 
 ## 2. Decisions
 
+**2026-11-20 sign-in list position and pick overwrite (0.3.15):** at the user's
+report that clicking a stored login did not replace an autofilled name, and that
+the accounts list sat away from the field it hung from. The pick went through
+`forms.js`'s `fill`, which only put the name in when the box was empty, so a
+name already there (an autofill's) blocked it and only the password changed;
+a pick is a choice, so it now writes the name either way, while `autofill`
+keeps its empty-boxes-only rule. The list's spot (`signin.rs::spot`) fed the
+page's `getBoundingClientRect` — top-left origin, CSS pixels — straight into
+AppKit coordinates, where WKWebView's origin is bottom-left, and scaled by
+`pageZoom` alone; it now flips the offset by the view's height and scales by
+`pageZoom * magnification`, as `inspect.rs::css_point` already did. Tests:
+`scripts/bench test-forms` (fill overwrites, submit reports the picked name).
+
 **2026-11-19 ⌘R on a page that never loaded:** at the user's report that ⌘R sometimes
 did nothing while Enter in the address bar refreshed (a restarted `localhost:5173` dev
 server), the cause was WebKit's `reload` reloading the current back/forward item: a view

@@ -7,6 +7,20 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.15 — 2026-11-20
+
+### Fixed
+
+- **Picking a saved login replaces what is already in the field**: clicking a
+  stored account now overwrites the username as well as the password. It used
+  to leave an autofilled name in place and only change the password, so the
+  pair sent no longer matched.
+- **The saved-accounts list hangs from the field it belongs to**: its position
+  was worked out with the page's top-left offset read as AppKit's bottom-left
+  one, so the list landed mirrored from where the caret was, and it ignored
+  pinch zoom. It now flips the offset into the web view's own space and
+  scales by page zoom and magnification, as the Inspect Element anchor does.
+
 ## 0.3.14 — 2026-11-19
 
 ### Fixed
