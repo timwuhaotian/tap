@@ -46,7 +46,7 @@ use crate::{
 mod shield;
 
 /// What the observer watches on every web view; each change re-reads the lot.
-const OBSERVED: [&str; 7] = [
+const OBSERVED: [&str; 8] = [
     "title",
     "URL",
     "loading",
@@ -54,6 +54,7 @@ const OBSERVED: [&str; 7] = [
     "canGoBack",
     "canGoForward",
     "hasOnlySecureContent",
+    "fullscreenState",
 ];
 
 /// The scripts last put on a controller, and which controller: every page shares
@@ -1229,6 +1230,11 @@ fn sync(web: &WKWebView) {
 /// together: the model takes them as one.
 fn sync_one(web: &WKWebView, key: &str) {
     let Some(tab) = tab_of(web) else { return };
+    if key == "fullscreenState" {
+        // WebKit still has view-parenting work after this notification.
+        dispatch2::DispatchQueue::main().exec_async(window::fullscreen_changed);
+        return;
+    }
     // SAFETY: plain property reads on a live web view, whichever key moved.
     let reads = || unsafe {
         match key {

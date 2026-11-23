@@ -272,6 +272,12 @@ struct Layout {
     max_scroll: f64,
 }
 
+impl Layout {
+    fn shows_tabs_at(&self, x: f64) -> bool {
+        (palette::LIGHTS..self.end).contains(&x)
+    }
+}
+
 /// What the row's right end must keep clear: the helm while it is up here (with the
 /// address bar up it stands on the bar), and the downloads door while that door is
 /// shown (the same call the window makes to show it), so the plus can never run under
@@ -459,17 +465,13 @@ fn column(rect: NSRect, height: f64) -> NSRect {
 /// overflows, the tabs laid out past `end` aren't drawn, and the end past the plus
 /// stays title bar rather than a tab nobody can see.
 fn slot_at(layout: &Layout, point: NSPoint, height: f64) -> Option<usize> {
-    if point.x < palette::LIGHTS {
+    if !layout.shows_tabs_at(point.x) {
         return None;
     }
-    layout.tabs.iter().rposition(|rect| {
-        let shown = (rect.size.width + palette::TAB_GAP).min(layout.end - rect.origin.x);
-        shown > 0.0
-            && contains(
-                NSRect::new(NSPoint::new(rect.origin.x, 0.0), NSSize::new(shown, height)),
-                point,
-            )
-    })
+    layout
+        .tabs
+        .iter()
+        .rposition(|rect| contains(column(*rect, height), point))
 }
 
 /// Aims the row's springs. Slots that came, went or moved glide on `curve`, and so
@@ -1423,7 +1425,7 @@ impl Strip {
                 let me = browser.tab(*lead).filter(|t| !t.is_pinned())?;
                 let spans = drop_spans(browser, row, &layout.tabs);
                 let hand = NSPoint::new(grab.start + grab.travel, grab.down);
-                drop_at(hand, height, &spans, run)
+                drop_at(hand, height, layout, &spans, run)
                     .filter(|to| Some(to.group.as_str()) != group_of(me))
             })
             .flatten();
@@ -1993,19 +1995,20 @@ fn drop_plate(browser: &Browser, row: &[Item], layout: &Layout, place: usize, da
     path.stroke();
 }
 
-/// The group tabs let go at `hand` would join (Search's `GroupDropFrames.resolve`):
-/// only over the row itself, `height` tall, since a group's heading and tabs are
-/// what take them. Carried off it, over the page, they join nothing.
+/// The group tabs let go at `hand` would join (Search's `GroupDropFrames.resolve`).
+/// A clipped heading or tab can't take a drop, even if its span reaches under the
+/// window controls or the pinned plus.
 fn drop_at(
     hand: NSPoint,
     height: f64,
+    layout: &Layout,
     spans: &[GroupSpans<'_>],
     carried: &[TabId],
 ) -> Option<GroupDrop> {
-    (0.0..height)
-        .contains(&hand.y)
-        .then(|| groups::drop_target(hand.x, spans, carried))
-        .flatten()
+    if !layout.shows_tabs_at(hand.x) || !(0.0..height).contains(&hand.y) {
+        return None;
+    }
+    groups::drop_target(hand.x, spans, carried)
 }
 
 /// Each group in the row for a drop: its heading's span and its shown tabs'.
@@ -3089,7 +3092,8 @@ mod tests {
             heading: (100.0, 150.0),
             members: vec![(TabId(1), (152.0, 252.0))],
         }];
-        let at = |x, y| drop_at(NSPoint::new(x, y), palette::STRIP, &spans, &[]);
+        let row = layout(900.0, &tabs(3), None, palette::HELM, None, 0.0, false);
+        let at = |x, y| drop_at(NSPoint::new(x, y), palette::STRIP, &row, &spans, &[]);
         for y in [0.0, palette::STRIP / 2.0, palette::STRIP - 1.0] {
             assert_eq!(at(180.0, y).map(|d| d.group), Some("A".to_owned()));
         }
@@ -3097,6 +3101,44 @@ mod tests {
         assert_eq!(at(180.0, palette::STRIP + 40.0), None);
         assert_eq!(at(180.0, -5.0), None);
         assert_eq!(at(400.0, palette::STRIP / 2.0), None, "past every group");
+    }
+
+    #[test]
+    fn a_drag_cannot_join_the_part_of_a_group_clipped_by_overflow() {
+        let slots = [Slot::Heading(50.0)]
+            .into_iter()
+            .chain(tabs(30))
+            .collect::<Vec<_>>();
+        let row = layout(900.0, &slots, None, palette::HELM, None, 150.0, false);
+        let span = |rect: &NSRect| (rect.origin.x, rect.origin.x + rect.size.width);
+        let spans = [GroupSpans {
+            group: "A",
+            collapsed: false,
+            heading: span(&row.tabs[0]),
+            members: (1..)
+                .zip(&row.tabs[1..])
+                .map(|(id, rect)| (TabId(id), span(rect)))
+                .collect(),
+        }];
+        let at = |x| {
+            drop_at(
+                NSPoint::new(x, palette::STRIP / 2.0),
+                palette::STRIP,
+                &row,
+                &spans,
+                &[],
+            )
+        };
+        assert!(
+            at(row.end - 1.0).is_some(),
+            "the visible part still takes drops"
+        );
+        assert_eq!(
+            at(row.plus.origin.x + palette::PLUS / 2.0),
+            None,
+            "under the pinned plus"
+        );
+        assert_eq!(at(palette::LIGHTS - 1.0), None, "under the window controls");
     }
 
     #[test]

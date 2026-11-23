@@ -342,28 +342,55 @@ fn draw_site(title: &str, host: &str, rect: NSRect, depth: usize, dark: bool) {
     } else {
         format!("— {host}")
     };
-    let width = palette::text_width(&detail);
-    let name = (line.size.width - width - 10.0).max(0.0);
+    let (title_width, detail_width) = site_widths(
+        line.size.width,
+        palette::text_width(title),
+        palette::text_width(&detail),
+    );
     palette::draw_text(
         title,
-        NSRect::new(line.origin, NSSize::new(name, line.size.height)),
+        NSRect::new(line.origin, NSSize::new(title_width, line.size.height)),
         &palette::INK.resolve(dark),
     );
-    if !detail.is_empty() {
+    if detail_width > 0.0 {
         palette::draw_text(
             &detail,
             NSRect::new(
-                NSPoint::new(line.origin.x + name + 10.0, line.origin.y),
-                NSSize::new(width, line.size.height),
+                NSPoint::new(
+                    line.origin.x + line.size.width - detail_width,
+                    line.origin.y,
+                ),
+                NSSize::new(detail_width, line.size.height),
             ),
             &palette::MUTED.resolve(dark),
         );
     }
 }
 
+fn site_widths(line: f64, title: f64, detail: f64) -> (f64, f64) {
+    // A long host must not crowd out the name, especially inside a folder.
+    let gap = if title > 0.0 { 10.0 } else { 0.0 };
+    let detail = detail.min((line - title.min(line / 2.0) - gap).max(0.0));
+    let name = if detail > 0.0 {
+        line - detail - gap
+    } else {
+        line
+    };
+    (name, detail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_host_does_not_hide_the_bookmark_title() {
+        assert_eq!(site_widths(228.0, 70.0, 320.0), (70.0, 148.0));
+        assert_eq!(site_widths(228.0, 300.0, 320.0), (114.0, 104.0));
+        assert_eq!(site_widths(228.0, 70.0, 100.0), (118.0, 100.0));
+        assert_eq!(site_widths(228.0, 300.0, 0.0), (228.0, 0.0));
+        assert_eq!(site_widths(228.0, 0.0, 320.0), (0.0, 228.0));
+    }
 
     #[test]
     fn the_card_is_tall_enough_for_its_rows_and_no_taller() {

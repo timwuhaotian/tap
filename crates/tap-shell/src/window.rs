@@ -32,7 +32,7 @@ use objc2_foundation::{
     NSURLSession, NSURLSessionConfiguration, NSURLSessionDataTask, NSURLSessionDelegate,
     NSURLSessionTask, NSURLSessionTaskDelegate,
 };
-use objc2_web_kit::WKWebView;
+use objc2_web_kit::{WKFullscreenState, WKWebView};
 use serde_json::Value;
 use tap_core::{
     address,
@@ -682,9 +682,19 @@ fn star_face(views: &Views, view: &View, dirty: BrowserFields) {
 
 /// The active tab's page in the stage, or what it says in place of the page.
 fn show_page(views: &Views, view: &View) {
-    show_own_page(views, view.page);
     let web = view.active.and_then(web::existing);
-    let previous = views.shown.replace(view.active);
+    let previous = *views.shown.borrow();
+    if previous != view.active
+        && let Some(old) = previous.and_then(web::existing)
+        // SAFETY: a plain property read on a live web view.
+        && unsafe { old.fullscreenState() } != WKFullscreenState::NotInFullscreen
+    {
+        // WebKit puts its page back after the exit animation. Taking it now loses the
+        // next page behind that handoff; fullscreenState asks us to settle again.
+        return;
+    }
+    views.shown.replace(view.active);
+    show_own_page(views, view.page);
     show_ground(views, view, previous == view.active);
     if previous != view.active
         && let Some(old) = previous.and_then(web::existing)
@@ -1805,6 +1815,42 @@ pub fn first_responder() -> String {
 /// The one window, for a sheet or a picker to hang from.
 /// The stage the page is on, for what hangs over a page: the accounts under a sign-in
 /// box, the offer to keep a password.
+pub fn stage_views() -> Vec<String> {
+    with_views(|views| {
+        views
+            .stage
+            .subviews()
+            .iter()
+            .map(|view| String::from_utf8_lossy(view.class().name().to_bytes()).into_owned())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+pub fn shown_tab() -> Option<TabId> {
+    with_views(|views| {
+        views
+            .stage
+            .subviews()
+            .iter()
+            .find_map(|view| view.downcast_ref::<WKWebView>().and_then(web::tab_of))
+    })
+    .flatten()
+}
+
+/// WebKit finished moving a page between its fullscreen window and the stage.
+pub fn fullscreen_changed() {
+    with_views(|views| {
+        let Some(view) = rt::read(View::of) else {
+            return;
+        };
+        show_page(views, &view);
+        if view.editing.is_none() {
+            focus_page(view.active.and_then(web::existing).as_deref());
+        }
+    });
+}
+
 pub fn stage() -> Option<Retained<NSView>> {
     with_views(|views| Retained::into_super(views.stage.clone()))
 }

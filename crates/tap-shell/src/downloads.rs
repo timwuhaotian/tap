@@ -100,7 +100,7 @@ thread_local! {
     static GOING: RefCell<Vec<Going>> = const { RefCell::new(Vec::new()) };
     /// Finished files, newest last (bench `downloads`).
     static DONE: RefCell<Vec<Done>> = const { RefCell::new(Vec::new()) };
-    /// How far the running ones are, together (`fetching::aggregate`); stale while none.
+    /// How far the running ones are, together (`fetching::aggregate`).
     static FRACTION: RefCell<Option<f64>> = const { RefCell::new(None) };
     /// What the door was last told (fraction, how many are going): KVO speaks far
     /// oftener than the ring's whole-percent steps move, and each saying had
@@ -369,19 +369,16 @@ fn linger(state: Door) {
     });
     LINGER.with_borrow_mut(|slot| *slot = Some(state));
     let later = dispatch2::DispatchTime::NOW.time(LINGER_NS);
-    let _ = dispatch2::DispatchQueue::main().after(later, move || {
-        if ROUND.with(Cell::get) != round {
-            return;
-        }
-        LINGER.with_borrow_mut(Option::take);
-        // Nothing to measure any more: the last fraction goes with the saying.
-        FRACTION.with_borrow_mut(|slot| *slot = None);
-        // The door was told, so what it was told is what the next measure must
-        // differ from: a download still going would otherwise say the same
-        // fraction again and the ring would keep turning for it.
-        SAID.set((None, going()));
-        crate::window::downloads_said();
-    });
+    let _ = dispatch2::DispatchQueue::main().after(later, move || expire_linger(round));
+}
+
+fn expire_linger(round: u64) {
+    if ROUND.get() != round {
+        return;
+    }
+    // Another download can still be running; only `measure` updates its progress.
+    LINGER.with_borrow_mut(Option::take);
+    crate::window::downloads_said();
 }
 
 /// Files finished so far, for the bench.
@@ -1445,6 +1442,26 @@ mod tests {
         assert!(shows_button(true));
         // Nothing going and nothing lingered in a test.
         assert!(!shows_button(false));
+    }
+
+    #[test]
+    fn a_finished_downloads_linger_does_not_reset_another_downloads_progress() {
+        LINGER.with_borrow_mut(|slot| {
+            *slot = Some(Door::Done {
+                name: "first.pdf".to_owned(),
+            });
+        });
+        // The remaining download is midway through and hasn't sent a new progress tick.
+        FRACTION.with_borrow_mut(|slot| *slot = Some(0.5));
+        SAID.set((Some(0.5), 1));
+
+        expire_linger(ROUND.get());
+
+        assert!(LINGER.with_borrow(Option::is_none));
+        assert_eq!(fraction(), Some(0.5));
+        assert_eq!(SAID.get(), (Some(0.5), 1));
+        FRACTION.with_borrow_mut(|slot| *slot = None);
+        SAID.set((None, 0));
     }
 
     #[test]

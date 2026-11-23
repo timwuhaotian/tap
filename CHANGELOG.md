@@ -7,6 +7,17 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.17 — 2026-11-24
+
+### Fixed
+
+- Switching tabs while a video leaves full screen no longer lets WebKit cover the selected page.
+- Back and Forward no longer leave a previous load error covering a page that opened successfully.
+- Dragging a tab over the pinned `+` or window controls no longer drops it into a hidden group.
+- The Downloads button keeps showing active progress when another download's status expires.
+- Long hostnames no longer hide bookmark titles.
+- Re-importing Chromium bookmarks reuses Other and Mobile folders created by this version.
+
 ## 0.3.16 — 2026-11-20
 
 ### Fixed

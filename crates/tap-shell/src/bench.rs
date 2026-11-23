@@ -392,6 +392,8 @@ fn handle(request: &Value, reply: Reply) {
             out["selected"] = json!(rt::read(Browser::selection_count));
             out["fieldText"] = json!(window::field_text());
             out["firstResponder"] = json!(window::first_responder());
+            out["stageTab"] = json!(window::shown_tab().map(|id| id.0.to_string()));
+            out["stageViews"] = json!(window::stage_views());
             out["asked"] = json!(dialogs::asked());
             out["find"] = rt::read(|b| {
                 let find = b.find();

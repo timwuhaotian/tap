@@ -2209,6 +2209,9 @@ impl Browser {
     /// A page arrived in the tab (WebKit committed its navigation).
     pub fn page_committed(&mut self, id: TabId) {
         if let Some(tab) = self.tab_mut(id) {
+            // History navigation can bring a page back without going through go or reload.
+            tab.dead = false;
+            Tab::set(&mut tab.failure, None, &mut tab.dirty, TabFields::FAILURE);
             Tab::set(
                 &mut tab.committed,
                 true,
@@ -3977,6 +3980,24 @@ mod tests {
                 .any(|(t, f)| *t == id && f.contains(TabFields::COMMITTED)),
             "the next page in the same tab has the old one to stand in for it"
         );
+    }
+
+    #[test]
+    fn going_back_after_a_failed_load_reveals_the_page_that_commits() {
+        let mut browser = with_pages(&["https://a.example"]);
+        let id = browser.active().expect("a tab");
+        browser.page_committed(id);
+        browser.page_history(id, true, false);
+        browser.page_failed(id, "Could not connect");
+        browser.take_effects();
+        browser.take_dirty();
+
+        browser.back();
+        assert_eq!(browser.take_effects(), vec![Effect::Back(id)]);
+        assert_eq!(browser.tabs()[0].failure(), Some("Could not connect"));
+        browser.page_committed(id);
+        assert_eq!(browser.tabs()[0].failure(), None);
+        assert_eq!(browser.take_dirty().1, vec![(id, TabFields::FAILURE)]);
     }
 
     #[test]

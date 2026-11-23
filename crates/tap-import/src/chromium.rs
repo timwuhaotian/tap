@@ -592,7 +592,8 @@ impl Drop for Copy {
 
 /// The bookmarks, in a folder of the browser's name (as Search keeps another browser's
 /// apart): each profile's bar first, then anything it filed elsewhere. The folder's
-/// identity is the browser's, so bringing them again adds no second one.
+/// identity is the browser's, and each Other/Mobile folder is specific to its profile,
+/// so bringing them again merges the same folders.
 fn bookmarks(root: &Path, folders: &[PathBuf], browser: &str) -> Option<Value> {
     let mut children = Vec::new();
     for folder in folders {
@@ -603,10 +604,16 @@ fn bookmarks(root: &Path, folders: &[PathBuf], browser: &str) -> Option<Value> {
         };
         let roots = &top["roots"];
         children.extend(nodes(&roots["bookmark_bar"]["children"]));
+        let profile = if folder == root {
+            String::new()
+        } else {
+            folder_name(folder)
+        };
         for (key, name) in [("other", "Other"), ("synced", "Mobile")] {
             let kids = nodes(&roots[key]["children"]);
             if !kids.is_empty() {
-                children.push(json!({ "id": fnd::uuid(), "title": name, "children": kids }));
+                let id = folder_id(&format!("{browser}/{profile}/{key}"));
+                children.push(json!({ "id": id, "title": name, "children": kids }));
             }
         }
     }
@@ -824,15 +831,12 @@ fn logins(path: &Path) -> rusqlite::Result<Vec<Row>> {
     Ok(rows.filter_map(Result::ok).collect())
 }
 
-/// A folder identity of the browser's own, the same every time: FNV-1a over its name,
-/// written as a UUID.
-fn folder_id(browser: &str) -> String {
+/// A stable bookmark folder identity: FNV-1a over its key, written as a UUID.
+fn folder_id(key: &str) -> String {
     let hash = |seed: u64| {
-        format!("tap.bookmarks.{browser}")
-            .bytes()
-            .fold(seed, |h, b| {
-                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3)
-            })
+        format!("tap.bookmarks.{key}").bytes().fold(seed, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3)
+        })
     };
     let (a, b) = (hash(0xCBF2_9CE4_8422_2325), hash(0x8422_2325_CBF2_9CE4));
     let hex = format!("{a:016X}{b:016X}");
@@ -1297,6 +1301,53 @@ mod tests {
         assert_eq!(password_count(brave, &here.0, Pick::One("Profile 10")), 1);
         let all = passwords(brave, &here.0, "k", Pick::All).expect("readable");
         assert_eq!(all.logins[0].password, "p");
+    }
+
+    #[test]
+    fn chrome_bookmark_roots_merge_on_reimport_without_combining_profiles() {
+        let here = Fixture::new("bookmark-roots");
+        for (folder, site) in [("Default", "home"), ("Profile 1", "work")] {
+            let root = |section| {
+                let url = format!("https://{site}.example/{section}");
+                json!({ "children": [{ "type": "url", "url": url }] })
+            };
+            let bookmarks =
+                json!({ "roots": { "other": root("other"), "synced": root("mobile") } });
+            here.write(
+                &format!("Google/Chrome/{folder}/Bookmarks"),
+                bookmarks.to_string().as_bytes(),
+            );
+        }
+        let import = |pick| {
+            read(chrome(), &here.0, 0.0, pick)
+                .expect("Chrome profile")
+                .incoming
+                .bookmarks
+        };
+        let (first, added, _) = crate::profile::merge_bookmarks(None, import(Pick::One("Default")));
+        assert_eq!(added, 2);
+        let (all, added, already) =
+            crate::profile::merge_bookmarks(Some(&first), import(Pick::All));
+        assert_eq!((added, already), (2, 2));
+        let nodes: Vec<Value> = serde_json::from_slice(&all).expect("merged bookmarks");
+        let folders = nodes[0]["children"].as_array().expect("imported folders");
+        let roots: Vec<_> = folders
+            .iter()
+            .map(|node| (node["title"].as_str(), node["children"][0]["url"].as_str()))
+            .collect();
+        assert_eq!(
+            roots,
+            [
+                (Some("Other"), Some("https://home.example/other")),
+                (Some("Mobile"), Some("https://home.example/mobile")),
+                (Some("Other"), Some("https://work.example/other")),
+                (Some("Mobile"), Some("https://work.example/mobile")),
+            ]
+        );
+        let (again, added, already) =
+            crate::profile::merge_bookmarks(Some(&all), import(Pick::All));
+        assert_eq!((added, already), (0, 4));
+        assert_eq!(again, all);
     }
 
     #[test]
