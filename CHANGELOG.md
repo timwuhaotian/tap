@@ -7,6 +7,13 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.18 — 2026-11-25
+
+### Added
+
+- **Copy Page as Image**: right-click a page to copy the whole page — everything you'd
+  scroll to, not just what's on screen — to the clipboard as a picture.
+
 ## 0.3.17 — 2026-11-24
 
 ### Fixed

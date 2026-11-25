@@ -30,6 +30,7 @@ mod motion;
 mod offers;
 mod oslog;
 mod page_find;
+mod page_image;
 mod palette;
 mod panels;
 mod prefs;

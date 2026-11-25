@@ -1688,6 +1688,15 @@ agents' tabs, handing a tab back after a sign-in, Copy Details for several picke
   what the `contextmenu` event was on, so it sees into shadow roots; when it wasn't at
   the menu's point (a click inside an iframe), `elementFromPoint` names what is there.
   Passwords and hidden inputs give no value.
+- [x] **Copy Page as Image** (the page's menu; `page_image.rs`), asked for 2026-11-25
+  ("右键菜单增加 copy page as image…整个网页（包含所有scroll区域）作为图片复制到粘贴板"):
+  `createPDF` with no rect draws the whole document, scrolled-out parts included, into
+  one PDF page; that is drawn over white into a bitmap at the window's backing scale and
+  put on the pasteboard as PNG (144 dpi at 2×, so it pastes at the page's size). A page
+  past 50 MP at that scale is drawn smaller to fit. The reader's scroll is left alone. Not
+  done: a box that scrolls inside the page (an app whose body doesn't scroll) shows only
+  what it shows on screen. Checked against a local 6600 px page (2526×13200, also when
+  scrolled to the middle) and a 60 000 px one (2094×23876).
 - [x] **`tap info <id>`** (`bench.rs` `info`, `cli.rs`): the same card, waking a
   sleeping tab first as the other page reads do; a blank tab answers without one. The
   skill (`assets/agent/SKILL.md`) tells agents what a pasted card is and that its id

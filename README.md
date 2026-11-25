@@ -126,7 +126,8 @@ with its own name and icon, and with fixes of its own.
   tab's id for `tap` (it lasts across restarts), its address, state and HTTP status,
   and what the page says of itself, to paste into an agent. Right-click anything on a
   page for Copy Element Details: its selector, box, style and markup. `tap info` gives
-  an agent the same. Right-click a page for Console: what its scripts threw.
+  an agent the same. Right-click a page for Console: what its scripts threw, or for
+  Copy Page as Image: the whole page, scrolled-out parts and all, as one picture.
 - **Web Inspector** (View menu, ⌥⌘I): WebKit's own developer tools on the page in
   front — elements, sources, network and timelines — with its console on ⌥⌘J,
   element picking on ⌥⌘C, and Inspect Element in a page's right-click menu.

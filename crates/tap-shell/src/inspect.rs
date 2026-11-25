@@ -475,6 +475,14 @@ define_class!(
             copy_element();
         }
 
+        #[unsafe(method(copyPageImage:))]
+        fn copy_page_image(&self, _sender: Option<&AnyObject>) {
+            let pointed = POINTED.with_borrow(Clone::clone);
+            if let Some(web) = pointed.and_then(|(id, ..)| web::existing(id)) {
+                crate::page_image::copy(&web);
+            }
+        }
+
         #[unsafe(method(showConsole:))]
         fn show_console(&self, _sender: Option<&AnyObject>) {
             if let Some((id, ..)) = POINTED.with_borrow(Clone::clone) {
@@ -535,6 +543,7 @@ fn add_items(view: &PageView, menu: &NSMenu, event: &NSEvent) {
         ("Console", sel!(showConsole:)),
         ("Copy Element Details", sel!(copyElementDetails:)),
         ("Copy Tab Details", sel!(copyTabDetails:)),
+        ("Copy Page as Image", sel!(copyPageImage:)),
     ] {
         // SAFETY: a fresh allocation; the actions take the sender.
         let item = unsafe {
