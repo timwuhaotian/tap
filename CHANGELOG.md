@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.19 — 2026-11-27
+
+### Changed
+
+- **Tabs narrow to fit, never scroll**: however many tabs are open, they shrink to
+  share the row, as in Chrome, instead of scrolling sideways. The tab you are on
+  keeps room for its ×; a tab too thin for its icon shows only its pill.
+
 ## 0.3.18 — 2026-11-25
 
 ### Added

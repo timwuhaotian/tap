@@ -37,10 +37,9 @@ pub const BAR: f64 = 38.0;
 /// their right that the window gives them on their left.
 pub const LIGHTS: f64 = 100.0;
 /// Tabs are a fixed width so the cross always lands in the same place, giving way only
-/// when there are too many.
+/// when there are too many (they then narrow without limit).
 pub const TAB_WIDTH: f64 = 186.0;
 pub const TAB_TITLED: f64 = 80.0;
-pub const TAB_MIN: f64 = 36.0;
 pub const TAB_GAP: f64 = 2.0;
 /// The row the tabs sit in, and the plus at its end.
 pub const ROW: f64 = 30.0;

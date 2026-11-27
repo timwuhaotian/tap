@@ -181,6 +181,8 @@ pub fn page_read(tab: TabId, y: f64, ceiling: f64) {
 
 /// A site icon's side, in points.
 const ICON: f64 = 16.0;
+/// A mark narrower than this is not drawn: a tab squeezed to a sliver shows only its pill.
+const MARK_MIN: f64 = 6.0;
 
 /// How far the hand goes before a press becomes a carry (Search's drag, which starts
 /// at 5).
@@ -262,14 +264,8 @@ enum Click {
 struct Layout {
     tabs: Vec<NSRect>,
     plus: NSRect,
-    /// How far right the tabs may be drawn: the doors' edge, or just before
-    /// the plus when the row has overflowed and the plus is pinned.
+    /// How far right the tabs may be drawn: the doors' edge.
     end: f64,
-    /// How far the row is scrolled, clamped, with the tab in front (or the
-    /// field's tab) brought into view when `layout` was asked to reveal it.
-    scroll: f64,
-    /// The furthest the row can scroll: nothing when it all fits.
-    max_scroll: f64,
 }
 
 impl Layout {
@@ -300,29 +296,16 @@ fn heading_width(name: &str) -> f64 {
         .min(palette::TAB_WIDTH)
 }
 
-/// How far a wheel or a trackpad swipe moves the row: the sideways delta, or
-/// the up-down one where there is no sideways to it, against the scroll in the
-/// same way `cards.rs` sets a list against its delta, so the row follows the
-/// hand as a scroll view does.
-fn scroll_by(now: f64, delta_x: f64, delta_y: f64, max: f64) -> f64 {
-    let delta = if delta_x == 0.0 { delta_y } else { delta_x };
-    (now - delta).clamp(0.0, max.max(0.0))
-}
-
 /// The row's geometry: headings keep their width, and the live tab has room for its
 /// cross, or for the field while editing. The plus stays before the trailing doors.
-/// Past their narrowest the tabs keep that width and the row scrolls instead:
-/// `scroll` is clamped to the run of the row, every slot is laid against it, and
-/// the field's tab is always brought into view, the live one when `reveal` says
-/// it has just come to the front.
+/// The tabs share what is left and narrow without limit, as Chrome's do, so the row
+/// always fits: it never scrolls.
 fn layout(
     width: f64,
     slots: &[Slot],
     editing: Option<usize>,
     trailing: f64,
     active: Option<usize>,
-    scroll: f64,
-    reveal: bool,
 ) -> Layout {
     let count = slots.len();
     let top = (palette::STRIP - palette::ROW) / 2.0;
@@ -338,8 +321,9 @@ fn layout(
         .sum();
     let tabs_count = slots.iter().filter(|s| **s == Slot::Tab).count();
     let active = active.filter(|&i| slots.get(i) == Some(&Slot::Tab));
+    let avail = (room - gaps - headings).max(0.0);
     #[allow(clippy::cast_precision_loss)]
-    let shared = (room - gaps - headings) / tabs_count.max(1) as f64;
+    let shared = avail / tabs_count.max(1) as f64;
     let special = editing.or(active.filter(|_| shared < palette::TAB_TITLED));
     let reserved = if editing.is_some() {
         palette::FIELD.min(room * 0.6)
@@ -347,14 +331,14 @@ fn layout(
         palette::TAB_TITLED
     } else {
         0.0
-    };
+    }
+    .min(avail);
     let others = tabs_count.saturating_sub(usize::from(special.is_some()));
     #[allow(clippy::cast_precision_loss)]
     let each = if others == 0 {
         palette::TAB_WIDTH
     } else {
-        ((room - reserved - gaps - headings) / others as f64)
-            .clamp(palette::TAB_MIN, palette::TAB_WIDTH)
+        ((avail - reserved) / others as f64).min(palette::TAB_WIDTH)
     };
     let mut x = palette::LIGHTS;
     let mut tabs = Vec::with_capacity(count);
@@ -370,42 +354,12 @@ fn layout(
         ));
         x += w + palette::TAB_GAP;
     }
-    let pinned = (width - trailing - palette::PLUS - 4.0).max(palette::LIGHTS);
-    let plus_x = (x + 2.0).min(pinned);
     let plus = NSRect::new(
-        NSPoint::new(plus_x, top),
+        NSPoint::new(x + 2.0, top),
         NSSize::new(palette::PLUS, palette::ROW),
     );
-    let end = if plus_x < x + 2.0 {
-        plus_x - 2.0
-    } else {
-        width - trailing
-    };
-    let content = tabs
-        .last()
-        .map_or(palette::LIGHTS, |r| r.origin.x + r.size.width);
-    let max_scroll = (content - end).max(0.0);
-    let mut scroll = scroll.clamp(0.0, max_scroll);
-    let focus = editing.or(active.filter(|_| reveal));
-    if let Some(rect) = focus.and_then(|i| tabs.get(i)) {
-        if rect.origin.x + rect.size.width - scroll > end {
-            scroll = rect.origin.x + rect.size.width - end;
-        }
-        if rect.origin.x - scroll < palette::LIGHTS {
-            scroll = rect.origin.x - palette::LIGHTS;
-        }
-        scroll = scroll.clamp(0.0, max_scroll);
-    }
-    for rect in &mut tabs {
-        rect.origin.x -= scroll;
-    }
-    Layout {
-        tabs,
-        plus,
-        end,
-        scroll,
-        max_scroll,
-    }
+    let end = width - trailing;
+    Layout { tabs, plus, end }
 }
 
 /// Where a carried slot lands among its peers (`spans`, each a peer's left and right
@@ -461,9 +415,8 @@ fn column(rect: NSRect, height: f64) -> NSRect {
     )
 }
 
-/// The slot a press at `point` takes, by its column. Only what the row shows: once it
-/// overflows, the tabs laid out past `end` aren't drawn, and the end past the plus
-/// stays title bar rather than a tab nobody can see.
+/// The slot a press at `point` takes, by its column. Only what the row shows: the end
+/// past the plus stays title bar.
 fn slot_at(layout: &Layout, point: NSPoint, height: f64) -> Option<usize> {
     if !layout.shows_tabs_at(point.x) {
         return None;
@@ -724,14 +677,6 @@ pub struct Ivars {
     /// Where the carried tabs land if let go now: another group, under the hand.
     drop: RefCell<Option<GroupDrop>>,
     click: RefCell<Option<Click>>,
-    /// How far an overflowing row is scrolled, as the layout last settled it.
-    scroll: Cell<f64>,
-    /// The scroll the springs were last aimed at: a change with nothing else
-    /// behind it is put in place at once, not sprung after the hand.
-    aimed_scroll: Cell<f64>,
-    /// The tab last brought into view at the front, so the row is scrolled to
-    /// a tab when it comes to the front and left alone under the hand after.
-    front: Cell<Option<TabId>>,
     /// Frames while something moves, paused when nothing does.
     frames: Frames,
     /// The live tab's pill on its way from the tab that was live (Search's
@@ -807,11 +752,6 @@ define_class!(
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, _event: &NSEvent) {
             self.release();
-        }
-
-        #[unsafe(method(scrollWheel:))]
-        fn scroll_wheel(&self, event: &NSEvent) {
-            self.scroll(event);
         }
 
         /// The row takes the keys only while tabs are picked, so ⌘C and Esc are
@@ -896,9 +836,6 @@ impl Strip {
             grab: RefCell::new(None),
             drop: RefCell::new(None),
             click: RefCell::new(None),
-            scroll: Cell::new(0.0),
-            aimed_scroll: Cell::new(0.0),
-            front: Cell::new(None),
             frames: Frames::default(),
             live: RefCell::new((None, None, Glide::default())),
         });
@@ -932,8 +869,7 @@ impl Strip {
     }
 
     /// The row laid out for `width`: the slots, the field's slot if it stands
-    /// in the row, and where everything goes. The scroll the row is left at is
-    /// kept, so every reader of the layout sees the row the draw sees.
+    /// in the row, and where everything goes.
     fn row_layout(
         &self,
         browser: &Browser,
@@ -943,21 +879,7 @@ impl Strip {
         let bar = self.look_now().bar;
         let (row, slots) = slots(browser);
         let editing = editing_slot(browser, &row, bar);
-        let active_id = browser.active();
-        let reveal = active_id != self.ivars().front.get();
-        if reveal {
-            self.ivars().front.set(active_id);
-        }
-        let layout = layout(
-            width,
-            &slots,
-            editing,
-            trailing,
-            active_slot(browser, &row),
-            self.ivars().scroll.get(),
-            reveal,
-        );
-        self.ivars().scroll.set(layout.scroll);
+        let layout = layout(width, &slots, editing, trailing, active_slot(browser, &row));
         (row, editing, layout)
     }
 
@@ -969,23 +891,6 @@ impl Strip {
             let (row, _, layout) = self.row_layout(browser, width, trailing(bar));
             f(browser, &row, &layout)
         })
-    }
-
-    /// The wheel over the row: an overflowing row scrolls under it, as far as
-    /// it goes, and is drawn where the hand put it.
-    fn scroll(&self, event: &NSEvent) {
-        let (dx, dy) = (event.scrollingDeltaX(), event.scrollingDeltaY());
-        if dx == 0.0 && dy == 0.0 {
-            return;
-        }
-        let moved =
-            self.with_layout(|_, _, layout| scroll_by(layout.scroll, dx, dy, layout.max_scroll));
-        if let Some(next) = moved
-            && (next - self.ivars().scroll.get()).abs() > f64::EPSILON
-        {
-            self.ivars().scroll.set(next);
-            self.setNeedsDisplay(true);
-        }
     }
 
     /// Where the live tab is drawn, for the field to sit in while it is edited there.
@@ -1086,11 +991,8 @@ impl Strip {
                     .collect(),
                 plus: drawn_rect(&flock, &Key::Plus, layout.plus),
                 end: layout.end,
-                scroll: layout.scroll,
-                max_scroll: layout.max_scroll,
             };
-            // The plus first: where it is pinned it stands over the run of
-            // tabs, and it, not the tab beneath, takes the click.
+            // The plus first, so it, not a tab, takes the click.
             if contains(column(layout.plus, height), point) {
                 return Spot::Plus;
             }
@@ -1625,8 +1527,6 @@ impl Strip {
             from: None,
         });
         let switched = self.switch_live(browser.active());
-        let scrolled = (layout.scroll - self.ivars().aimed_scroll.get()).abs() > f64::EPSILON;
-        self.ivars().aimed_scroll.set(layout.scroll);
         let curve = if moved || switched {
             Curve::settle_now()
         } else {
@@ -1654,9 +1554,6 @@ impl Strip {
             opened,
             Curve::FADE.now(),
         );
-        if scrolled && !moved && !switched && !opened {
-            self.ivars().flock.borrow_mut().arrive();
-        }
         if *self.ivars().shown.borrow() != keys {
             self.ivars().shown.replace(keys);
         }
@@ -1849,7 +1746,7 @@ impl Strip {
                     flock.place(key).map_or(1.0, |p| p.alpha),
                 )
             };
-            // The tabs stop where the layout says (before a pinned plus);
+            // The tabs stop where the layout says (the helm's edge);
             // the state is restored below, before the plus itself is drawn.
             NSGraphicsContext::saveGraphicsState_class();
             NSBezierPath::clipRect(NSRect::new(
@@ -1997,7 +1894,7 @@ fn drop_plate(browser: &Browser, row: &[Item], layout: &Layout, place: usize, da
 
 /// The group tabs let go at `hand` would join (Search's `GroupDropFrames.resolve`).
 /// A clipped heading or tab can't take a drop, even if its span reaches under the
-/// window controls or the pinned plus.
+/// window controls.
 fn drop_at(
     hand: NSPoint,
     height: f64,
@@ -2179,15 +2076,18 @@ fn live_pill(rect: NSRect, dark: bool) {
     }
 }
 
+/// The mark, shrinking with a tab too narrow for it (as Chrome's favicon goes), so it
+/// never spills onto its neighbours.
 fn mark_rect(rect: NSRect, reveal: f64) -> NSRect {
-    let centred = (rect.size.width - ICON) / 2.0;
+    let side = ICON.min((rect.size.width - 4.0).max(0.0));
+    let centred = (rect.size.width - side) / 2.0;
     let left = centred + (10.0 - centred) * reveal;
     NSRect::new(
         NSPoint::new(
             rect.origin.x + left,
-            rect.origin.y + (rect.size.height - ICON) / 2.0,
+            rect.origin.y + (rect.size.height - side) / 2.0,
         ),
-        NSSize::new(ICON, ICON),
+        NSSize::new(side, side),
     )
 }
 
@@ -2285,7 +2185,7 @@ fn draw_tab(
     // and not only under ⌘W; one on its way out has none, as it fades at rest.
     let face = |titled: bool| {
         let crossed = titled && !gone;
-        if let Some(number) = number.filter(|_| !titled) {
+        if let Some(number) = number.filter(|_| !titled && rect.size.width >= ICON) {
             let digit = number.to_string();
             palette::draw_text(
                 &digit,
@@ -2352,6 +2252,9 @@ fn draw_tab(
     };
     faded(mark_alpha, || {
         let square = mark_rect(*rect, reveal);
+        if square.size.width < MARK_MIN {
+            return;
+        }
         if let Some(icon) = &icon {
             // SAFETY: drawing a decoded image into the view's own context, no hints.
             unsafe {
@@ -2713,7 +2616,7 @@ mod tests {
 
     #[test]
     fn tabs_keep_their_width_until_the_row_is_full_then_give_way() {
-        let wide = layout(1600.0, &tabs(3), None, palette::HELM, None, 0.0, false);
+        let wide = layout(1600.0, &tabs(3), None, palette::HELM, None);
         assert!(
             wide.tabs
                 .iter()
@@ -2721,26 +2624,20 @@ mod tests {
         );
         assert!((wide.tabs[0].origin.x - palette::LIGHTS).abs() < f64::EPSILON);
 
-        let crowded = layout(900.0, &tabs(30), None, palette::HELM, None, 0.0, false);
-        assert!(
-            crowded
-                .tabs
-                .iter()
-                .all(|r| r.size.width >= palette::TAB_MIN)
-        );
+        let crowded = layout(900.0, &tabs(30), None, palette::HELM, None);
         assert!(crowded.tabs[0].size.width < palette::TAB_WIDTH);
     }
 
     #[test]
     fn the_live_tab_keeps_its_cross_in_a_crowded_row() {
-        let row = layout(900.0, &tabs(12), None, palette::HELM, Some(5), 0.0, true);
+        let row = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
         assert!(titled(row.tabs[5]));
         assert!(row.tabs[0].size.width < palette::TAB_TITLED);
         assert!(row.tabs.last().unwrap().origin.x + row.tabs.last().unwrap().size.width <= row.end);
         let cross = close_rect(row.tabs[5]);
         assert_eq!(slot_at(&row, cross.origin, palette::STRIP), Some(5));
 
-        let overflow = layout(900.0, &tabs(30), None, palette::HELM, Some(20), 0.0, true);
+        let overflow = layout(900.0, &tabs(30), None, palette::HELM, Some(20));
         let live = overflow.tabs[20];
         assert!(titled(live));
         assert!(live.origin.x >= palette::LIGHTS);
@@ -2758,15 +2655,7 @@ mod tests {
             None
         );
 
-        let editing = layout(
-            900.0,
-            &tabs(30),
-            Some(20),
-            palette::HELM,
-            Some(20),
-            0.0,
-            true,
-        );
+        let editing = layout(900.0, &tabs(30), Some(20), palette::HELM, Some(20));
         assert!(editing.tabs[20].origin.x >= palette::LIGHTS);
         assert!(editing.tabs[20].origin.x + editing.tabs[20].size.width <= editing.end);
         let field = palette::field_frame(palette::text_line(editing.tabs[20], 12.0, 30.0));
@@ -2789,8 +2678,8 @@ mod tests {
                 })
                 .collect()
         };
-        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5), 0.0, true);
-        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6), 0.0, true);
+        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
+        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6));
         let narrow = before.tabs[6].size.width;
         assert!(narrow < palette::TAB_TITLED && titled(after.tabs[6]));
 
@@ -2858,9 +2747,9 @@ mod tests {
                 })
                 .collect()
         };
-        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5), 0.0, true);
-        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6), 0.0, true);
-        let field = layout(900.0, &tabs(12), Some(5), palette::HELM, Some(5), 0.0, true);
+        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
+        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6));
+        let field = layout(900.0, &tabs(12), Some(5), palette::HELM, Some(5));
         let mut reveal = Reveal::default();
         // First seen: each wears the face its width gives it, with no fade.
         assert!(!reveal_row(&mut reveal, &aims(&before), false, Curve::FADE));
@@ -2894,9 +2783,9 @@ mod tests {
                 })
                 .collect()
         };
-        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5), 0.0, true);
-        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6), 0.0, true);
-        let field = layout(900.0, &tabs(12), Some(6), palette::HELM, Some(6), 0.0, true);
+        let before = layout(900.0, &tabs(12), None, palette::HELM, Some(5));
+        let after = layout(900.0, &tabs(12), None, palette::HELM, Some(6));
+        let field = layout(900.0, &tabs(12), Some(6), palette::HELM, Some(6));
         let mut flock = Flock::default();
         let mut settle = |row: &Layout, switched: bool, opened: bool| {
             settle_row(
@@ -2922,7 +2811,7 @@ mod tests {
 
     #[test]
     fn the_live_tab_widens_into_the_field() {
-        let row = layout(1600.0, &tabs(3), Some(1), palette::HELM, None, 0.0, false);
+        let row = layout(1600.0, &tabs(3), Some(1), palette::HELM, None);
         assert!((row.tabs[1].size.width - palette::FIELD).abs() < f64::EPSILON);
         assert!(row.tabs[2].origin.x > row.tabs[1].origin.x + palette::FIELD);
     }
@@ -2930,88 +2819,56 @@ mod tests {
     #[test]
     fn the_plus_stays_before_the_doors_however_many_tabs_there_are() {
         // Few tabs: the plus sits after the last one, as before.
-        let few = layout(1600.0, &tabs(3), None, palette::HELM, None, 0.0, false);
+        let few = layout(1600.0, &tabs(3), None, palette::HELM, None);
         let after_last = few.tabs[2].origin.x + few.tabs[2].size.width + palette::TAB_GAP + 2.0;
         assert!((few.plus.origin.x - after_last).abs() < f64::EPSILON);
         assert!((few.end - (1600.0 - palette::HELM)).abs() < f64::EPSILON);
 
-        // Tabs at their narrowest still overflow: the plus is pinned before
-        // the helm instead of running under it, and the tabs stop before it.
-        let crowded = layout(900.0, &tabs(30), None, palette::HELM, None, 0.0, false);
+        // A crowded row narrows its tabs: the plus stays before the helm.
+        let crowded = layout(900.0, &tabs(30), None, palette::HELM, None);
         let doors = 900.0 - palette::HELM;
         assert!(crowded.plus.origin.x + palette::PLUS <= doors - 4.0 + f64::EPSILON);
-        assert!(crowded.end <= crowded.plus.origin.x - 2.0 + f64::EPSILON);
 
         // With the downloads door shown, the reserve grows by its width and
         // the plus keeps the same distance from it.
         let trailing = palette::HELM + palette::DOOR + 4.0;
-        let fetching = layout(900.0, &tabs(30), None, trailing, None, 0.0, false);
+        let fetching = layout(900.0, &tabs(30), None, trailing, None);
         assert!(fetching.plus.origin.x + palette::PLUS <= 900.0 - trailing - 4.0 + f64::EPSILON);
     }
 
     #[test]
-    fn an_overflowing_row_scrolls_to_its_last_tab_and_stops_at_both_ends() {
-        let start = layout(900.0, &tabs(30), None, palette::HELM, None, 0.0, false);
-        assert!(start.max_scroll > 0.0);
-        assert_eq!(start.scroll, 0.0);
-        assert!(start.tabs.last().unwrap().origin.x > start.end);
-
-        let end = layout(
-            900.0,
-            &tabs(30),
-            None,
-            palette::HELM,
-            None,
-            start.max_scroll,
-            false,
-        );
-        assert_eq!(end.scroll, end.max_scroll);
-        let last = end.tabs.last().unwrap();
-        assert!(last.origin.x + last.size.width <= end.end + f64::EPSILON);
-        assert!(end.tabs[0].origin.x < palette::LIGHTS);
-        assert_eq!(
-            slot_at(
-                &end,
-                NSPoint::new(last.origin.x + last.size.width / 2.0, 20.0),
-                palette::STRIP
-            ),
-            Some(29)
-        );
-
-        let before = layout(900.0, &tabs(30), None, palette::HELM, None, -50.0, false);
-        assert_eq!(before.scroll, 0.0);
-        assert!((before.tabs[0].origin.x - palette::LIGHTS).abs() < f64::EPSILON);
-        let past = layout(900.0, &tabs(30), None, palette::HELM, None, 99_999.0, false);
-        assert_eq!(past.scroll, past.max_scroll);
-
-        assert_eq!(scroll_by(10.0, -30.0, 0.0, 100.0), 40.0);
-        assert_eq!(scroll_by(10.0, 0.0, 30.0, 100.0), 0.0);
-        assert_eq!(scroll_by(90.0, -30.0, 5.0, 100.0), 100.0);
+    fn however_many_tabs_the_row_narrows_to_fit_and_never_scrolls() {
+        for (width, count) in [(900.0, 30), (900.0, 100), (1200.0, 60), (700.0, 150)] {
+            let row = layout(width, &tabs(count), None, palette::HELM, Some(count / 2));
+            let last = row.tabs.last().unwrap();
+            assert!(last.origin.x + last.size.width <= row.end + f64::EPSILON);
+            assert!((row.tabs[0].origin.x - palette::LIGHTS).abs() < f64::EPSILON);
+            assert!(row.tabs.iter().all(|r| r.size.width > 0.0));
+            assert!(titled(row.tabs[count / 2]), "the live tab keeps its cross");
+            assert_eq!(
+                slot_at(
+                    &row,
+                    NSPoint::new(last.origin.x + last.size.width / 2.0, 20.0),
+                    palette::STRIP
+                ),
+                Some(count - 1)
+            );
+        }
     }
 
     #[test]
-    fn the_live_tab_is_brought_into_view_from_either_end_when_it_comes_to_the_front() {
-        let max = layout(900.0, &tabs(30), None, palette::HELM, None, 0.0, false).max_scroll;
-        let from_start = layout(900.0, &tabs(30), None, palette::HELM, Some(20), 0.0, true);
-        let live = from_start.tabs[20];
-        assert!(live.origin.x >= palette::LIGHTS);
-        assert!(live.origin.x + live.size.width <= from_start.end + f64::EPSILON);
-
-        let from_end = layout(900.0, &tabs(30), None, palette::HELM, Some(2), max, true);
-        let early = from_end.tabs[2];
-        assert!(from_end.scroll < max);
-        assert!(early.origin.x >= palette::LIGHTS);
-        assert!(early.origin.x + early.size.width <= from_end.end + f64::EPSILON);
-
-        // Already at the front: the hand can scroll it out of view.
-        let left = layout(900.0, &tabs(30), None, palette::HELM, Some(2), max, false);
-        assert_eq!(left.scroll, max);
-        assert!(left.tabs[2].origin.x < palette::LIGHTS);
+    fn a_squeezed_tabs_mark_shrinks_inside_it() {
+        let wide = NSRect::new(NSPoint::new(10.0, 0.0), NSSize::new(36.0, 30.0));
+        assert!((mark_rect(wide, 0.0).size.width - ICON).abs() < f64::EPSILON);
+        let thin = NSRect::new(NSPoint::new(10.0, 0.0), NSSize::new(8.0, 30.0));
+        let mark = mark_rect(thin, 0.0);
+        assert!(mark.origin.x >= thin.origin.x);
+        assert!(mark.origin.x + mark.size.width <= thin.origin.x + thin.size.width);
     }
 
     #[test]
     fn a_press_takes_a_shown_slot_by_its_column_and_never_one_past_the_end() {
-        let few = layout(1600.0, &tabs(3), None, palette::HELM, None, 0.0, false);
+        let few = layout(1600.0, &tabs(3), None, palette::HELM, None);
         let middle = |r: NSRect| r.origin.x + r.size.width / 2.0;
         // Above and below the pill, and in the gap after it: still the tab.
         for y in [1.0, palette::STRIP - 1.0] {
@@ -3026,31 +2883,11 @@ mod tests {
             Some(0)
         );
 
-        // Overflowed: the tabs laid out past the pinned plus aren't drawn, so the
-        // end beyond it is title bar at any height, not a tab nobody can see.
-        let crowded = layout(1200.0, &tabs(60), None, palette::HELM, None, 0.0, false);
-        let past_plus = crowded.plus.origin.x + crowded.plus.size.width + 2.0;
-        assert!(crowded.tabs.last().is_some_and(|r| r.origin.x > past_plus));
+        // Past the row's end is title bar at any height, not a tab.
+        let past = few.end + 2.0;
         for y in [3.0, palette::STRIP / 2.0, palette::STRIP - 3.0] {
-            assert_eq!(
-                slot_at(&crowded, NSPoint::new(past_plus, y), palette::STRIP),
-                None
-            );
+            assert_eq!(slot_at(&few, NSPoint::new(past, y), palette::STRIP), None);
         }
-        // The last shown tab, cut by the end, is still taken where it shows.
-        let cut = crowded
-            .tabs
-            .iter()
-            .rposition(|r| r.origin.x < crowded.end)
-            .expect("a shown tab");
-        assert_eq!(
-            slot_at(
-                &crowded,
-                NSPoint::new(crowded.end - 1.0, 3.0),
-                palette::STRIP
-            ),
-            Some(cut)
-        );
     }
 
     #[test]
@@ -3070,8 +2907,6 @@ mod tests {
             tabs: vec![drawn_rect(&flock, &key, target)],
             plus: NSRect::ZERO,
             end: 500.0,
-            scroll: 0.0,
-            max_scroll: 0.0,
         };
         assert_eq!(
             slot_at(&row, NSPoint::new(150.0, 1.0), palette::STRIP),
@@ -3092,7 +2927,7 @@ mod tests {
             heading: (100.0, 150.0),
             members: vec![(TabId(1), (152.0, 252.0))],
         }];
-        let row = layout(900.0, &tabs(3), None, palette::HELM, None, 0.0, false);
+        let row = layout(900.0, &tabs(3), None, palette::HELM, None);
         let at = |x, y| drop_at(NSPoint::new(x, y), palette::STRIP, &row, &spans, &[]);
         for y in [0.0, palette::STRIP / 2.0, palette::STRIP - 1.0] {
             assert_eq!(at(180.0, y).map(|d| d.group), Some("A".to_owned()));
@@ -3101,44 +2936,6 @@ mod tests {
         assert_eq!(at(180.0, palette::STRIP + 40.0), None);
         assert_eq!(at(180.0, -5.0), None);
         assert_eq!(at(400.0, palette::STRIP / 2.0), None, "past every group");
-    }
-
-    #[test]
-    fn a_drag_cannot_join_the_part_of_a_group_clipped_by_overflow() {
-        let slots = [Slot::Heading(50.0)]
-            .into_iter()
-            .chain(tabs(30))
-            .collect::<Vec<_>>();
-        let row = layout(900.0, &slots, None, palette::HELM, None, 150.0, false);
-        let span = |rect: &NSRect| (rect.origin.x, rect.origin.x + rect.size.width);
-        let spans = [GroupSpans {
-            group: "A",
-            collapsed: false,
-            heading: span(&row.tabs[0]),
-            members: (1..)
-                .zip(&row.tabs[1..])
-                .map(|(id, rect)| (TabId(id), span(rect)))
-                .collect(),
-        }];
-        let at = |x| {
-            drop_at(
-                NSPoint::new(x, palette::STRIP / 2.0),
-                palette::STRIP,
-                &row,
-                &spans,
-                &[],
-            )
-        };
-        assert!(
-            at(row.end - 1.0).is_some(),
-            "the visible part still takes drops"
-        );
-        assert_eq!(
-            at(row.plus.origin.x + palette::PLUS / 2.0),
-            None,
-            "under the pinned plus"
-        );
-        assert_eq!(at(palette::LIGHTS - 1.0), None, "under the window controls");
     }
 
     #[test]
@@ -3196,10 +2993,7 @@ mod tests {
         ));
         assert!(cross.origin.x >= wide.origin.x + wide.size.width - 30.0);
         // A tab down to its narrowest has room for neither, and wears neither.
-        let narrow = NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(palette::TAB_MIN, palette::ROW),
-        );
+        let narrow = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(36.0, palette::ROW));
         assert!(!titled(narrow));
     }
 
@@ -3278,12 +3072,10 @@ mod tests {
             None,
             palette::HELM,
             None,
-            0.0,
-            false,
         );
         assert!((row.tabs[0].size.width - 70.0).abs() < f64::EPSILON);
         assert!((row.tabs[3].size.width - 50.0).abs() < f64::EPSILON);
-        assert!(row.tabs[1].size.width > palette::TAB_MIN);
+        assert!(row.tabs[1].size.width > 36.0);
         assert!(row.tabs[4].origin.x > row.tabs[3].origin.x + 50.0);
     }
 }

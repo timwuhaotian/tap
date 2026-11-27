@@ -38,9 +38,8 @@ with its own name and icon, and with fixes of its own.
   show it. The active tab glides wider to keep its × in a crowded row, its title and
   × fading in as it goes, even while editing. Each tab's site icon moves with it, from
   the middle of a narrow tab to beside its title (including sites whose only icon is
-  an SVG); blank cached icons are fetched again. More tabs than fit scroll
-  sideways under a trackpad swipe or wheel once they are at their narrowest,
-  and a tab you switch to is scrolled into view.
+  an SVG); blank cached icons are fetched again. However many tabs
+  there are they narrow to fit the row, as in Chrome, and never scroll.
 - **An address bar** under the tabs, with back, forward and reload on its left: the
   page's address, a lock or a "Not secure" warning, the certificate a click away, and
   the load's progress as a line that glides forward and fades once the page is in.
