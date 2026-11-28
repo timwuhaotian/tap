@@ -178,6 +178,15 @@ pub fn frame_matching(tab: TabId, part: &str) -> Result<Retained<WKFrameInfo>, V
     })
 }
 
+/// The subframes of the tab's page that said hello, oldest first.
+pub fn frames(tab: TabId) -> Vec<Retained<WKFrameInfo>> {
+    FRAMES.with_borrow(|all| {
+        all.get(&tab)
+            .map(|frames| frames.iter().map(|f| f.handle.clone()).collect())
+            .unwrap_or_default()
+    })
+}
+
 /// The tab's page went: its frames and routes go with it.
 pub fn forget(tab: TabId) {
     FRAMES.with_borrow_mut(|all| all.remove(&tab));

@@ -1782,8 +1782,39 @@ Code). Edit and File carry the same items for the tab in front.
   menu shows WebKit's own highlight item and not Tap's; the QR popover and the share
   sheet open from the page's corner. Reading mode still finds the article.
 - Not done: a selection inside an iframe or a text field gives no highlight link (the
-  script reads the main frame's selection), so the item beeps. Copy Page as Markdown
-  doesn't use a site's Markdown twin.
+  script reads the main frame's selection), so the item beeps (done in 0.3.21).
+  Copy Page as Markdown doesn't use a site's Markdown twin.
+
+### 0.3.21 — Highlight links from frames and text fields
+
+At the user's request (2026-11-28: "iframe和输入框里的选区也支持高亮链接").
+
+- [x] **Words in a frame** (`share.rs` `copy_highlight_link`, `agent::frames`): the
+  `QUOTE` script runs in the main frame and in every subframe that said hello to the
+  agent verbs (Tap's world, so cross-origin frames answer too), with two seconds' wait
+  for frames that don't. A frame whose focus is in a frame it holds gives nothing;
+  of those with words picked, the one with `document.hasFocus()` wins, else the main
+  frame, else the first subframe. The link is the frame's own address
+  (`location.href`), since browsers look for a fragment's words in the page it names
+  and never in the frames that page holds: it opens the framed page on its own.
+- [x] **Words in a text field** (`input`, `textarea`; never a password): the field's
+  `selectionStart`/`selectionEnd` and its value stand for the selection and its block,
+  and go through the same whole-word and prefix/suffix rules. WebKit finds a one-line
+  field's text from a fragment and not a text area's, and Chrome finds neither, so
+  `Quote::anchor` carries the id of the field or the nearest element around it with
+  one: `#id:~:text=…` scrolls to the field when the words aren't found. The id is used
+  only when the address has no fragment of its own (it may be a route).
+- WebKit's own Copy Link with Highlight isn't offered for a selection in a frame or a
+  text field, so Tap's item shows in the page menu there.
+- Checked: `cargo test` (`share::tests` for the anchor), clippy `-D warnings`, nightly
+  fmt. In a test world against two local servers (the frame cross-origin), through the
+  bench's `command` and `pasteboard`: a selection in the frame copied
+  `inner.html#:~:text=november%20oscar` (a cut `osc` widened) and that link scrolls to
+  its words; an input's copied `#in:~:text=input%20words`, a text area's
+  `#ta:~:text=quick%20brown`, and a main-page selection still the page's link. WebKit
+  scrolls to an input's words from a fragment, not a text area's, and falls back to
+  `#ta`. Real right-clicks in the text area and in the frame show Tap's Copy Link to
+  Highlight under Copy.
 
 ### Unreleased — A star in the address bar, and a card of what came down
 
@@ -2473,6 +2504,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-19 | At the user's request, an overflowing tab row scrolls sideways (trackpad/wheel) once tabs are at `TAB_MIN`, instead of tabs past the pinned + being unreachable; a tab switched to is scrolled into view, then the row stays where the hand put it (`fixed-deviation`). |
 | 2026-11-27 | At the user's request, tabs narrow without limit to fit the row (Chrome's behaviour) and the row never scrolls; reverses the 2026-11-19 row above (`fixed-deviation`). `TAB_MIN`, scrolling and the pinned + are gone; the mark shrinks and disappears (under 6 pt) in a sliver of a tab. |
 | 2026-11-28 | At the user's request, share and copy a page (§8 "0.3.20 — Share and copy a page"): Copy Clean Link, Copy as Markdown Link and File › Share… ported from Search; Copy Page as Markdown, Copy Link to Highlight and Show QR Code added. Copy as Markdown Link also writes HTML (`fixed-deviation`); Tap's highlight item gives way to WebKit's own where it has one. |
+| 2026-11-28 | At the user's request, Copy Link to Highlight reads a selection in a frame (the link is the frame's address) or a text field (with the field's id as the fallback fragment) — §8 "0.3.21 — Highlight links from frames and text fields". |
 | 2026-11-10 | At the user's request ("还是给tab增加一个close button吧，现在只能靠快捷键关闭tab"), every tab wide enough to show a title wears its close cross at rest, not only the live tab and the one under the pointer (`fixed-deviation` from Search's `TabBar.swift`, which shows it on hover alone). `strip.rs` draws and hit-tests the cross by one `titled` rule, so a cross is always where a click closes its tab; a tab down to its narrowest in a crowded row has room for neither title nor cross, and one on its way out fades with none. Verified through the bench: a click on a tab's cross closed it. |
 
 ## Appendix A — Parity tracker

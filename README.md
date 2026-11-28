@@ -132,7 +132,7 @@ with its own name and icon, and with fixes of its own.
   chat); Copy as Markdown Link (it pastes as a linked title in Mail, Notes or Slack);
   Copy Clean Link (⌥⇧⌘C, and under Copy Link on any link) without tracking tags
   like `utm_` and `fbclid`; Copy Link to Highlight, a link that opens on the words
-  selected; Share… to AirDrop, Messages, Mail or Notes; and Show QR Code, to open the
+  selected (in an embedded frame or a text box too); Share… to AirDrop, Messages, Mail or Notes; and Show QR Code, to open the
   page on a phone.
 - **Web Inspector** (View menu, ⌥⌘I): WebKit's own developer tools on the page in
   front — elements, sources, network and timelines — with its console on ⌥⌘J,

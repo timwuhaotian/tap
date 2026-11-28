@@ -7,7 +7,10 @@
 //! the page (a script in Tap's own world, only when an item is chosen), puts the text on
 //! the pasteboard and shows the system's share picker or the code's popover.
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use block2::RcBlock;
 use objc2::{
@@ -35,7 +38,7 @@ use tap_core::{
     share::{self, Quote},
 };
 
-use crate::{bench, menu::Command, reader, rt, web};
+use crate::{agent, bench, menu::Command, reader, rt, web};
 
 thread_local! {
     /// The page menu that is up: its tab, and where it opened in the web view.
@@ -220,32 +223,102 @@ pub fn copy_page_markdown(tab: TabId) {
     });
 }
 
-/// Copy Link to Highlight: the page's address with a text fragment for the words
-/// picked, so the link opens on them, marked (Chrome's and Safari's item of the name).
+/// Copy Link to Highlight: the address of the page the words were picked on, with a
+/// text fragment for them, so the link opens on them, marked (Chrome's and Safari's
+/// item of the name). The words can be in a frame (the link is then the frame's own
+/// page: a browser looks for a link's words in that page, never in the frames it
+/// holds) or in a text field. Every frame is asked; the one with the focus answers.
 pub fn copy_highlight_link(tab: TabId) {
-    let (Some((url, _)), Some(web)) = (page_of(tab), web::existing(tab)) else {
+    let Some(web) = web::existing(tab) else {
         return;
     };
-    web::evaluate_in_world(&web, QUOTE, move |answer| {
-        let text = |key: &str| {
-            answer
-                .as_ref()
-                .and_then(|a| a.get(key))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned()
-        };
-        let quote = Quote {
-            prefix: text("prefix"),
-            start: text("start"),
-            end: text("end"),
-            suffix: text("suffix"),
-        };
-        match share::highlight_link(&clean_link::clean(&url), &quote) {
-            Some(link) => put(&link, None),
-            None => NSBeep(),
+    let frames = agent::frames(tab);
+    let shared = Arc::new(Mutex::new(Asking {
+        answers: vec![None; frames.len() + 1],
+        left: frames.len() + 1,
+        done: false,
+    }));
+    let frames = std::iter::once(None).chain(frames.iter().map(Some));
+    for (slot, frame) in frames.enumerate() {
+        let shared = Arc::clone(&shared);
+        web::call_in_frame(&web, frame.map(|f| &**f), QUOTE, &[], move |answer| {
+            let last = {
+                let mut asking = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(at) = asking.answers.get_mut(slot) {
+                    *at = answer;
+                }
+                asking.left = asking.left.saturating_sub(1);
+                asking.left == 0
+            };
+            if last {
+                finish_highlight(&shared);
+            }
+        });
+    }
+    // A frame that is gone or stuck doesn't keep the copy waiting.
+    bench::later(PATIENCE, move || finish_highlight(&shared));
+}
+
+/// How long Copy Link to Highlight waits for the frames, as the agent verbs do.
+const PATIENCE: f64 = 2.0;
+
+/// Copy Link to Highlight's answers coming in: the main frame's first, then each
+/// subframe's.
+struct Asking {
+    answers: Vec<Option<Value>>,
+    left: usize,
+    done: bool,
+}
+
+fn finish_highlight(shared: &Mutex<Asking>) {
+    let answers = {
+        let mut asking = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        if asking.done {
+            return;
         }
-    });
+        asking.done = true;
+        std::mem::take(&mut asking.answers)
+    };
+    let Some(picked) = picked(answers.into_iter().flatten().collect()) else {
+        return NSBeep();
+    };
+    let text = |key: &str| {
+        picked
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let quote = Quote {
+        prefix: text("prefix"),
+        start: text("start"),
+        end: text("end"),
+        suffix: text("suffix"),
+        anchor: text("anchor"),
+    };
+    match share::highlight_link(&clean_link::clean(&text("url")), &quote) {
+        Some(link) => put(&link, None),
+        None => NSBeep(),
+    }
+}
+
+/// The frame whose words a highlight link is for: of the frames with words picked,
+/// not counting one whose focus is in a frame it holds (its selection is an old one),
+/// the one with the focus, else the first, the main frame before its subframes.
+fn picked(answers: Vec<Value>) -> Option<Value> {
+    let mut candidates: Vec<Value> = answers
+        .into_iter()
+        .filter(|a| {
+            a.get("start")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+        })
+        .collect();
+    let focused = candidates
+        .iter()
+        .position(|a| a.get("focused").and_then(Value::as_bool) == Some(true))
+        .unwrap_or(0);
+    (focused < candidates.len()).then(|| candidates.swap_remove(focused))
 }
 
 /// The page as a tree for `share::page_markdown`: what is hidden, the page's chrome
@@ -294,9 +367,9 @@ return { title: title, tree: tree(root) };
 /// browsers match them; a short run in one block as it is, a longer one as its first
 /// and last words; and the words around it when its start is found elsewhere too.
 const QUOTE: &str = r"(async () => {
-  var picked = getSelection();
-  if (!picked || picked.isCollapsed || !picked.rangeCount) return null;
-  var range = picked.getRangeAt(0);
+  var focus = document.activeElement;
+  // The focus is in a frame this page holds: its words are that frame's to give.
+  if (focus && /^(iframe|frame)$/.test(focus.localName)) return null;
   var seg = (typeof Intl !== 'undefined' && Intl.Segmenter) ? new Intl.Segmenter(undefined, { granularity: 'word' }) : null;
   function squash(s) { return s.replace(/\s+/g, ' ').trim(); }
   function words(s) {
@@ -316,15 +389,39 @@ const QUOTE: &str = r"(async () => {
     }
     return document.body;
   }
-  var before = document.createRange();
-  before.setStart(block(range.startContainer), 0);
-  before.setEnd(range.startContainer, range.startOffset);
-  var after = document.createRange();
-  var last = block(range.endContainer);
-  after.setStart(range.endContainer, range.endOffset);
-  after.setEnd(last, last.childNodes.length);
-  var lead = before.toString().split('\n').pop();
-  var trail = after.toString().split('\n')[0];
+  // The words picked and the text either side of them in their block: a text field's
+  // value, or the page's text.
+  var lead, chosen, trail, anchor = '', page = '';
+  var from = null, to = null;
+  if (focus && /^(input|textarea)$/.test(focus.localName)) {
+    try { from = focus.selectionStart; to = focus.selectionEnd; } catch (e) {}
+  }
+  // A password is never put in a link, not even through the page's selection.
+  if (focus && focus.type === 'password') return null;
+  if (from !== null && to !== null && from < to) {
+    var value = focus.value;
+    lead = value.slice(0, from).split('\n').pop();
+    chosen = value.slice(from, to);
+    trail = value.slice(to).split('\n')[0];
+    page = value;
+    for (var el = focus; el && el !== document.body; el = el.parentElement) {
+      if (el.id) { anchor = el.id; break; }
+    }
+  } else {
+    var picked = getSelection();
+    if (!picked || picked.isCollapsed || !picked.rangeCount) return null;
+    var range = picked.getRangeAt(0);
+    var before = document.createRange();
+    before.setStart(block(range.startContainer), 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    var after = document.createRange();
+    var last = block(range.endContainer);
+    after.setStart(range.endContainer, range.endOffset);
+    after.setEnd(last, last.childNodes.length);
+    lead = before.toString().split('\n').pop();
+    chosen = picked.toString();
+    trail = after.toString().split('\n')[0];
+  }
   // A word cut by the selection is a whole word in the link.
   function cut(text, at) {
     if (!seg) return null;
@@ -333,7 +430,7 @@ const QUOTE: &str = r"(async () => {
     }
     return null;
   }
-  var lines = picked.toString().split('\n');
+  var lines = chosen.split('\n');
   var whole = cut(lead + lines[0], lead.length);
   if (whole) { lines[0] = lead.slice(whole[0]) + lines[0]; lead = lead.slice(0, whole[0]); }
   var end = lines.length - 1;
@@ -341,14 +438,14 @@ const QUOTE: &str = r"(async () => {
   if (whole) { var more = whole[1] - lines[end].length; lines[end] += trail.slice(0, more); trail = trail.slice(more); }
   lines = lines.map(squash).filter(Boolean);
   if (!lines.length) return null;
-  var quote = { prefix: '', start: '', end: '', suffix: '' };
+  var quote = { prefix: '', start: '', end: '', suffix: '', anchor: anchor, url: location.href, focused: document.hasFocus() };
   if (lines.length === 1 && words(lines[0]).length <= 10) {
     quote.start = lines[0];
   } else {
     quote.start = head(lines[0], 5);
     quote.end = tail(lines[lines.length - 1], 5);
   }
-  var page = squash(document.body.innerText).toLowerCase();
+  page = squash((document.body ? document.body.innerText : '') + ' ' + page).toLowerCase();
   var term = quote.start.toLowerCase();
   var first = page.indexOf(term);
   if (first >= 0 && page.indexOf(term, first + 1) >= 0) {

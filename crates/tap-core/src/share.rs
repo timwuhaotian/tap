@@ -55,11 +55,18 @@ pub struct Quote {
     pub start: String,
     pub end: String,
     pub suffix: String,
+    /// For words in a text field: the id of the field (or of the nearest element
+    /// around it that has one), where the link scrolls when the browser doesn't
+    /// search fields' text. WebKit finds a one-line field's words, not a text area's,
+    /// and Chrome finds neither.
+    pub anchor: String,
 }
 
 /// `url` with a text directive for `quote`, replacing one it already had and keeping
 /// the rest of its fragment; `None` when there is nothing to point at or the address
-/// isn't a web page's (browsers follow text fragments only on http and https).
+/// isn't a web page's (browsers follow text fragments only on http and https). A
+/// quote's anchor becomes the fragment when the address has none of its own: a
+/// fragment can be a route (`#/inbox`), and replacing that would lose the page.
 #[must_use]
 pub fn highlight_link(url: &str, quote: &Quote) -> Option<String> {
     let start = quote.start.trim();
@@ -74,6 +81,12 @@ pub fn highlight_link(url: &str, quote: &Quote) -> Option<String> {
     let fragment = fragment
         .split_once(":~:")
         .map_or(fragment, |(kept, _)| kept);
+    let anchor = quote.anchor.trim();
+    let fragment = if fragment.is_empty() && !anchor.is_empty() {
+        anchor_encode(anchor)
+    } else {
+        fragment.to_owned()
+    };
     let mut directive = String::new();
     let prefix = quote.prefix.trim();
     if !prefix.is_empty() {
@@ -89,6 +102,20 @@ pub fn highlight_link(url: &str, quote: &Quote) -> Option<String> {
         let _ = write!(directive, ",-{}", fragment_encode(suffix));
     }
     Some(format!("{base}#{fragment}:~:text={directive}"))
+}
+
+/// Percent-encoding for an element id in a fragment: what a fragment can't hold as it
+/// is, and `:` so that an id can't start a directive of its own.
+fn anchor_encode(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    for byte in id.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~!$&'()*+,;=@/?".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 /// Percent-encoding for a text directive's terms: `encodeURIComponent`, and `-` too,
@@ -594,6 +621,7 @@ mod tests {
             start: "the start".into(),
             end: "the end".into(),
             suffix: "after".into(),
+            ..Quote::default()
         };
         assert_eq!(
             highlight_link("https://x.test/", &all).as_deref(),
@@ -601,6 +629,27 @@ mod tests {
         );
         assert_eq!(highlight_link("https://x.test/", &quote("  ")), None);
         assert_eq!(highlight_link("file:///a.html", &quote("hi")), None);
+    }
+
+    #[test]
+    fn words_in_a_field_fall_back_to_its_id_unless_the_page_has_a_fragment() {
+        let field = Quote {
+            start: "brown fox".into(),
+            anchor: "note:1 b".into(),
+            ..Quote::default()
+        };
+        assert_eq!(
+            highlight_link("https://x.test/a", &field).as_deref(),
+            Some("https://x.test/a#note%3A1%20b:~:text=brown%20fox")
+        );
+        assert_eq!(
+            highlight_link("https://x.test/a#:~:text=old", &field).as_deref(),
+            Some("https://x.test/a#note%3A1%20b:~:text=brown%20fox")
+        );
+        assert_eq!(
+            highlight_link("https://x.test/#/inbox", &field).as_deref(),
+            Some("https://x.test/#/inbox:~:text=brown%20fox")
+        );
     }
 
     #[test]

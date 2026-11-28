@@ -7,6 +7,14 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.21 — 2026-11-28
+
+### Changed
+
+- **Copy Link to Highlight works in frames and text fields**: words selected inside an
+  embedded frame copy a link to that frame's page; words in a text box copy a link
+  that opens on them, or at least on the box.
+
 ## 0.3.20 — 2026-11-28
 
 ### Added
