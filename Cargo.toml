@@ -24,7 +24,7 @@ objc2-web-kit = "0.3"
 objc2-core-graphics = "0.3"
 objc2-quartz-core = "0.3"
 objc2-core-image = { version = "0.3", default-features = false, features = ["std", "CIFilter", "CIImage", "CIContext", "CIDetector", "CIFeature"] }
-resvg = "0.49"
+resvg = "0.50"
 bitflags = "2"
 block2 = "0.6"
 dispatch2 = "0.3"
