@@ -20,7 +20,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 # Other browsers' history, read from copies of their databases, against the system's
 # libsqlite3 rather than a bundled one (docs/PLAN.md §5.3).
-rusqlite = { version = "0.41", default-features = false }
+rusqlite = { version = "0.43", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 sha1 = { version = "0.11", default-features = false }
