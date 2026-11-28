@@ -872,6 +872,12 @@ fn handle(request: &Value, reply: Reply) {
                 Some("importProfile") => Command::ImportProfile,
                 Some("exportProfile") => Command::ExportProfile,
                 Some("checkForUpdates") => Command::CheckForUpdates,
+                Some("copyCleanLink") => Command::CopyCleanLink,
+                Some("copyMarkdownLink") => Command::CopyMarkdownLink,
+                Some("copyPageMarkdown") => Command::CopyPageMarkdown,
+                Some("copyHighlightLink") => Command::CopyHighlightLink,
+                Some("share") => Command::Share,
+                Some("qrCode") => Command::QrCode,
                 _ => return reply.say(json!({ "error": "command needs a name" })),
             };
             menu::run(tag as isize);
@@ -1043,7 +1049,11 @@ fn handle(request: &Value, reply: Reply) {
             // SAFETY: the system's own pasteboard type constant, valid for the app's life.
             let kind = unsafe { NSPasteboardTypeString };
             let text = board.stringForType(kind).map(|s| s.to_string());
-            reply.say(json!({ "text": text }));
+            // SAFETY: as above.
+            let html = board
+                .stringForType(unsafe { objc2_app_kit::NSPasteboardTypeHTML })
+                .map(|s| s.to_string());
+            reply.say(json!({ "text": text, "html": html }));
         }
         "quit" => {
             reply.say(json!({ "quitting": true }));

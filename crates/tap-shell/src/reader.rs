@@ -199,7 +199,7 @@ fn guess(tab: TabId) {
         return;
     };
     let script = format!(
-        "(async () => {{\n var readerLook = {};\n var sheet = {};\n{PRESENT}\n{GUESS}\n}})()",
+        "(async () => {{\n var readerLook = {};\n var sheet = {};\n{PRESENT}\n{ARTICLE}\n{GUESS}\n}})()",
         json(&look()),
         json(SHEET),
     );
@@ -296,21 +296,30 @@ function present(wrap, title, from, sheet) {
 }
 "#;
 
+/// The guess at the page's article (`findArticle()`: the element with the most prose
+/// for its links, or null), shared by reading mode and Copy Page as Markdown (share).
+pub(crate) const ARTICLE: &str = r#"
+function findArticle() {
+  function prose(el) {
+    var paragraphs = el.querySelectorAll('p');
+    if (paragraphs.length < 2) return 0;
+    var letters = 0;
+    for (var i = 0; i < paragraphs.length; i++) letters += (paragraphs[i].innerText || '').length;
+    if (letters < 400) return 0;
+    return letters / (1 + el.querySelectorAll('a').length * 14);
+  }
+  var candidates = document.querySelectorAll('article, main, [role="main"], .post, .entry, .article, .content, #content, div, section');
+  var article = null, mark = 0;
+  for (var i = 0; i < candidates.length; i++) {
+    var score = prose(candidates[i]);
+    if (score > mark) { mark = score; article = candidates[i]; }
+  }
+  return article;
+}
+"#;
+
 const GUESS: &str = r#"
-function prose(el) {
-  var paragraphs = el.querySelectorAll('p');
-  if (paragraphs.length < 2) return 0;
-  var letters = 0;
-  for (var i = 0; i < paragraphs.length; i++) letters += (paragraphs[i].innerText || '').length;
-  if (letters < 400) return 0;
-  return letters / (1 + el.querySelectorAll('a').length * 14);
-}
-var candidates = document.querySelectorAll('article, main, [role="main"], .post, .entry, .article, .content, #content, div, section');
-var article = null, mark = 0;
-for (var i = 0; i < candidates.length; i++) {
-  var score = prose(candidates[i]);
-  if (score > mark) { mark = score; article = candidates[i]; }
-}
+var article = findArticle();
 if (!article) return 'none';
 var pictures = article.querySelectorAll('img');
 for (var p = 0; p < pictures.length; p++) {

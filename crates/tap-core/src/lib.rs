@@ -12,6 +12,7 @@
 pub mod address;
 pub mod bookmarks;
 pub mod browser;
+pub mod clean_link;
 pub mod crash;
 pub mod engine;
 pub mod fetching;
@@ -26,3 +27,4 @@ pub mod keyword;
 pub mod location;
 pub mod session;
 pub mod settings_index;
+pub mod share;

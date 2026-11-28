@@ -145,6 +145,15 @@ impl Parts {
     pub fn clear_query(&self) {
         self.0.setPercentEncodedQuery(None);
     }
+    /// `URLComponents.percentEncodedQuery`.
+    #[must_use]
+    pub fn query(&self) -> Option<String> {
+        self.0.percentEncodedQuery().map(|q| q.to_string())
+    }
+    pub fn set_query(&self, query: Option<&str>) {
+        self.0
+            .setPercentEncodedQuery(query.map(NSString::from_str).as_deref());
+    }
     /// The port, when the address names one.
     #[must_use]
     pub fn port(&self) -> Option<i64> {
@@ -172,6 +181,14 @@ impl Parts {
     pub fn url(&self) -> Option<Url> {
         Some(Url(self.0.URL()?.absoluteString()?.to_string()))
     }
+}
+
+/// `String.removingPercentEncoding`: nil when an escape doesn't decode.
+#[must_use]
+pub fn decode(text: &str) -> Option<String> {
+    NSString::from_str(text)
+        .stringByRemovingPercentEncoding()
+        .map(|s| s.to_string())
 }
 
 /// A fresh identity, written as Swift writes a `UUID`: upper case.

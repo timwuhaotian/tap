@@ -7,6 +7,22 @@ Info.plist.
 
 ## Unreleased
 
+## 0.3.20 — 2026-11-28
+
+### Added
+
+- **Copy Page as Markdown**: right-click a page to copy its article as Markdown —
+  headings, lists, links, pictures, code and tables, under its title and address.
+- **Copy as Markdown Link**: `[title](address)` as text, and a linked title in apps
+  that paste rich text.
+- **Copy Clean Link** (⌥⇧⌘C, and under Copy Link on a link): the address without
+  tracking tags such as `utm_`, `fbclid` and `gclid`.
+- **Copy Link to Highlight** (Edit menu, and the page menu where macOS has no such item of
+  its own): a link that opens the page on the words you selected.
+- **Share…** (File menu, and Share Page… on a page): AirDrop, Messages, Mail, Notes
+  and more.
+- **Show QR Code**: the page's clean link as a code to scan with a phone.
+
 ## 0.3.19 — 2026-11-27
 
 ### Changed

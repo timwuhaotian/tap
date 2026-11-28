@@ -58,6 +58,15 @@ pub enum Command {
     Inspector,
     InspectorConsole,
     InspectElement,
+    /// Share and copy the page in front (share): Edit's Copy Clean Link (⌥⇧⌘C), Copy
+    /// as Markdown Link, Copy Page as Markdown and Copy Link to Highlight; File's
+    /// Share… and Show QR Code.
+    CopyCleanLink,
+    CopyMarkdownLink,
+    CopyPageMarkdown,
+    CopyHighlightLink,
+    Share,
+    QrCode,
     /// ⌘1 to ⌘9 are 101 to 109.
     Tab = 100,
     ReloadFromOrigin = 110,
@@ -91,6 +100,9 @@ pub enum Command {
 /// pages have nothing to reload, mirroring `Browser::reload_tab`); everything
 /// else can always run.
 fn can_run(tag: NSInteger) -> bool {
+    if let Some(can) = crate::share::can_run(tag) {
+        return can;
+    }
     match tag {
         t if t == Command::Reload as NSInteger
             || t == Command::ReloadOrStop as NSInteger
@@ -120,6 +132,10 @@ fn can_run(tag: NSInteger) -> bool {
 pub fn run(tag: NSInteger) {
     // The tab menu's commands are tabmenu's own business.
     if crate::tabmenu::run(tag) {
+        return;
+    }
+    // So are sharing and copying the page: nothing in the model changes.
+    if crate::share::run(tag) {
         return;
     }
     // The options menu is the bar's own business: nothing in the model changes.
@@ -476,6 +492,16 @@ pub fn main_menu(
                     NSEventModifierFlags::empty(),
                 ),
                 separator(),
+                // Search's File › Share…, and a code for a phone (share).
+                with(
+                    item("Share…", "", Command::Share),
+                    NSEventModifierFlags::empty(),
+                ),
+                with(
+                    item("Show QR Code", "", Command::QrCode),
+                    NSEventModifierFlags::empty(),
+                ),
+                separator(),
                 item("Close Tab", "w", Command::CloseTab),
             ],
             commands,
@@ -491,6 +517,21 @@ pub fn main_menu(
                 system("Copy", "c", sel!(copy:)),
                 system("Paste", "v", sel!(paste:)),
                 system("Select All", "a", sel!(selectAll:)),
+                separator(),
+                // Search's key: ⌥⇧⌘C (upper case is Shift, see Reopen Closed Tab).
+                with(item("Copy Clean Link", "C", Command::CopyCleanLink), option),
+                with(
+                    item("Copy as Markdown Link", "", Command::CopyMarkdownLink),
+                    NSEventModifierFlags::empty(),
+                ),
+                with(
+                    item("Copy Page as Markdown", "", Command::CopyPageMarkdown),
+                    NSEventModifierFlags::empty(),
+                ),
+                with(
+                    item("Copy Link to Highlight", "", Command::CopyHighlightLink),
+                    NSEventModifierFlags::empty(),
+                ),
                 separator(),
                 item("Find…", "f", Command::Find),
                 item("Find Next", "g", Command::FindNext),

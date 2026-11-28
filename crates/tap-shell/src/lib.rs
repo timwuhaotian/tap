@@ -38,6 +38,7 @@ mod profile;
 mod reader;
 mod rt;
 mod settings;
+mod share;
 mod signin;
 mod sleep;
 mod store;

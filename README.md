@@ -125,8 +125,15 @@ with its own name and icon, and with fixes of its own.
   tab's id for `tap` (it lasts across restarts), its address, state and HTTP status,
   and what the page says of itself, to paste into an agent. Right-click anything on a
   page for Copy Element Details: its selector, box, style and markup. `tap info` gives
-  an agent the same. Right-click a page for Console: what its scripts threw, or for
-  Copy Page as Image: the whole page, scrolled-out parts and all, as one picture.
+  an agent the same. Right-click a page for Console: what its scripts threw.
+- **Share and copy a page** from its right-click menu or the Edit and File menus:
+  Copy Page as Image (the whole page, scrolled-out parts and all) or as Markdown (the
+  article with its headings, lists, links, code and tables, ready for notes or an AI
+  chat); Copy as Markdown Link (it pastes as a linked title in Mail, Notes or Slack);
+  Copy Clean Link (⌥⇧⌘C, and under Copy Link on any link) without tracking tags
+  like `utm_` and `fbclid`; Copy Link to Highlight, a link that opens on the words
+  selected; Share… to AirDrop, Messages, Mail or Notes; and Show QR Code, to open the
+  page on a phone.
 - **Web Inspector** (View menu, ⌥⌘I): WebKit's own developer tools on the page in
   front — elements, sources, network and timelines — with its console on ⌥⌘J,
   element picking on ⌥⌘C, and Inspect Element in a page's right-click menu.

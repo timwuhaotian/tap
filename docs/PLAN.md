@@ -1715,6 +1715,76 @@ agents' tabs, handing a tab back after a sign-in, Copy Details for several picke
   opened by a real right-click and the pasteboard written from them (a synthetic click
   landed on another app's window in front of the test world, so it was stopped).
 
+### 0.3.20 — Share and copy a page
+
+At the user's request (2026-11-28: "页面上我们右键菜单有 copy as ... 功能，请发挥想象+调研，还有哪些
+非常实用的一键share/复制等相关功能可以扩展的"). A survey of Arc, Chrome, Safari, Firefox, Edge
+and Orion gave fifteen candidates; the user picked these six. Search has three of them
+(Copy Clean Link, Copy as Markdown Link, File › Share…), and those are ports. The
+other three are Tap's own. The page menu now ends with two groups: the agent's
+(Console, Copy Element Details, Copy Tab Details), then the page's (Copy Page as Image,
+Copy Page as Markdown, Copy as Markdown Link, Copy Clean Link, Share Page…, Show QR
+Code). Edit and File carry the same items for the tab in front.
+
+- [x] **Copy Clean Link** (`tap-core` `clean_link.rs`, Search's `CleanLink.swift`;
+  `fnd::Parts::query`/`set_query`, `fnd::decode`): Search's list, its signed-address
+  rule and its `si` sites, and Search's `CleanLinkTests` ported. It is on ⌥⇧⌘C in
+  Edit. In WebKit's link menu it sits under Copy Link: WebKit's own item runs first,
+  from a copy of the item that keeps its represented object, and the pasteboard is
+  cleaned once it changes (polled every 50 ms for a second, Search's `rewrite`). On
+  the page itself it is shown only when the page's address has something to take out
+  and the menu isn't a link's.
+- [x] **Copy as Markdown Link** (`share::markdown_link`, Search's `markdownLink`): the
+  tab's label and address. It also writes `public.html` (the title, linked), so Mail,
+  Notes and Slack paste a link (`fixed-deviation`: Search writes plain text only).
+- [x] **Copy Page as Markdown** (`share::page_markdown`; `reader::ARTICLE`, reading
+  mode's article guess pulled out so both use it): a script in Tap's world walks the
+  article (or the body when no article stands out) into a small JSON tree. It leaves
+  out hidden elements (`checkVisibility`, `hidden`, `aria-hidden`), navigation, forms,
+  footers and media, and stops at 60 000 nodes. Rust writes the Markdown: headings,
+  paragraphs with hard breaks, nested lists (numbered ones keep their start), fenced
+  code with its language and a fence longer than any backtick run inside it,
+  blockquotes, GFM tables (`|` escaped), links and pictures (web and mail addresses
+  only; `javascript:` and `data:` are dropped), and escaping of `\ ` * [ ] <`, and of
+  `_` everywhere but inside a word. Its header is `# Title` and `Source: <clean link>`,
+  and the article's own first heading is dropped when it repeats the title.
+- [x] **Copy Link to Highlight** (`share::highlight_link`, `share.rs` `QUOTE`): a text
+  fragment, `#:~:text=`. Words cut by the selection are widened to whole words
+  (`Intl.Segmenter`, so Chinese works too). One block of ten words or fewer is
+  `start`; anything longer is the first five and the last five words. When the start
+  term appears more than once on the page, up to three words of the block before and
+  after are added as prefix and suffix. The terms are encoded as `encodeURIComponent`
+  does, with `-` encoded too; the rest of the fragment stays and an old directive is
+  replaced; the base is the clean link. WebKit has its own Copy Link with Highlight
+  from macOS 15: when the menu has it (`WKMenuItemIdentifierCopyLinkWithHighlight`)
+  Tap adds none, and Edit's item stays.
+- [x] **Share…** (File, Search's `Sharing.swift`; Share Page… in the page menu, where
+  WebKit's own Share… is for a link or a selection): `NSSharingServicePicker` with the
+  page's address, from the page's top-right corner (from the menu bar) or where the
+  menu opened.
+- [x] **Show QR Code** (File and the page menu; http and https pages only): Core
+  Image's `CIQRCodeGenerator` (level M) read into modules, drawn as squares by an
+  `NSImage` drawing handler, so it stays sharp at any scale with a two-module quiet
+  zone. It sits in a transient popover with the clean link under it.
+  `objc2-core-image` is limited to the features this uses.
+- Checked: `cargo test` (tap-core 148, tap-import 36, tap-shell 124, tap-app 7, including
+  `share::tests` for links, highlight encoding and a whole article, Search's
+  CleanLink cases, and a QR code read back by `CIDetector`), clippy `-D warnings`,
+  nightly fmt. In a test world against a local page, through the bench's new
+  `command` names and `pasteboard` (which now also gives `html`): Clean Link
+  (`utm_source` taken out), Markdown Link (text and HTML), the whole article as
+  Markdown (hidden text, nav and footer left out, nested list, code, table, the
+  repeated H1 dropped), and highlight links for a cut word, a repeated phrase (prefix
+  and suffix), Chinese and a run across paragraphs. Each of those links loaded scrolls
+  WebKit to its words, and the prefixed one lands on the right one of two copies.
+  Through real right-clicks (screenshots by window id): the link menu's Copy Clean Link
+  picked with the keyboard copied `/?k=v` from `/?utm_source=x&k=v`; the selection
+  menu shows WebKit's own highlight item and not Tap's; the QR popover and the share
+  sheet open from the page's corner. Reading mode still finds the article.
+- Not done: a selection inside an iframe or a text field gives no highlight link (the
+  script reads the main frame's selection), so the item beeps. Copy Page as Markdown
+  doesn't use a site's Markdown twin.
+
 ### Unreleased — A star in the address bar, and a card of what came down
 
 At the user's request (2026-11-11: "增加地址栏收藏的功能" and "下载文件的UX应该更明显一些，比如下载icon点击可以看到各个正在/最近下载文件的进度等等; 点击下载/触发下载应该有个简单的过场动画'文件飞到下载icon'").
@@ -2402,6 +2472,7 @@ Resolved 2026-11-04, by copying Kil's setup:
 | 2026-11-24 | Switching tabs during WebKit's exit from page fullscreen waits for the outgoing page's `fullscreenState` handoff instead of detaching it mid-animation; the observer then settles the latest selected tab and restores page focus (`fixed-deviation`, with a bench fullscreen regression). |
 | 2026-11-19 | At the user's request, an overflowing tab row scrolls sideways (trackpad/wheel) once tabs are at `TAB_MIN`, instead of tabs past the pinned + being unreachable; a tab switched to is scrolled into view, then the row stays where the hand put it (`fixed-deviation`). |
 | 2026-11-27 | At the user's request, tabs narrow without limit to fit the row (Chrome's behaviour) and the row never scrolls; reverses the 2026-11-19 row above (`fixed-deviation`). `TAB_MIN`, scrolling and the pinned + are gone; the mark shrinks and disappears (under 6 pt) in a sliver of a tab. |
+| 2026-11-28 | At the user's request, share and copy a page (§8 "0.3.20 — Share and copy a page"): Copy Clean Link, Copy as Markdown Link and File › Share… ported from Search; Copy Page as Markdown, Copy Link to Highlight and Show QR Code added. Copy as Markdown Link also writes HTML (`fixed-deviation`); Tap's highlight item gives way to WebKit's own where it has one. |
 | 2026-11-10 | At the user's request ("还是给tab增加一个close button吧，现在只能靠快捷键关闭tab"), every tab wide enough to show a title wears its close cross at rest, not only the live tab and the one under the pointer (`fixed-deviation` from Search's `TabBar.swift`, which shows it on hover alone). `strip.rs` draws and hit-tests the cross by one `titled` rule, so a cross is always where a click closes its tab; a tab down to its narrowest in a crowded row has room for neither title nor cross, and one on its way out fades with none. Verified through the bench: a click on a tab's cross closed it. |
 
 ## Appendix A — Parity tracker
@@ -2446,7 +2517,7 @@ added below this one as M1 starts.
 | BookmarksBar.swift | 160 | s/ui/bookmarks_bar | M3 | todo |
 | BookmarksFile.swift | 165 | c/bookmarks_file | M1 | todo |
 | Browser.swift | 7518 | c/browser/*, w/delegate, w/downloads, w/print | M2→M5 | partial |
-| CleanLink.swift | 75 | c/clean_link | M2 | todo |
+| CleanLink.swift | 75 | c/clean_link | M2 | ported |
 | Closing.swift | 108 | c/browser (`close_left_alone`, `retire`), s/sleep | M3 | ported |
 | Crx.swift | 240 | c/crx | M1 | todo |
 | Curtain.swift | 379 | c/curtain, a/curtain, w/relays | M5 | todo |
@@ -2524,7 +2595,7 @@ added below this one as M1 starts.
 | Session.swift | 195 | c/session | M1/M2 | partial |
 | Settings.swift | 1454 | s/settings | M3 | partial |
 | SettingsIndex.swift | 656 | c/settings_index | M3 | tested |
-| Sharing.swift | 23 | s/app/sharing | M8 | todo |
+| Sharing.swift | 23 | s/app/sharing | M8 | ported |
 | Shield.swift | 178 | c/shield, w/shield | M5 | todo |
 | Shortcuts.swift | 502 | c/shortcuts, s/app/shortcuts | M3 | partial |
 | ShortcutsPage.swift | 200 | s/ui/settings/shortcuts | M3 | todo |
